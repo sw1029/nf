@@ -7,6 +7,16 @@ nf-workers는 오케스트레이터가 enqueue한 작업을 실행하고, lease/
 - `plan/contracts.md`
 - `plan/architecture_2.md` (job_queue/job_event 상태 머신)
 
+구현 순서(Phase, 전체 로드맵: `plan/IMPLEMENTATION_CHECKLIST.md`):
+
+- Phase 20: Runner/Queue/Lease/Events 골격(핵심)
+- Phase 30: `INDEX_FTS` 실행기
+- Phase 50: `INGEST` 실행기(D2/D3)
+- Phase 60: `CONSISTENCY` 실행기 + verdict/evidence 링크 저장
+- Phase 70: `INDEX_VEC`/`RETRIEVE_VEC` 실행기(D5)
+- Phase 80: `SUGGEST` 실행기(D4)
+- Phase 90: `EXPORT` (필수), `PROOFREAD`(차순위) 실행기(D1)
+
 ---
 
 # [M] Must — 1차 배포(MVP+안정화)

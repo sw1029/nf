@@ -8,6 +8,16 @@
 - `plan/architecture_2.md`
 - `plan/DECISIONS_PENDING.md` (D1~D5 반영 완료)
 
+구현 순서(Phase, 전체 로드맵: `plan/IMPLEMENTATION_CHECKLIST.md`):
+
+- Phase 10: loopback HTTP + Storage + Jobs/SSE 골격
+- Phase 30: documents/query(FTS-only) 동작 확보
+- Phase 50: tags/entities/schema 승인 워크플로(D2/D3)
+- Phase 60: verdict/evidence/whitelist 조회/저장(정합성 결과 관찰)
+- Phase 70: vector job(`INDEX_VEC`/`RETRIEVE_VEC`) 중계(D5)
+- Phase 80: suggest job 중계 + remote API opt-in gate(D4)
+- Phase 90: export job 중계 + 산출물 접근
+
 ---
 
 # [M] Must — 1차 배포(MVP+안정화)

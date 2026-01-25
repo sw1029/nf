@@ -7,6 +7,11 @@ nf-export는 문서/구간을 TXT/DOCX로 내보내고(필수), 옵션으로 메
 - `plan/contracts.md`
 - `plan/architecture_1.md`
 
+구현 순서(Phase, 전체 로드맵: `plan/IMPLEMENTATION_CHECKLIST.md`):
+
+- Phase 90에서 구현(선행: Orchestrator/Jobs/SSE + DocStore)
+- 1차는 TXT 우선, DOCX는 라이브러리 선택 후 확정
+
 ---
 
 # [M] Must — 1차 배포(MVP+안정화)

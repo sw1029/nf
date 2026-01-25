@@ -8,6 +8,11 @@
 - `plan/architecture_1.md`
 - `plan/architecture_2.md`
 
+구현 순서(Phase, 전체 로드맵: `plan/IMPLEMENTATION_CHECKLIST.md`):
+
+- Phase 00에서 선행 구현(모든 모듈의 전제)
+- 완료 기준: 계약 스모크 테스트(`tests/test_nf_shared_protocol.py`)가 통과
+
 ---
 
 # [M] Must — 1차 배포(MVP+안정화)

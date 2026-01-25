@@ -5,6 +5,7 @@
 > * ☐ TODO / ☐ (완료 시 체크)
 > * **[M] Must** / **[S] Should** / **[C] Could** / **[W] Won’t (now)**
 > * “now”는 1차 배포(MVP+안정화) 기준
+> * 구현 순서(Phase) 통제는 `plan/IMPLEMENTATION_CHECKLIST.md`를 1차 기준으로 함
 
 ---
 
@@ -253,6 +254,10 @@
 
 * ☐ 로컬 생성 모델(Local generator) 실구현 + ModelStore 다운로드/업데이트/버전관리
 * ☐ 모델 기반 문법 교정(옵트인; rule-base 결과 보조)
+
+## 7) 개발/테스트 도구
+
+* ☐ 루프백 임시 Web UI(개발용): `plan/loopback_web_ui.md`
 
 ---
 

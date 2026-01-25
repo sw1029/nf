@@ -7,6 +7,11 @@ nf-model-gateway는 모델 호출 경계를 제공한다: 로컬 소형 모델(O
 - `plan/contracts.md`
 - `plan/DECISIONS_PENDING.md` (D4: local generator 분기/차순위)
 
+구현 순서(Phase, 전체 로드맵: `plan/IMPLEMENTATION_CHECKLIST.md`):
+
+- Phase 80: `LOCAL_RULE` 우선 + remote API opt-in + safety gate 최소 구현
+- `LOCAL_GEN`은 “분기/인터페이스만”(차순위; 실구현 보류)
+
 ---
 
 # [M] Must — 1차 배포(MVP+안정화)

@@ -3,6 +3,7 @@
 이 문서는 `plan/architecture_*.md`, `plan/TODO.md`를 기반으로 **모듈 간 계약(Contracts)** 을 정규화합니다.
 각 모듈 구현 문서(`plan/modules/*.md`)는 본 문서의 타입/스펙을 참조하는 것을 기본으로 합니다.
 
+> 구현 순서(Phase) 통제: `plan/IMPLEMENTATION_CHECKLIST.md`
 > 목표: “구현을 시작할 수 있을 정도”의 DTO/API/Job/Event 계약을 고정한다.
 > *정책(옵트인/승인 필요) 선택은 `plan/DECISIONS_PENDING.md`를 우선으로 따른다.*
 

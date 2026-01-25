@@ -13,6 +13,15 @@ nf-desktop은 사용자의 글 작성 흐름을 담당하며, 오케스트레이
 - `plan/architecture_2.md` (프로세스 구조, API)
 - `plan/DECISIONS_PENDING.md`
 
+구현 순서(Phase, 전체 로드맵: `plan/IMPLEMENTATION_CHECKLIST.md`):
+
+- Phase 30 이후: OrchestratorClient/SSE 구독 + Job Panel 최소 연결(관찰 목적)
+- Phase 50: Tagging/Schema Review UI(승인 워크플로)
+- Phase 60: Result Panel(Verdict+Evidence+Breakdown) 렌더링
+- Phase 70: Vector 확장 버튼 → `RETRIEVE_VEC` job + 스트리밍 결과 표시(D5)
+- Phase 90: Export 트리거 + Proofread(rule-base 실시간 표시, D1) 마감
+- Phase 95: 제품 흐름 통합/마감(패키징/배포)
+
 ---
 
 # [M] Must — 1차 배포(MVP+안정화)

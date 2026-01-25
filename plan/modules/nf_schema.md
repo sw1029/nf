@@ -8,6 +8,11 @@ nf-schema는 문서/태그/엔티티를 바탕으로 스키마 버전과 팩트(
 - `plan/architecture_2.md` (schema_version/fact/entity/chunk)
 - `plan/DECISIONS_PENDING.md` (D2, D3)
 
+구현 순서(Phase, 전체 로드맵: `plan/IMPLEMENTATION_CHECKLIST.md`):
+
+- Phase 30: Chunk/Section 생성 최소 구현(FTS 인덱싱 전제)
+- Phase 50: tags/entity/alias + fact/schema_version 생성(INGEST) + 승인 워크플로(D2/D3)
+
 ---
 
 # [M] Must — 1차 배포(MVP+안정화)
