@@ -6,7 +6,7 @@ from modules.nf_shared.protocol.dtos import VerdictLog
 
 
 class ConsistencyRequest(TypedDict):
-    pid: str
+    project_id: str
     input_doc_id: str
     input_snapshot_id: str
     range: dict

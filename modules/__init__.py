@@ -1,8 +1,8 @@
 """
-Placeholder namespace for Novel Forge modules.
+Novel Forge 모듈 네임스페이스(placeholder).
 
-Each subpackage mirrors the planned architecture and exposes a minimal
-stub so pytest can validate importability and interface shape.
+각 하위 패키지는 계획된 아키텍처를 반영하며, pytest가 임포트 가능성과
+인터페이스 형태를 검증할 수 있도록 최소 스텁을 노출한다.
 """
 
 __all__ = [
@@ -16,4 +16,3 @@ __all__ = [
     "nf_export",
     "nf_shared",
 ]
-

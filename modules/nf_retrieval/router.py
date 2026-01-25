@@ -7,11 +7,11 @@ def run_retrieval_job(
     filters: Sequence[str] | None = None,
 ) -> None:
     """
-    Run a retrieval job (placeholder).
+    검색 잡 실행(placeholder).
 
-    Planned:
-    - FTS-only for sync requests
-    - Vector expansion via background job with streaming results
+    예정:
+    - 동기 요청은 FTS-only
+    - 백그라운드 잡으로 벡터 확장 + 스트리밍 결과
     """
     _ = (query, mode, filters)
-    raise NotImplementedError("nf_retrieval.run_retrieval_job is a placeholder.")
+    raise NotImplementedError("nf_retrieval.run_retrieval_job는 placeholder입니다.")

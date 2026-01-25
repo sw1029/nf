@@ -1,13 +1,12 @@
 """
-Orchestrator placeholder.
+Orchestrator (loopback HTTP) core.
 
-Responsibilities (planned):
-- CRUD for projects/documents/episodes/tags/whitelist
-- Job submission/streaming
-- Policy enforcement (semaphore/memory/circuit breaker)
+Responsibilities:
+- Projects CRUD
+- Job submission/status/events (SSE)
+- Loopback-only access with optional token
 """
 
-__version__ = "0.0.0-placeholder"
+__version__ = "0.1.0"
 
 from .main import run_orchestrator  # noqa: F401
-

@@ -1,6 +1,6 @@
-# nf-orchestrator (Core API) — MoSCoW 구현 계획
+# nf-orchestrator (핵심 API) — MoSCoW 구현 계획
 
-오케스트레이터는 로컬(loopback) API 서버로서, CRUD/Query/Jobs/Streaming을 제공하고 정책을 강제한다.
+오케스트레이터는 로컬(루프백) API 서버로서, CRUD/쿼리/잡/스트리밍을 제공하고 정책을 강제한다.
 
 참조:
 
@@ -10,17 +10,19 @@
 
 구현 순서(Phase, 전체 로드맵: `plan/IMPLEMENTATION_CHECKLIST.md`):
 
-- Phase 10: loopback HTTP + Storage + Jobs/SSE 골격
-- Phase 30: documents/query(FTS-only) 동작 확보
-- Phase 50: tags/entities/schema 승인 워크플로(D2/D3)
-- Phase 60: verdict/evidence/whitelist 조회/저장(정합성 결과 관찰)
-- Phase 70: vector job(`INDEX_VEC`/`RETRIEVE_VEC`) 중계(D5)
-- Phase 80: suggest job 중계 + remote API opt-in gate(D4)
-- Phase 90: export job 중계 + 산출물 접근
+테스트는 conda의 `nf` 환경에서 수행한다.
+
+- Phase 10: 루프백 HTTP + 스토리지 + 잡/SSE 골격
+- Phase 30: 문서/쿼리(FTS-only) 동작 확보
+- Phase 50: 태그/엔티티/스키마 승인 워크플로(D2/D3)
+- Phase 60: 판정/근거/화이트리스트 조회·저장(정합성 결과 관찰)
+- Phase 70: 벡터 잡(`INDEX_VEC`/`RETRIEVE_VEC`) 중계(D5)
+- Phase 80: 제안 잡 중계 + 원격 API 옵트인 게이트(D4)
+- Phase 90: 내보내기 잡 중계 + 산출물 접근
 
 ---
 
-# [M] Must — 1차 배포(MVP+안정화)
+# [M] 필수 — 1차 배포(MVP+안정화)
 
 ## 0) 패키지/폴더 구조(placeholder 기준)
 
@@ -65,38 +67,38 @@ modules/nf_orchestrator/
       evidence_repo.py
 ```
 
-## 1) HTTP API 표면(contracts 기준)
+## 1) HTTP API 표면(계약 기준)
 
-* ☐ Loopback HTTP 서버(기본) + JSON
-* ☐ `/health` (readiness/liveness)
+* ☑ 루프백 HTTP 서버(기본) + JSON
+* ☑ `/health` (준비/생존)
 * ☐ CRUD
-  - `/projects` GET/POST
-  - `/projects/{pid}` GET/PATCH/DELETE
-  - `/projects/{pid}/documents` GET/POST
-  - `/projects/{pid}/documents/{did}` GET/PATCH/DELETE
-  - `/projects/{pid}/episodes` GET/POST
-  - `/projects/{pid}/tags` GET/POST
-  - `/projects/{pid}/entities` GET/POST
-  - `/projects/{pid}/entities/{eid}/aliases` GET/POST/DELETE
-  - `/projects/{pid}/whitelist` POST/DELETE
-* ☐ Schema view + 승인(D3)
-  - `/projects/{pid}/schema` GET (현재 승인된 스키마 뷰)
-  - `/projects/{pid}/schema/facts` GET (filters: status/source/layer)
-  - `/projects/{pid}/schema/facts/{fact_id}` GET
-  - `/projects/{pid}/schema/facts/{fact_id}` PATCH `{status: APPROVED|REJECTED}`
-* ☐ Query (sync)
+  - ☑ `/projects` GET/POST
+  - ☑ `/projects/{project_id}` GET/PATCH/DELETE
+  - `/projects/{project_id}/documents` GET/POST
+  - `/projects/{project_id}/documents/{did}` GET/PATCH/DELETE
+  - `/projects/{project_id}/episodes` GET/POST
+  - `/projects/{project_id}/tags` GET/POST
+  - `/projects/{project_id}/entities` GET/POST
+  - `/projects/{project_id}/entities/{eid}/aliases` GET/POST/DELETE
+  - `/projects/{project_id}/whitelist` POST/DELETE
+* ☐ 스키마 뷰 + 승인(D3)
+  - `/projects/{project_id}/schema` GET (현재 승인된 스키마 뷰)
+  - `/projects/{project_id}/schema/facts` GET (filters: status/source/layer)
+  - `/projects/{project_id}/schema/facts/{fact_id}` GET
+  - `/projects/{project_id}/schema/facts/{fact_id}` PATCH `{status: APPROVED|REJECTED}`
+* ☐ 쿼리(동기)
   - `/query/retrieval` POST (**FTS-only**)
   - `/query/evidence/{eid}` GET
   - `/query/verdicts` POST
-* ☐ Jobs (async)
+* ☑ 잡(비동기)
   - `/jobs` POST
   - `/jobs/{jid}` GET
   - `/jobs/{jid}/cancel` POST
   - `/jobs/{jid}/events` GET (SSE 기본)
 
-## 2) Job 제출 규격(필수)
+## 2) 잡 제출 규격(필수)
 
-* ☐ `JobType` 지원:
+* ☑ `JobType` 지원:
   - `INGEST`, `INDEX_FTS`, `INDEX_VEC`, `CONSISTENCY`, `RETRIEVE_VEC`, `SUGGEST`, `PROOFREAD`, `EXPORT`
 * ☐ `payload_json` 스키마를 타입별로 고정(최소)
   - `INGEST`: `{doc_id, snapshot_id?}`
@@ -105,52 +107,52 @@ modules/nf_orchestrator/
   - `CONSISTENCY`: `{input_doc_id, input_snapshot_id, range, schema_ver?}`
   - `RETRIEVE_VEC`: `{query, filters, k}`
   - `SUGGEST`: `{range, mode: LOCAL_RULE|API|LOCAL_GEN, citations_required: true}`
-  - `PROOFREAD`: `{doc_id, snapshot_id, range?}` (차순위: batch)
+  - `PROOFREAD`: `{doc_id, snapshot_id, range?}` (차순위: 배치)
   - `EXPORT`: `{range, format, include_meta}`
 
-## 3) Streaming(SSE) 규격
+## 3) 스트리밍(SSE) 규격
 
-* ☐ `JobEvent` contract 준수(`plan/contracts.md`)
+* ☑ `JobEvent` 계약 준수(`plan/contracts.md`)
 * ☐ `RETRIEVE_VEC`는 결과를 `JobEvent.payload`로 분할 송신 가능
-  - payload 예: `{results: [RetrievalResult...], page: n}`
+  - 페이로드 예: `{results: [RetrievalResult...], page: n}`
 
 ## 4) 정책 강제(필수)
 
-* ☐ `global_heavy_job_semaphore`로 heavy job 동시성 제한
+* ☐ `global_heavy_job_semaphore`로 무거운 잡 동시성 제한
 * ☐ `sync_retrieval_mode=FTS_ONLY` 강제(D5)
 * ☐ `explicit_fact_auto_approve=false` 기본 강제(D3 차순위 스위치)
 * ☐ `enable_local_generator=false` 기본(D4 차순위)
 
 ## 5) 서비스 계층(최소 계약)
 
-* ☐ Controller는 “검증/라우팅”만, Service가 도메인 로직 담당
-* ☐ Repository 계층으로 DB I/O 캡슐화
+* ☑ 컨트롤러는 “검증/라우팅”만, 서비스가 도메인 로직 담당
+* ☑ 레포지토리 계층으로 DB I/O 캡슐화
 
 ## 6) 테스트(pytest)
 
-* ☐ `tests/test_nf_orchestrator_contracts.py`: Service Protocol(Project/Schema/Job) 계약 스모크
-* ☐ (차순위) API 스모크(핸들러 import + request validation)
-* ☐ (차순위) Job submit validation unit tests
-* ☐ (차순위) Schema 승인 워크플로 unit tests
+* ☑ `tests/test_nf_orchestrator_contracts.py`: 서비스 프로토콜(Project/Schema/Job) 계약 스모크
+* ☐ (차순위) API 스모크(핸들러 임포트 + 요청 검증)
+* ☐ (차순위) 잡 제출 검증 단위 테스트
+* ☐ (차순위) 스키마 승인 워크플로 단위 테스트
 
 ---
 
-# [S] Should — 권장
+# [S] 권장 — 권장
 
 * ☐ OpenAPI 스펙 생성(로컬용)
-* ☐ SSE reconnect 지원(Last-Event-ID)
-* ☐ 로컬 토큰(옵션) 및 loopback 고정 강화
+* ☑ SSE 재연결 지원(Last-Event-ID)
+* ☑ 로컬 토큰(옵션, `NF_ORCHESTRATOR_TOKEN`) 및 루프백 고정 강화
 
 ---
 
-# [C] Could — 여유 시
+# [C] 선택 — 여유 시
 
 * ☐ gRPC/NamedPipe 지원(Windows)
-* ☐ Job priority/큐 다단계(인터랙션 우선)
+* ☐ 잡 우선순위/큐 다단계(인터랙션 우선)
 
 ---
 
-# [W] Won’t (now)
+# [W] 현재 제외
 
 * ☐ 멀티 디바이스/클라우드 동기화
 
@@ -158,15 +160,15 @@ modules/nf_orchestrator/
 
 ## 계약 인터페이스(요약)
 
-- Inbound: HTTP JSON → `nf_shared.protocol.dtos`
-- Outbound: JobQueue row + `JobEvent` streaming
-- Sync Query는 `FTS-only` 계약을 준수하며, Vector는 `RETRIEVE_VEC` job으로만 노출한다.
+- 인바운드: HTTP JSON → `nf_shared.protocol.dtos`
+- 아웃바운드: JobQueue row + `JobEvent` 스트리밍
+- 동기 쿼리는 `FTS-only` 계약을 준수하며, 벡터는 `RETRIEVE_VEC` 잡으로만 노출한다.
 
 ---
 
 ## 계약 인터페이스(상세; 구현 기준)
 
-### A) Controller → Service (Python 호출 규격)
+### A) 컨트롤러 → 서비스 (Python 호출 규격)
 
 ```python
 class ProjectService(Protocol):

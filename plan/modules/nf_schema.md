@@ -10,14 +10,16 @@ nf-schema는 문서/태그/엔티티를 바탕으로 스키마 버전과 팩트(
 
 구현 순서(Phase, 전체 로드맵: `plan/IMPLEMENTATION_CHECKLIST.md`):
 
-- Phase 30: Chunk/Section 생성 최소 구현(FTS 인덱싱 전제)
-- Phase 50: tags/entity/alias + fact/schema_version 생성(INGEST) + 승인 워크플로(D2/D3)
+테스트는 conda의 `nf` 환경에서 수행한다.
+
+- Phase 30: 청크/섹션 생성 최소 구현(FTS 인덱싱 전제)
+- Phase 50: 태그/엔티티/alias + fact/schema_version 생성(INGEST) + 승인 워크플로(D2/D3)
 
 ---
 
-# [M] Must — 1차 배포(MVP+안정화)
+# [M] 필수 — 1차 배포(MVP+안정화)
 
-## 0) 패키지/폴더 구조(placeholder 기준)
+## 0) 패키지/폴더 구조(플레이스홀더 기준)
 
 ```text
 modules/nf_schema/
@@ -40,34 +42,34 @@ modules/nf_schema/
     schema_version.py
 ```
 
-## 1) Ontology/Tag 시스템
+## 1) 온톨로지/태그 시스템
 
 * ☐ `tag_path` 규격 고정(“설정/인물/주인공/나이”)
 * ☐ 기본 태그(def) + 사용자 정의 태그 지원
-* ☐ tag_def constraints(schema_type/범위/enum)를 저장/검증
+* ☐ tag_def 제약(schema_type/범위/enum)을 저장/검증
 
-## 2) Chunk/Section 생성(인덱싱 키)
+## 2) 청크/섹션 생성(인덱싱 키)
 
 * ☐ 입력: `DocumentSnapshot`(텍스트)
 * ☐ 출력: `Chunk[]`(span 기반), 필요 시 `Section[]`
-* ☐ chunk는 FTS/Vector 공통 키(`chunk_id`)로 사용(`plan/contracts.md`)
+* ☐ chunk는 FTS/벡터 공통 키(`chunk_id`)로 사용(`plan/contracts.md`)
 
-## 3) Entity/Identity (D2: 옵션2 우선)
+## 3) 엔티티/동일성 (D2: 옵션2 우선)
 
 * ☐ `entity`/`entity_alias`를 MVP부터 사용
-* ☐ identity 해석 기본 정책:
+* ☐ 동일성 해석 기본 정책:
   - tag_path에서 추정되는 엔티티 후보를 `entity`로 정규화(가능하면)
   - alias 매칭은 보수적: 다의성/충돌 시 entity_id 미지정(null) 또는 UNKNOWN 강등
 * ☐ 사용자 주도 alias 관리(오케스트레이터 UI/서비스를 통한 CRUD)
 
-## 4) Fact 생성/승인 정책 (D3)
+## 4) 팩트 생성/승인 정책 (D3)
 
 * ☐ explicit/implicit 모두 `FactStatus`를 가진다
 * ☐ `AUTO` fact는 기본 `PROPOSED`로 저장(유저 승인 필요)
 * ☐ `USER` 근거(태깅/입력 기반)는 `APPROVED`로 저장(기본)
 * ☐ `SchemaVersion` 생성 시 `source_snapshot_id`를 저장하여 재현성 확보
 
-## 5) 명시 필드 추출(High precision, Low recall)
+## 5) 명시 필드 추출(고정밀, 저재현율)
 
 * ☐ 최소 필드: 나이/시간/장소/관계/사망 여부/소속
 * ☐ 단위/형식 정규화: `units.py`
@@ -78,7 +80,7 @@ modules/nf_schema/
 * ☐ 기본값 unknown 허용
 * ☐ 자동 확정 금지: `PROPOSED`로만 저장
 
-## 7) Gating/Conflict
+## 7) 게이팅/충돌
 
 * ☐ validators: 타입/범위/누락/상호제약
 * ☐ conflict: 충돌 시 unknown/PROPOSED 강등 규칙
@@ -91,32 +93,32 @@ modules/nf_schema/
 
 ---
 
-# [S] Should — 권장
+# [S] 권장 — 권장
 
-* ☐ entity resolution 규칙 세분화(동명이인/호칭 변화)
-* ☐ schema 마이그레이션(버전 간 필드 변화) 자동화
-
----
-
-# [C] Could — 여유 시
-
-* ☐ explicit_fact_auto_approve 스위치(기본 off; 차순위/선택 구현)
+* ☐ 엔티티 해소 규칙 세분화(동명이인/호칭 변화)
+* ☐ 스키마 마이그레이션(버전 간 필드 변화) 자동화
 
 ---
 
-# [W] Won’t (now)
+# [C] 선택 — 여유 시
 
-* ☐ 공격적(aggressive) identity 병합(오염 위험)
+* ☐ explicit_fact_auto_approve 스위치(기본 꺼짐; 차순위/선택 구현)
+
+---
+
+# [W] 현재 제외
+
+* ☐ 공격적(aggressive) 동일성 병합(오염 위험)
 
 ---
 
 ## 계약 인터페이스(요약)
 
-- Inputs:
+- 입력:
   - `DocumentSnapshot`, `TagAssignment[]`, `Entity/EntityAlias`(조회)
-- Outputs:
+- 출력:
   - `SchemaVersion`, `SchemaFact[]`(explicit/implicit), `Chunk[]`, `Evidence[]`
-- Invariants:
+- 불변 조건:
   - `AUTO` fact는 `PROPOSED`
   - `Evidence`는 `snapshot_id/chunk_id`를 포함(가능하면)
 

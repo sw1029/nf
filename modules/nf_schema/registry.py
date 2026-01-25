@@ -1,8 +1,7 @@
 def load_schema_registry() -> None:
     """
-    Initialize schema registry (placeholder).
+    스키마 레지스트리 초기화(placeholder).
 
-    Planned: load ontology, validators, conflict rules, versioning state.
+    예정: 온톨로지, 검증기, 충돌 규칙, 버전 상태 로드.
     """
-    raise NotImplementedError("nf_schema.load_schema_registry is a placeholder.")
-
+    raise NotImplementedError("nf_schema.load_schema_registry는 placeholder입니다.")

@@ -312,5 +312,5 @@
 * ☐ /projects, /documents, /episodes, /tags, /entities, /schema(+/schema/facts)
 * ☐ /jobs submit, /jobs status, /jobs cancel, /jobs events
 * ☐ /query/retrieval, /query/verdicts, /query/evidence/{eid}
-* ☐ /projects/{pid}/whitelist add/remove
+* ☐ /projects/{project_id}/whitelist add/remove
 * ☐ /export

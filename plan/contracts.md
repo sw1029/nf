@@ -276,7 +276,7 @@
 ```json
 {
   "type": "CONSISTENCY",
-  "pid": "uuid",
+  "project_id": "uuid",
   "inputs": {},
   "priority": 100,
   "params": {}
@@ -324,21 +324,21 @@
 ### 6.1 CRUD (핵심)
 
 - `/projects` GET/POST
-- `/projects/{pid}` GET/PATCH/DELETE
-- `/projects/{pid}/documents` GET/POST
-- `/projects/{pid}/documents/{did}` GET/PATCH/DELETE
-- `/projects/{pid}/episodes` GET/POST
-- `/projects/{pid}/tags` GET/POST
-- `/projects/{pid}/schema` GET
-- `/projects/{pid}/whitelist` POST/DELETE
+- `/projects/{project_id}` GET/PATCH/DELETE
+- `/projects/{project_id}/documents` GET/POST
+- `/projects/{project_id}/documents/{did}` GET/PATCH/DELETE
+- `/projects/{project_id}/episodes` GET/POST
+- `/projects/{project_id}/tags` GET/POST
+- `/projects/{project_id}/schema` GET
+- `/projects/{project_id}/whitelist` POST/DELETE
 
 ### 6.2 Schema 승인(필수: D3)
 
 예시(구현 시 확정):
 
-- `/projects/{pid}/schema/facts` GET (filters: status/source/layer)
-- `/projects/{pid}/schema/facts/{fact_id}` GET
-- `/projects/{pid}/schema/facts/{fact_id}` PATCH `{ "status": "APPROVED|REJECTED" }`
+- `/projects/{project_id}/schema/facts` GET (filters: status/source/layer)
+- `/projects/{project_id}/schema/facts/{fact_id}` GET
+- `/projects/{project_id}/schema/facts/{fact_id}` PATCH `{ "status": "APPROVED|REJECTED" }`
 
 ### 6.3 Query (sync)
 
@@ -351,7 +351,7 @@
 ```json
 {
   "retrieval_request": {
-    "pid": "uuid",
+    "project_id": "uuid",
     "query": "string",
     "filters": { "tag_path": "string|null", "section": "string|null", "episode": "uuid|null" },
     "k": 10
@@ -363,6 +363,8 @@
   }
 }
 ```
+
+`/query/retrieval`의 sync 응답은 `source=fts`만 허용한다. `vector` 결과는 `RETRIEVE_VEC` job 이벤트로만 노출한다.
 
 ### 6.4 Jobs (async + streaming)
 

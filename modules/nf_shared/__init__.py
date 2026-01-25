@@ -1,11 +1,7 @@
 """
-Shared utilities placeholder.
-
-Responsibilities (planned):
-- Config schema, logging, errors, DTOs, constants
+공통 유틸리티(설정, 로깅, 오류, DTO, 상수).
 """
 
-__version__ = "0.0.0-placeholder"
+__version__ = "0.1.0"
 
-from .config import load_config  # noqa: F401
-
+from .config import Settings, load_config  # noqa: F401

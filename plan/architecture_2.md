@@ -77,35 +77,35 @@
 ```text
 /health
 /projects                      GET/POST
-/projects/{pid}                GET/PATCH/DELETE
+/projects/{project_id}                GET/PATCH/DELETE
 
-/projects/{pid}/documents      GET/POST
-/projects/{pid}/documents/{did} GET/PATCH/DELETE
-/projects/{pid}/episodes       GET/POST        (n~m 구간 정의/수정)
-/projects/{pid}/tags           GET/POST        (기본/사용자 정의)
-/projects/{pid}/entities       GET/POST        (인물/장소 등 엔티티)
-/projects/{pid}/entities/{eid}/aliases GET/POST/DELETE
-/projects/{pid}/schema         GET             (현재 승인된 스키마 뷰)
- /projects/{pid}/schema/facts  GET             (filters: status/source/layer)
- /projects/{pid}/schema/facts/{fid} GET
- /projects/{pid}/schema/facts/{fid} PATCH      (approve/reject)
+/projects/{project_id}/documents      GET/POST
+/projects/{project_id}/documents/{did} GET/PATCH/DELETE
+/projects/{project_id}/episodes       GET/POST        (n~m 구간 정의/수정)
+/projects/{project_id}/tags           GET/POST        (기본/사용자 정의)
+/projects/{project_id}/entities       GET/POST        (인물/장소 등 엔티티)
+/projects/{project_id}/entities/{eid}/aliases GET/POST/DELETE
+/projects/{project_id}/schema         GET             (현재 승인된 스키마 뷰)
+ /projects/{project_id}/schema/facts  GET             (filters: status/source/layer)
+ /projects/{project_id}/schema/facts/{fid} GET
+ /projects/{project_id}/schema/facts/{fid} PATCH      (approve/reject)
 
 /jobs                          POST            (enqueue)
-  body: {type, pid, inputs, priority, params}
+  body: {type, project_id, inputs, priority, params}
  /jobs/{jid}                   GET             (status)
 /jobs/{jid}/cancel             POST
 /jobs/{jid}/events             GET (SSE/Websocket)
 
 /query/retrieval               POST            (FTS-only 검색; sync)
-  body: {pid, query, filters(tag_path/section/episode), k}
+  body: {project_id, query, filters(tag_path/section/episode), k}
 /query/evidence/{eid}          GET
 /query/verdicts                POST            (특정 원고 구간 verdict 조회)
 
-/projects/{pid}/whitelist      POST            (의도된 모순 등록)
- /projects/{pid}/whitelist/{wid} DELETE
+/projects/{project_id}/whitelist      POST            (의도된 모순 등록)
+ /projects/{project_id}/whitelist/{wid} DELETE
 
 /export                        POST            (txt/docx)
-  body: {pid, range, format, include_meta}
+  body: {project_id, range, format, include_meta}
 ```
 
 **핵심 원칙**
@@ -375,7 +375,7 @@ Input: draft text range (doc_id + span or episode range)
 
 [Step 1] Evidence retrieval (FTS-first)
   - query = claim text + extracted slots
-  - filters: pid, tag_path narrowing if possible
+  - filters: project_id, tag_path narrowing if possible
   - output: top-k evidence (exact snippet + tag_path)
 
 [Step 2] Judge Layer 1 (Explicit fields only)
@@ -433,7 +433,7 @@ Rule: “개선 제안(SUGGEST)”은 1차: LOCAL(rule-base) / 옵션: Remote AP
 ### 8.1 문서 추가 → 스키마 생성 → 인덱싱(FTS/Vector)
 
 ```text
-UI -> Orchestrator: POST /projects/{pid}/documents (upload/register)
+UI -> Orchestrator: POST /projects/{project_id}/documents (upload/register)
 UI -> Orchestrator: POST /jobs {type:INGEST, doc_id}
 Orchestrator -> Queue: enqueue(INGEST)
 

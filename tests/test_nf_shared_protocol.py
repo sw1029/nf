@@ -1,8 +1,9 @@
 import dataclasses
+from pathlib import Path
 
 import pytest
 
-from modules.nf_shared.config import Settings
+from modules.nf_shared.config import Settings, load_config
 from modules.nf_shared.errors import AppError, ErrorCode
 from modules.nf_shared.protocol.dtos import (
     Document,
@@ -15,6 +16,7 @@ from modules.nf_shared.protocol.dtos import (
     Project,
     SchemaFact,
     SchemaLayer,
+    TagAssignment,
 )
 from modules.nf_shared.protocol.serialization import dump_json, load_json
 
@@ -96,3 +98,52 @@ def test_evidence_is_dataclass() -> None:
     assert {"eid", "doc_id", "snapshot_id", "match_type", "confirmed"} <= fields
     assert EvidenceMatchType.EXACT.value == "EXACT"
 
+
+@pytest.mark.unit
+def test_tag_assignment_is_dataclass() -> None:
+    assert dataclasses.is_dataclass(TagAssignment)
+    assignment = TagAssignment(
+        assign_id="a-1",
+        project_id="p-1",
+        doc_id="d-1",
+        snapshot_id="s-1",
+        span_start=0,
+        span_end=10,
+        tag_path="설정/인물/주인공/나이",
+        user_value=20,
+        created_by=FactSource.USER,
+        created_at="2026-01-01T00:00:00Z",
+    )
+    dumped = dump_json(assignment)
+    assert dumped["tag_path"].endswith("나이")
+    loaded = load_json(TagAssignment, dumped)
+    assert loaded == assignment
+
+
+@pytest.mark.unit
+def test_version_is_not_placeholder() -> None:
+    import modules.nf_shared as nf_shared
+
+    assert isinstance(nf_shared.__version__, str)
+    assert not nf_shared.__version__.endswith("placeholder")
+
+
+@pytest.mark.unit
+def test_load_config_reads_file_and_env_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "nf_config.toml"
+    config_path.write_text("enable_remote_api = true\nmax_loaded_shards = 5\n", encoding="utf-8")
+
+    monkeypatch.setenv("NF_MAX_RAM_MB", "1024")
+
+    settings = load_config(config_path)
+    assert settings.enable_remote_api is True
+    assert settings.max_loaded_shards == 5
+    assert settings.max_ram_mb == 1024
+
+
+@pytest.mark.unit
+def test_load_config_defaults_when_no_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NF_ENABLE_REMOTE_API", raising=False)
+    settings = load_config(path=None)
+    assert isinstance(settings, Settings)
+    assert settings.enable_remote_api is False

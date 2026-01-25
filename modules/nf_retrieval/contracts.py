@@ -4,14 +4,14 @@ from typing import Protocol, TypedDict
 
 
 class RetrievalRequest(TypedDict):
-    pid: str
+    project_id: str
     query: str
     filters: dict
     k: int
 
 
 class RetrievalResult(TypedDict):
-    source: str  # "fts" | "vector"
+    source: str  # sync: "fts" only, async: "vector" allowed
     score: float
     evidence: dict
 
@@ -22,4 +22,3 @@ class FTSSearcher(Protocol):
 
 class VectorSearcher(Protocol):
     def search(self, req: RetrievalRequest) -> list[RetrievalResult]: ...
-

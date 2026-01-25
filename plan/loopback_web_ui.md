@@ -1,34 +1,36 @@
-# Loopback Test Web UI (개발용 임시 Web UI) — MoSCoW 구현 계획
+# 루프백 테스트 웹 UI (개발용 임시 웹 UI) — MoSCoW 구현 계획
 
-이 문서는 개발/디버깅 중 **각 기능의 작동 확인**을 빠르게 하기 위한 **임시 Web UI** 계획이다.
+이 문서는 개발/디버깅 중 **각 기능의 작동 확인**을 빠르게 하기 위한 **임시 웹 UI** 계획이다.
 제품 UI(`nf-desktop`)와 별개이며, **루프백(127.0.0.1)에서만** 노출되는 것을 원칙으로 한다.
 
 참조:
 
-- `plan/contracts.md` (HTTP API + Job/SSE 계약)
+- `plan/contracts.md` (HTTP API + 잡/SSE 계약)
 - `plan/architecture_1.md`, `plan/architecture_2.md` (프로세스/잡 흐름)
 - `plan/DECISIONS_PENDING.md` (D1~D5 정책)
 
 구현 순서(Phase, 전체 로드맵: `plan/IMPLEMENTATION_CHECKLIST.md`):
 
-- Phase 40에서 구현(선행: Phase 10~30 최소 API/Jobs/SSE/FTS 동작)
+테스트는 conda의 `nf` 환경에서 수행한다.
+
+- Phase 40에서 구현(선행: Phase 10~30 최소 API/잡/SSE/FTS 동작)
 - 제품 UI(`nf-desktop`) 구현과 독립적이며, 개발/디버깅 목적에 한정
 
 ---
 
-# [M] Must — 개발/디버깅 MVP
+# [M] 필수 — 개발/디버깅 MVP
 
 ## 0) 목적/비목적
 
 목적:
 
-- Desktop UI 없이도 **Orchestrator/Workers/각 모듈 기능**을 단계적으로 호출하고 결과를 관찰한다.
-- Job + SSE 스트리밍 흐름(진행률/이벤트/payload)을 브라우저에서 즉시 확인한다.
-- 정책 스위치/테스트 토글을 통해 **성공/실패/unknown/정책 위반** 케이스를 재현한다.
+- 데스크톱 UI 없이도 **오케스트레이터/워커/각 모듈 기능**을 단계적으로 호출하고 결과를 관찰한다.
+- 잡 + SSE 스트리밍 흐름(진행률/이벤트/페이로드)을 브라우저에서 즉시 확인한다.
+- 정책 스위치/테스트 토글을 통해 **성공/실패/unknown(미확정)/정책 위반** 케이스를 재현한다.
 
 비목적:
 
-- 제품 UI 대체(UX 완성도/디자인/접근성) 또는 배포용 Web UI.
+- 제품 UI 대체(UX 완성도/디자인/접근성) 또는 배포용 웹 UI.
 - 외부 네트워크/원격 접근 지원(반드시 루프백 고정).
 
 ---
@@ -36,7 +38,7 @@
 ## 1) 실행/노출 조건(루프백 고정)
 
 * ☐ 바인딩: `127.0.0.1` 전용(필수). `0.0.0.0` 바인딩 금지.
-* ☐ 활성화 플래그(기본 off):
+* ☐ 활성화 플래그(기본 꺼짐):
   - 예: `NF_ENABLE_DEBUG_WEB_UI=1` 또는 config에서 `debug_web_ui.enable=true`
 * ☐ 경로 프리픽스: `/_debug` (권장)로 분리하여 제품 API와 충돌 방지
 * ☐ 최소 보호:
@@ -51,21 +53,21 @@
 
 * ☐ `/ _debug /` 대시보드
   - Orchestrator/Worker 프로세스 상태(heartbeat/last_seen)
-  - 현재 프로젝트 선택(활성 pid) + 전역 설정 스냅샷 표시
+  - 현재 프로젝트 선택(활성 project_id) + 전역 설정 스냅샷 표시
 
 ### 2.2 CRUD 확인(프로젝트/문서/태그)
 
-* ☐ Projects: `/projects` GET/POST, `/projects/{pid}` GET/PATCH
+* ☐ Projects: `/projects` GET/POST, `/projects/{project_id}` GET/PATCH
   - 프로젝트 생성/선택/설정 확인(스위치 포함)
-* ☐ Documents: `/projects/{pid}/documents` GET/POST
+* ☐ Documents: `/projects/{project_id}/documents` GET/POST
   - 업로드/등록(간이 텍스트 붙여넣기 포함)
-* ☐ Tags: `/projects/{pid}/tags` GET/POST
+* ☐ Tags: `/projects/{project_id}/tags` GET/POST
   - tag_def 생성/나열(간이)
 
 ### 2.3 Jobs(핵심) + SSE 이벤트 뷰어
 
 * ☐ Jobs Panel:
-  - `/jobs` submit 폼(공통): `type`, `pid`, `inputs`, `params`, `priority`
+  - `/jobs` submit 폼(공통): `type`, `project_id`, `inputs`, `params`, `priority`
   - `/jobs/{jid}` 상태 폴링
   - `/jobs/{jid}/cancel` 취소 버튼
 * ☐ SSE Viewer:
@@ -89,15 +91,15 @@
   - 입력 조절: `doc_id`, `snapshot_id`, `range(스팬/에피소드)`, `schema_ver`
   - 출력: verdict/evidence/breakdown/raw JSON 확인
 * ☐ whitelist 연동 트리거:
-  - 사용자가 “의도된 모순” 체크 → `/projects/{pid}/whitelist` 호출(간이)
+  - 사용자가 “의도된 모순” 체크 → `/projects/{project_id}/whitelist` 호출(간이)
 
 ### 2.6 Schema Review(정책 D3 준수)
 
 * ☐ facts 리스트:
-  - `/projects/{pid}/schema/facts` GET (filters: status/source/layer)
+  - `/projects/{project_id}/schema/facts` GET (filters: status/source/layer)
   - `AUTO`는 항상 `PROPOSED`(1차 정책)임을 UI에 명시
 * ☐ 승인/거절:
-  - `/projects/{pid}/schema/facts/{fact_id}` PATCH `{status}`
+  - `/projects/{project_id}/schema/facts/{fact_id}` PATCH `{status}`
   - fact/evidence 링크(raw) 확인 버튼
 
 ### 2.7 Suggest(정책 D4 준수)
@@ -166,7 +168,7 @@
 
 ---
 
-# [S] Should — 개발 생산성
+# [S] 권장 — 개발 생산성
 
 * ☐ 시나리오 프리셋:
   - “INGEST→INDEX_FTS→CONSISTENCY” 원클릭 실행
@@ -178,7 +180,7 @@
 
 ---
 
-# [C] Could — 여유 시
+# [C] 선택 — 여유 시
 
 * ☐ VerdictLog diff 뷰(동일 claim 재실행 비교)
 * ☐ Evidence 하이라이트(원문/스냅샷 렌더 + 스팬 강조)
@@ -186,7 +188,7 @@
 
 ---
 
-# [W] Won’t (now)
+# [W] 현재 제외
 
 * ☐ 외부 네트워크 접근/계정/권한 시스템
 * ☐ 제품 UI 수준의 완성도/디자인

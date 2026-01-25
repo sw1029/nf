@@ -1,8 +1,7 @@
 def run_worker() -> None:
     """
-    Start a background worker (placeholder).
+    백그라운드 워커 시작(placeholder).
 
-    Planned: dequeue jobs, enforce leases, emit progress events.
+    예정: 잡 디큐, 리스 강제, 진행 이벤트 송신.
     """
-    raise NotImplementedError("nf_workers.run_worker is a placeholder.")
-
+    raise NotImplementedError("nf_workers.run_worker는 placeholder입니다.")

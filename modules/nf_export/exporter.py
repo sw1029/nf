@@ -4,9 +4,9 @@ from typing import Literal
 
 def export_document(path: Path | None = None, format: Literal["txt", "docx"] = "txt") -> None:
     """
-    Export document to the given format (placeholder).
+    지정 형식으로 문서 내보내기(placeholder).
 
-    Planned: render text/docx with optional metadata/citations.
+    예정: 메타데이터/인용 포함 선택형 렌더링.
     """
     _ = (path, format)
-    raise NotImplementedError("nf_export.export_document is a placeholder.")
+    raise NotImplementedError("nf_export.export_document는 placeholder입니다.")

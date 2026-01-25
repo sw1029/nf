@@ -1,4 +1,4 @@
-# 구현 개요/구현 순서 통제 (Ordered TODO Checklist)
+# 구현 개요/구현 순서 통제 (정렬된 TODO 체크리스트)
 
 이 문서는 `plan/*` 설계 문서들을 기반으로 **구현 순서를 Phase 단위로 고정**하고,
 진행 상황을 **체크리스트 형식**으로 통제한다.
@@ -9,7 +9,7 @@
 - `plan/contracts.md` (계약/DTO/API/Job/Event)
 - `plan/architecture_1.md`, `plan/architecture_2.md` (프로세스/잡 흐름)
 - `plan/modules/*.md` (모듈별 MoSCoW 구현 계획)
-- `plan/loopback_web_ui.md` (개발용 임시 Web UI)
+- `plan/loopback_web_ui.md` (개발용 임시 웹 UI)
 
 ---
 
@@ -18,25 +18,26 @@
 * ☐ 각 모듈 문서는 “구현 순서(Phase)”를 본 문서와 동일하게 유지한다.
 * ☐ 요구사항(목적) 원문은 `plan/user_request.md`이며, 본 문서는 이를 “구현 관점”으로 Phase에 분해한다.
 * ☐ 정책 선택(D1~D5)은 `plan/DECISIONS_PENDING.md`를 1차 기준으로 하며, Phase 순서로 우회하지 않는다.
+* ☐ 실제 테스트는 conda의 `nf` 환경에서 수행한다.
 * ☐ Phase 완료 기준:
-  - 최소 1개의 end-to-end 시나리오가 **Orchestrator → Jobs → SSE**로 관찰 가능
+  - 최소 1개의 종단 간 시나리오가 **오케스트레이터 → 잡 → SSE**로 관찰 가능
   - (가능하면) 해당 범위에 대한 pytest 스모크/단위 테스트 추가
 
 ---
 
 ## 1) Phase 개요(요약)
 
-- Phase 00: Contracts/공통 규격(nf-shared) 고정
-- Phase 10: Orchestrator(loopback HTTP) + Storage 기본 골격
-- Phase 20: Workers(Job Runner) + Queue/Lease/Events 골격
-- Phase 30: 문서 저장/Chunk + FTS 인덱싱/Sync Retrieval(FTS-only)
-- Phase 40: 개발용 루프백 Web UI(임시 디버그 UI)
+- Phase 00: 계약/공통 규격(nf-shared) 고정
+- Phase 10: 오케스트레이터(루프백 HTTP) + 스토리지 기본 골격
+- Phase 20: 워커(잡 실행기) + 큐/리스/이벤트 골격
+- Phase 30: 문서 저장/청크 + FTS 인덱싱/동기 검색(FTS-only)
+- Phase 40: 개발용 루프백 웹 UI(임시 디버그 UI)
 - Phase 50: 태그/엔티티/스키마(INGEST) + 승인 워크플로(D2/D3)
-- Phase 60: 정합성(CONSISTENCY) + Verdict/Evidence Logging + Whitelist
-- Phase 70: Vector 인덱스/검색(비동기) + `RETRIEVE_VEC` 스트리밍(D5)
-- Phase 80: Suggest(LOCAL_RULE 우선) + Model Gateway 옵션(D4)
-- Phase 90: Export + Proofread(차순위 포함) (D1)
-- Phase 95: Desktop UI(nf-desktop) 제품 흐름 통합/마감
+- Phase 60: 정합성(CONSISTENCY) + 판정/근거 로그 + 화이트리스트
+- Phase 70: 벡터 인덱스/검색(비동기) + `RETRIEVE_VEC` 스트리밍(D5)
+- Phase 80: 제안(LOCAL_RULE 우선) + 모델 게이트웨이 옵션(D4)
+- Phase 90: 내보내기 + 문법 교정(차순위 포함) (D1)
+- Phase 95: 데스크톱 UI(nf-desktop) 제품 흐름 통합/마감
 
 ---
 
@@ -45,12 +46,12 @@
 * 1) 설정/플롯/등장인물 문서 + 태깅: Phase 50(데이터/스키마) + Phase 95(제품 UI)
 * 2) 인덱싱/임베딩(RAG): Phase 30(FTS) + Phase 70(Vector)
 * 3) 정합성 검토(근거 강제/unknown 허용/화이트리스트): Phase 60
-* 4) 문법 교정(강도 조절; rule-base 우선): Phase 90/95
+* 4) 문법 교정(강도 조절; 규칙 기반 우선): Phase 90/95
 * 5) 자간/줄간격(레이아웃 설정): Phase 95
 * 6) 개선 제안(LOCAL_RULE 우선, API opt-in, LOCAL_GEN 차순위): Phase 80
-* 7) Export(txt/docx): Phase 90
-* 8) episode chunk 구성: Phase 30(Chunk/Range) + Phase 95(제품 UI 범위 지정)
-* 9) rule-base 우선 + 경량 로컬 AI(차순위): Phase 50/60/80에 분산(정책은 D1~D5 준수)
+* 7) 내보내기(txt/docx): Phase 90
+* 8) 에피소드 청크 구성: Phase 30(청크/범위) + Phase 95(제품 UI 범위 지정)
+* 9) 규칙 기반 우선 + 경량 로컬 AI(차순위): Phase 50/60/80에 분산(정책은 D1~D5 준수)
 * 10~11) 로컬/원격 모델 분리 + opt-in: Phase 80(+ Phase 60 L3는 선택 게이트)
 * 12) 3단 강제 근거화(evidence_required): Phase 60(핵심), Phase 80(모델 경계)
 
@@ -58,11 +59,11 @@
 
 ## 2) 구현 순서(체크리스트)
 
-### Phase 00 — Contracts/공통 규격 고정
+### Phase 00 — 계약/공통 규격 고정
 
-* ☐ `modules/nf_shared/` DTO/Enum/직렬화/오류/설정 최소 구현(Contracts v0)
-* ☐ 계약 스모크 테스트 정규화(예: `tests/test_nf_shared_protocol.py` 등)
-* ☐ “pid vs project_id”, “FTS-only vs vector job” 등 계약 표기 불일치 제거
+* ☑ `modules/nf_shared/` DTO/Enum/직렬화/오류/설정 최소 구현(계약 v0)
+* ☑ 계약 스모크 테스트 정규화(예: `tests/test_nf_shared_protocol.py` 등)
+* ☑ project_id 명칭 통일 + “FTS-only vs 벡터 잡” 계약 표기 불일치 제거
 
 관련 문서:
 
@@ -71,13 +72,13 @@
 
 ---
 
-### Phase 10 — Orchestrator + Storage 기본 골격
+### Phase 10 — 오케스트레이터 + 스토리지 기본 골격
 
-* ☐ loopback HTTP 서버 구동 + 표준 오류 응답(AppError) 적용
-* ☐ Project DB(SQLite) 스키마/마이그레이션 최소 도입
-* ☐ `/health`, `/projects` CRUD 최소 구현
-* ☐ `/jobs` submit/status/cancel + `/jobs/{jid}/events`(SSE) 최소 구현
-* ☐ 정책/보안 최소:
+* ☑ 루프백 HTTP 서버 구동 + 표준 오류 응답(AppError) 적용
+* ☑ 프로젝트 DB(SQLite) 스키마/마이그레이션 최소 도입
+* ☑ `/health`, `/projects` CRUD 최소 구현
+* ☑ `/jobs` submit/status/cancel + `/jobs/{jid}/events`(SSE) 최소 구현
+* ☑ 정책/보안 최소:
   - loopback 고정
   - (권장) 로컬 토큰(옵션) + 비활성 기본값
 
