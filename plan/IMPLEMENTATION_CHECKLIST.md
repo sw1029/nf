@@ -5,6 +5,7 @@
 
 참조:
 
+- `plan/user_request.md` (요구사항 원문/목적)
 - `plan/contracts.md` (계약/DTO/API/Job/Event)
 - `plan/architecture_1.md`, `plan/architecture_2.md` (프로세스/잡 흐름)
 - `plan/modules/*.md` (모듈별 MoSCoW 구현 계획)
@@ -15,6 +16,7 @@
 ## 0) 운영 규칙(통제)
 
 * ☐ 각 모듈 문서는 “구현 순서(Phase)”를 본 문서와 동일하게 유지한다.
+* ☐ 요구사항(목적) 원문은 `plan/user_request.md`이며, 본 문서는 이를 “구현 관점”으로 Phase에 분해한다.
 * ☐ 정책 선택(D1~D5)은 `plan/DECISIONS_PENDING.md`를 1차 기준으로 하며, Phase 순서로 우회하지 않는다.
 * ☐ Phase 완료 기준:
   - 최소 1개의 end-to-end 시나리오가 **Orchestrator → Jobs → SSE**로 관찰 가능
@@ -35,6 +37,22 @@
 - Phase 80: Suggest(LOCAL_RULE 우선) + Model Gateway 옵션(D4)
 - Phase 90: Export + Proofread(차순위 포함) (D1)
 - Phase 95: Desktop UI(nf-desktop) 제품 흐름 통합/마감
+
+---
+
+## 1.1) `user_request.md` 요구사항 ↔ Phase 매핑(요약)
+
+* 1) 설정/플롯/등장인물 문서 + 태깅: Phase 50(데이터/스키마) + Phase 95(제품 UI)
+* 2) 인덱싱/임베딩(RAG): Phase 30(FTS) + Phase 70(Vector)
+* 3) 정합성 검토(근거 강제/unknown 허용/화이트리스트): Phase 60
+* 4) 문법 교정(강도 조절; rule-base 우선): Phase 90/95
+* 5) 자간/줄간격(레이아웃 설정): Phase 95
+* 6) 개선 제안(LOCAL_RULE 우선, API opt-in, LOCAL_GEN 차순위): Phase 80
+* 7) Export(txt/docx): Phase 90
+* 8) episode chunk 구성: Phase 30(Chunk/Range) + Phase 95(제품 UI 범위 지정)
+* 9) rule-base 우선 + 경량 로컬 AI(차순위): Phase 50/60/80에 분산(정책은 D1~D5 준수)
+* 10~11) 로컬/원격 모델 분리 + opt-in: Phase 80(+ Phase 60 L3는 선택 게이트)
+* 12) 3단 강제 근거화(evidence_required): Phase 60(핵심), Phase 80(모델 경계)
 
 ---
 
