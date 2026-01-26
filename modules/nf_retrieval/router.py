@@ -3,6 +3,7 @@ from typing import Any, Literal
 from modules.nf_orchestrator.storage import db
 from modules.nf_retrieval.contracts import RetrievalRequest, RetrievalResult
 from modules.nf_retrieval.fts.fts_index import fts_search
+from modules.nf_retrieval.vector.manifest import vector_search
 
 
 def run_retrieval_job(
@@ -23,7 +24,7 @@ def run_retrieval_job(
         "filters": filters or {},
         "k": k,
     }
+    if mode == "vector":
+        return vector_search(req)
     with db.connect(db_path) as conn:
-        if mode == "fts":
-            return fts_search(conn, req)
         return fts_search(conn, req)

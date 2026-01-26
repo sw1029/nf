@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 from modules.nf_model_gateway.contracts import EvidenceBundle, ModelGateway
+from modules.nf_model_gateway.prompting import build_remote_prompt
 from modules.nf_model_gateway.remote.circuit_breaker import CircuitBreaker
 from modules.nf_model_gateway.remote.provider import mask_sensitive, select_remote_provider
 from modules.nf_model_gateway.remote.rate_limit import RateLimiter
@@ -39,7 +40,7 @@ class BasicModelGateway:
         if not self._circuit_breaker.allow():
             raise RuntimeError("remote api circuit open")
         try:
-            prompt = bundle.get("claim_text", "")
+            prompt = build_remote_prompt(bundle)
             self._logger.debug("remote api prompt: %s", mask_sensitive(prompt))
             result = self._remote_provider.complete(prompt)
             self._logger.debug("remote api response: %s", mask_sensitive(result))

@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import json
 import re
-import resource
+import sys
 import time
 import uuid
 from dataclasses import asdict
 from typing import Any
+
+try:
+    import resource  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    resource = None  # type: ignore[assignment]
 
 from modules.nf_consistency.engine import ConsistencyEngineImpl
 from modules.nf_export.exporter import ExporterImpl
@@ -192,9 +197,48 @@ def run_worker(
 def _memory_pressure(max_ram_mb: int) -> bool:
     if max_ram_mb <= 0:
         return False
-    usage_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    usage_mb = usage_kb / 1024
+    usage_mb = _get_process_rss_mb()
+    if usage_mb <= 0:
+        return False
     return usage_mb > max_ram_mb
+
+
+def _get_process_rss_mb() -> float:
+    if resource is not None:
+        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            return float(usage) / (1024 * 1024)
+        return float(usage) / 1024
+
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes
+            import ctypes.wintypes
+
+            class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("cb", ctypes.wintypes.DWORD),
+                    ("PageFaultCount", ctypes.wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.wintypes.SIZE_T),
+                    ("WorkingSetSize", ctypes.wintypes.SIZE_T),
+                    ("QuotaPeakPagedPoolUsage", ctypes.wintypes.SIZE_T),
+                    ("QuotaPagedPoolUsage", ctypes.wintypes.SIZE_T),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.wintypes.SIZE_T),
+                    ("QuotaNonPagedPoolUsage", ctypes.wintypes.SIZE_T),
+                    ("PagefileUsage", ctypes.wintypes.SIZE_T),
+                    ("PeakPagefileUsage", ctypes.wintypes.SIZE_T),
+                ]
+
+            counters = PROCESS_MEMORY_COUNTERS()
+            counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+            handle = ctypes.windll.kernel32.GetCurrentProcess()
+            ok = ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb)
+            if ok:
+                return float(counters.WorkingSetSize) / (1024 * 1024)
+        except Exception:  # noqa: BLE001
+            return 0.0
+
+    return 0.0
 
 
 def _estimate_index_mb(text: str, chunk_count: int) -> float:
@@ -993,9 +1037,9 @@ def _handle_index_vec(ctx: WorkerContext) -> None:
                 )
                 chunk_repo.replace_chunks_for_snapshot(conn, snapshot.snapshot_id, chunks)
             if settings.max_ram_mb > 0:
-                usage_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+                usage_mb = _get_process_rss_mb()
                 estimated_mb = _estimate_index_mb(text, len(chunks))
-                if usage_mb + estimated_mb > settings.max_ram_mb:
+                if usage_mb > 0 and usage_mb + estimated_mb > settings.max_ram_mb:
                     ctx.emit(
                         JobEvent(
                             event_id="",
