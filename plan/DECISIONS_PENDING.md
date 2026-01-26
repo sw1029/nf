@@ -74,3 +74,17 @@
   - Vector retrieval/expand는 **job으로 내려보내고**, UI는 **스트리밍(events)로 표시**
 - 2차(차순위) 계획
   - 벡터 검색 결과 캐시/샤드 프리로드/최근 사용 기반 최적화(프리징 방지 범위 내)
+
+---
+
+## D6) 시점(time_key) / 세계관 타임라인(timeline_idx) 정책
+
+- 근거: `plan/user_request.md:8-1`, `plan/user_request.md:8-2`
+- 결정이 필요한 이유: “시점”은 절대시간/상대시간/에피소드(화수) 축이 혼재하며, 자동 매핑은 오염 위험이 큼.
+- 1차(우선) 결정(권장)
+  - 시점 chunk/time anchor는 **사용자 요청 시에만 생성**(리소스/오염 방지)
+  - 1차 제안은 **상대 time_key + 화수/episode 기반 매핑**을 기본으로 하고, `AUTO → PROPOSED`로만 저장
+  - 세계관 타임라인은 별도 문서(`timeline_doc_id`)로 유지하며, 타임라인 이벤트는 `timeline_idx`를 가진다
+  - time anchor는 가능하면 `timeline_idx`를 참조하되, 불명확/충돌 시 미지정(null) 또는 UNKNOWN 처리
+- 2차(차순위) 계획
+  - 사용자 승인/조정 이후 2차 제안(재매핑/정교화) 및 chunk 역인덱스 생성(검색 최적화)

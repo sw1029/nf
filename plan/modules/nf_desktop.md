@@ -50,7 +50,10 @@ nf-desktop은 사용자의 글 작성 흐름을 담당하며, 오케스트레이
   - AUTO=PROPOSED fact 승인/거절/보류 UI
 * ☐ 검색 UI (D5)
   - Sync 검색은 FTS-only
+  - (추가 요구) 필터: tag_path/section/episode + 인물(entity_id) + 시점(time_key/timeline_idx)
   - “벡터 확장” 버튼 → `RETRIEVE_VEC` 잡 생성 + 스트리밍 결과 표시
+  - (추가 요구) “시점/인물 그룹 생성” 버튼(사용자 요청 시): `INDEX_FTS` + `params.grouping`로 메타 생성
+  - (추가 요구) 세계관 타임라인 문서 지정/편집 + `timeline_event` 검토(승인/조정)
 * ☐ 설정
   - API 키(옵트인)
   - 로컬 모델 다운로드(차순위 기능의 토글은 노출 가능)

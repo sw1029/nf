@@ -79,11 +79,15 @@
 
 * ☐ Sync Retrieval(FTS-only):
   - `/query/retrieval` POST만 사용(FTS-only)
-  - 입력 조절: `query`, `filters(tag_path/section/episode)`, `k`
+  - 입력 조절: `query`, `filters(tag_path/section/episode/entity_id/time_key/timeline_idx)`, `k`
   - 결과 렌더: evidence 스니펫/경로/점수/confirmed 표시
 * ☐ Vector 확장(비동기):
   - “Vector 확장” 버튼 → `/jobs`에 `RETRIEVE_VEC` 제출
   - 결과는 SSE `payload.results[]` 조각으로 스트리밍 표시(D5)
+* ☐ (추가 요구) 시점/인물 chunk group 생성(사용자 요청 시):
+  - “시점 그룹 생성/인물 그룹 생성” 버튼 → `/jobs`에 `INDEX_FTS` 제출 + `params.grouping` 사용
+  - (선택) `timeline_doc_id` 입력/선택: 세계관 타임라인을 참조해 `timeline_idx` 부여
+  - 결과: 제안된 span 개수/샘플 및 `PROPOSED` 저장 여부 표시
 
 ### 2.5 Consistency(정합성)
 
@@ -101,6 +105,8 @@
 * ☐ 승인/거절:
   - `/projects/{project_id}/schema/facts/{fact_id}` PATCH `{status}`
   - fact/evidence 링크(raw) 확인 버튼
+* ☐ (추가 요구) 시점/인물/타임라인 검토:
+  - `entity_mention_span/time_anchor/timeline_event` 목록 조회 + 승인/거절(최소)
 
 ### 2.7 Suggest(정책 D4 준수)
 

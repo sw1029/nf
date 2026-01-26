@@ -141,7 +141,7 @@
 
 * ☐ 기본 라우팅(job 내부): FTS 결과 부족 시에만 Vector 확장
 * ☐ UI 검색: sync는 FTS-only, Vector 확장은 `RETRIEVE_VEC` job으로 전환 + 스트리밍
-* ☐ 필터: tag_path/section/episode 범위 기반 샤드 선택(최소)
+* ☐ 필터: tag_path/section/episode/entity_id/time_key/timeline_idx 기반 샤드 선택(최소)
 
 ---
 

@@ -87,7 +87,7 @@ modules/nf_orchestrator/
   - `/projects/{project_id}/schema/facts/{fact_id}` GET
   - `/projects/{project_id}/schema/facts/{fact_id}` PATCH `{status: APPROVED|REJECTED}`
 * ☑ 쿼리(동기)
-  - `/query/retrieval` POST (**FTS-only**)
+  - `/query/retrieval` POST (**FTS-only**; filters: tag_path/section/episode/entity_id/time_key/timeline_idx)
   - `/query/evidence/{eid}` GET
   - `/query/verdicts` POST
 * ☑ 잡(비동기)
@@ -105,10 +105,12 @@ modules/nf_orchestrator/
   - `INDEX_FTS`: `{scope: doc_id|episode_range|global, snapshot_id?}`
   - `INDEX_VEC`: `{scope, shard_policy}`
   - `CONSISTENCY`: `{input_doc_id, input_snapshot_id, range, schema_ver?}`
-  - `RETRIEVE_VEC`: `{query, filters, k}`
+  - `RETRIEVE_VEC`: `{query, filters, k}` (filters: tag_path/section/episode/entity_id/time_key/timeline_idx)
   - `SUGGEST`: `{range, mode: LOCAL_RULE|API|LOCAL_GEN, citations_required: true}`
   - `PROOFREAD`: `{doc_id, snapshot_id, range?}` (차순위: 배치)
   - `EXPORT`: `{range, format, include_meta}`
+* ☐ (추가 요구) `params.grouping`(선택): 사용자 요청 시에만 시점/인물/타임라인 메타 생성
+  - 예: `INDEX_FTS` 제출 시 `params={grouping:{entity_mentions:true, time_anchors:true, timeline_doc_id?}}`
 
 ## 3) 스트리밍(SSE) 규격
 
@@ -142,6 +144,9 @@ modules/nf_orchestrator/
 * ☑ OpenAPI 스펙 생성(로컬용)
 * ☑ SSE 재연결 지원(Last-Event-ID)
 * ☑ 로컬 토큰(옵션, `NF_ORCHESTRATOR_TOKEN`) 및 루프백 고정 강화
+* ☐ (추가 요구) 시점/인물 chunk group + 타임라인 조회/승인 API(최소)
+  - timeline 문서 지정(`project.settings.timeline_doc_id`) 또는 별도 엔드포인트(선택)
+  - `entity_mention_span/time_anchor/timeline_event` 목록 조회 + 승인/거절(PATCH) 워크플로
 
 ---
 

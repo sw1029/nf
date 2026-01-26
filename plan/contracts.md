@@ -123,6 +123,57 @@
 }
 ```
 
+### 2.2.1 (추가) Time/Entity Grouping + Timeline (사용자 요청 시 생성)
+
+시점/인물 기반 “chunk group”은 chunk를 복제 생성하기보다, **span 기반 메타데이터**로 관리한다(1차).
+자동 생성은 오염/리소스 위험이 있으므로 **사용자 요청 시에만** 생성하며, `AUTO → PROPOSED` 정책을 따른다.
+
+```json
+{
+  "entity_mention_span": {
+    "mention_id": "uuid",
+    "project_id": "uuid",
+    "doc_id": "uuid",
+    "snapshot_id": "uuid",
+    "entity_id": "uuid",
+    "span_start": 0,
+    "span_end": 120,
+    "status": "PROPOSED|APPROVED|REJECTED",
+    "created_by": "AUTO|USER",
+    "created_at": "ts"
+  },
+  "time_anchor": {
+    "anchor_id": "uuid",
+    "project_id": "uuid",
+    "doc_id": "uuid",
+    "snapshot_id": "uuid",
+    "span_start": 0,
+    "span_end": 120,
+    "time_key": "string (relative; episode 기반 1차 매핑)",
+    "timeline_idx": "int|null",
+    "status": "PROPOSED|APPROVED|REJECTED",
+    "created_by": "AUTO|USER",
+    "created_at": "ts"
+  },
+  "timeline_event": {
+    "timeline_event_id": "uuid",
+    "project_id": "uuid",
+    "timeline_idx": 1,
+    "label": "string",
+    "time_key": "string (relative/absolute 혼합 가능)",
+    "source_doc_id": "uuid",
+    "source_snapshot_id": "uuid",
+    "span_start": 0,
+    "span_end": 120,
+    "status": "PROPOSED|APPROVED|REJECTED",
+    "created_by": "AUTO|USER",
+    "created_at": "ts"
+  }
+}
+```
+
+권장: 프로젝트 설정(`project.settings`)에 `timeline_doc_id`를 기록하여 “세계관 타임라인 문서”를 지정한다.
+
 ### 2.3 TagDef / TagAssignment
 
 ```json
@@ -353,7 +404,14 @@
   "retrieval_request": {
     "project_id": "uuid",
     "query": "string",
-    "filters": { "tag_path": "string|null", "section": "string|null", "episode": "uuid|null" },
+    "filters": {
+      "tag_path": "string|null",
+      "section": "string|null",
+      "episode": "uuid|null",
+      "entity_id": "uuid|null",
+      "time_key": "string|null",
+      "timeline_idx": "int|null"
+    },
     "k": 10
   },
   "retrieval_result": {
@@ -365,6 +423,12 @@
 ```
 
 `/query/retrieval`의 sync 응답은 `source=fts`만 허용한다. `vector` 결과는 `RETRIEVE_VEC` job 이벤트로만 노출한다.
+
+`filters.entity_id/time_key/timeline_idx`는 “chunk 자체를 새로 생성”하기보다는,
+기본 chunk에 대해 `entity/time` 메타데이터(링크 또는 span) 를 생성해 **필터링**하는 경로를 우선으로 한다(최소 구현).
+
+해당 메타데이터는 리소스/오염 방지를 위해 **사용자 요청 시에만 생성**되며,
+필터가 지정되었는데 메타데이터가 없으면 결과는 비거나(권장) 경고를 반환할 수 있다.
 
 ### 6.4 Jobs (async + streaming)
 

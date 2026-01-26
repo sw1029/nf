@@ -95,6 +95,11 @@ modules/nf_schema/
 
 # [S] 권장 — 권장
 
+* ☐ (추가 요구) 시점/인물 chunk group 메타데이터(사용자 요청 시 생성):
+  - 인물: `entity_mention_span`(문장 범위 span만 저장; entity 링크 스타일)
+  - 시점: `time_anchor`(상대 time_key, 화수/episode 기반 1차 매핑) + `timeline_idx`(옵션)
+  - 세계관 타임라인: 별도 문서 → `timeline_event(timeline_idx)`로 정리/확장
+  - (2차/최적화) 승인 후 `chunk ↔ entity/time` 역인덱스 생성(선택)
 * ☐ 엔티티 해소 규칙 세분화(동명이인/호칭 변화)
 * ☐ 스키마 마이그레이션(버전 간 필드 변화) 자동화
 

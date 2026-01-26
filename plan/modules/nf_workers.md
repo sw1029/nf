@@ -66,6 +66,12 @@ modules/nf_workers/
 
 * ☑ 입력: `{scope, snapshot_id?}`
 * ☑ 동작: chunk 단위로 FTS 인덱스 갱신(증분)
+* ☐ (추가 요구) 시점/인물 chunk group 메타데이터 생성(사용자 요청 시)
+  - 트리거: job `params.grouping` (예: `{entity_mentions:true, time_anchors:true, timeline_doc_id?}`)가 있을 때만 실행
+  - 인물: `entity_mention_span`(문장 범위 span) 제안 → `AUTO+PROPOSED`로 저장
+  - 시점: `time_anchor`(상대 time_key; 화수/episode 기반 1차 매핑) 제안 → `AUTO+PROPOSED`로 저장
+  - 타임라인 참조: `timeline_doc_id`가 지정된 경우 `timeline_event`를 참조하여 `timeline_idx` 부여(가능하면)
+  - (2차/최적화) 사용자 승인 후 chunk 역인덱스 생성 또는 재매핑(선택)
 * ☑ 출력: `job_event(payload={chunks_indexed})`
 
 ### 2.3 INDEX_VEC

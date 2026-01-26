@@ -97,7 +97,7 @@
 /jobs/{jid}/events             GET (SSE/Websocket)
 
 /query/retrieval               POST            (FTS-only 검색; sync)
-  body: {project_id, query, filters(tag_path/section/episode), k}
+  body: {project_id, query, filters(tag_path/section/episode/entity_id/time_key/timeline_idx), k}
 /query/evidence/{eid}          GET
 /query/verdicts                POST            (특정 원고 구간 verdict 조회)
 
@@ -211,6 +211,31 @@ chunk (권장: FTS/Vector 공통 키)
 - token_count_est (optional)
 - created_by (AUTO|USER)
 - created_at
+
+entity_mention_span (추가: 인물 기준 chunk group; 1차는 span만 저장)
+- mention_id (PK), project_id
+- doc_id (FK), snapshot_id (FK)
+- entity_id (FK -> entity)
+- span_start, span_end
+- status (PROPOSED|APPROVED|REJECTED), created_by (AUTO|USER), created_at
+
+time_anchor (추가: 시점 기준 chunk group; 상대시간 우선)
+- anchor_id (PK), project_id
+- doc_id (FK), snapshot_id (FK)
+- span_start, span_end
+- time_key (relative; episode 기반 1차 매핑)
+- timeline_idx (optional; 세계관 타임라인 참조)
+- status (PROPOSED|APPROVED|REJECTED), created_by (AUTO|USER), created_at
+
+timeline_event (추가: 세계관 타임라인)
+- timeline_event_id (PK), project_id
+- timeline_idx (int; 순서/인덱스)
+- label, time_key
+- source_doc_id, source_snapshot_id, span_start, span_end (근거/재현성)
+- status (PROPOSED|APPROVED|REJECTED), created_by (AUTO|USER), created_at
+
+# (2차/최적화) chunk_entity_link/chunk_time_link 같은 “chunk 단위 역인덱스”를 생성하여
+# retrieval 쿼리에서 빠르게 post-filter 할 수 있다(사용자 승인 후 생성 권장).
 ```
 
 ### 4.2 태그/계층 경로(“설정/인물/주인공/나이” 같은 tag_path)

@@ -50,7 +50,7 @@
 * 5) 자간/줄간격(레이아웃 설정): Phase 95
 * 6) 개선 제안(LOCAL_RULE 우선, API opt-in, LOCAL_GEN 차순위): Phase 80
 * 7) 내보내기(txt/docx): Phase 90
-* 8) 에피소드 청크 구성: Phase 30(청크/범위) + Phase 95(제품 UI 범위 지정)
+* 8) 에피소드/시점/인물 chunk 구성(+ 세계관 타임라인): Phase 30(청크/FTS) + Phase 50(엔티티/타임라인 문서) + Phase 95(요청/검토 UI)
 * 9) 규칙 기반 우선 + 경량 로컬 AI(차순위): Phase 50/60/80에 분산(정책은 D1~D5 준수)
 * 10~11) 로컬/원격 모델 분리 + opt-in: Phase 80(+ Phase 60 L3는 선택 게이트)
 * 12) 3단 강제 근거화(evidence_required): Phase 60(핵심), Phase 80(모델 경계)
@@ -106,6 +106,7 @@
 
 * ☑ 문서 저장(원문/raw + snapshot) 최소 구현
 * ☑ Chunk 생성(span) 최소 구현(FTS/Vector 공통 키 확보)
+* ☐ (추가 요구) 사용자 요청 시 시점/인물 chunk group 메타 생성(1차 제안) + Retrieval 필터(entity_id/time_key/timeline_idx) 최소 지원
 * ☑ `INDEX_FTS` job 구현 + 결과 이벤트 출력
 * ☑ Sync Retrieval(FTS-only) 구현: `/query/retrieval` POST
 * ☑ evidence 조회(`/query/evidence/{eid}`) 최소 구현
@@ -139,6 +140,7 @@
   - schema_version 생성
   - AUTO fact는 `PROPOSED`(D3)
 * ☑ schema view / facts list / approve(PATCH) 워크플로 최소 구현
+* ☐ (추가 요구) 세계관 타임라인 문서 + timeline_event(상대 time_key 우선) 생성/승인 최소 구현
 
 관련 문서:
 
