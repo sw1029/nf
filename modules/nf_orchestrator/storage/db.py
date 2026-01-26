@@ -122,6 +122,51 @@ def _initialize(conn: sqlite3.Connection) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS entity_mention_span (
+            mention_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            doc_id TEXT NOT NULL,
+            snapshot_id TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            span_start INTEGER NOT NULL,
+            span_end INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS time_anchor (
+            anchor_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            doc_id TEXT NOT NULL,
+            snapshot_id TEXT NOT NULL,
+            span_start INTEGER NOT NULL,
+            span_end INTEGER NOT NULL,
+            time_key TEXT NOT NULL,
+            timeline_idx INTEGER,
+            status TEXT NOT NULL,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS timeline_event (
+            timeline_event_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            timeline_idx INTEGER NOT NULL,
+            label TEXT NOT NULL,
+            time_key TEXT NOT NULL,
+            source_doc_id TEXT NOT NULL,
+            source_snapshot_id TEXT NOT NULL,
+            span_start INTEGER NOT NULL,
+            span_end INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS tag_def (
             tag_id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL,

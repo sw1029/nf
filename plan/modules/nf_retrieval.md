@@ -46,7 +46,7 @@ modules/nf_retrieval/
 * ☑ `query_builder`: claim 텍스트 + 슬롯 기반(예: 나이/시간/장소) 질의 생성
 * ☑ `snippet`: Evidence 스니펫 생성(길이 제한, tag_path/section_path 포함)
 * ☑ API: `fts_search(request: RetrievalRequest) -> RetrievalResult[]`
-* ☐ (추가 요구) filters 확장: `entity_id/time_key/timeline_idx`로 chunk group 필터링 지원
+* ☑ (추가 요구) filters 확장: `entity_id/time_key/timeline_idx`로 chunk group 필터링 지원
   - 1차: `entity_mention_span/time_anchor`의 span overlap 기반 필터(사용자 요청 시 생성된 메타)
   - 2차: `chunk ↔ entity/time` 역인덱스(옵션)로 최적화
 
@@ -56,7 +56,7 @@ modules/nf_retrieval/
 * ☑ `vector_manifest.json` + `chunk_map_path`로 chunk_id ↔ 벡터 row 매핑
 * ☑ API(워커용): `vector_search(request) -> RetrievalResult[]`
 * ☑ 잡 타입: `RETRIEVE_VEC`에서만 외부 노출(D5)
-* ☐ (추가 요구) filters.entity_id/time_key/timeline_idx 적용(워커 post-filter 또는 샤드 메타데이터 기반)
+* ☑ (추가 요구) filters.entity_id/time_key/timeline_idx 적용(워커 post-filter 또는 샤드 메타데이터 기반)
 
 ## 3) RetrievalResult 계약
 

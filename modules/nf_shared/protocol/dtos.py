@@ -18,6 +18,9 @@ VerdictID = str
 EntityID = str
 TagID = str
 FactID = str
+MentionID = str
+AnchorID = str
+TimelineEventID = str
 
 
 class DocumentType(str, Enum):
@@ -285,6 +288,51 @@ class Evidence:
 
 
 @dataclass(frozen=True)
+class EntityMentionSpan:
+    mention_id: MentionID
+    project_id: ProjectID
+    doc_id: DocID
+    snapshot_id: SnapshotID
+    entity_id: EntityID
+    span_start: int
+    span_end: int
+    status: FactStatus
+    created_by: FactSource
+    created_at: AppTimestamp
+
+
+@dataclass(frozen=True)
+class TimeAnchor:
+    anchor_id: AnchorID
+    project_id: ProjectID
+    doc_id: DocID
+    snapshot_id: SnapshotID
+    span_start: int
+    span_end: int
+    time_key: str
+    timeline_idx: int | None
+    status: FactStatus
+    created_by: FactSource
+    created_at: AppTimestamp
+
+
+@dataclass(frozen=True)
+class TimelineEvent:
+    timeline_event_id: TimelineEventID
+    project_id: ProjectID
+    timeline_idx: int
+    label: str
+    time_key: str
+    source_doc_id: DocID
+    source_snapshot_id: SnapshotID
+    span_start: int
+    span_end: int
+    status: FactStatus
+    created_by: FactSource
+    created_at: AppTimestamp
+
+
+@dataclass(frozen=True)
 class Span:
     start: int
     end: int
@@ -372,4 +420,3 @@ class Suggestion:
     text: str
     citations: tuple[Citation, ...]
     created_at: AppTimestamp
-

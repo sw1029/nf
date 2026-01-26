@@ -144,7 +144,7 @@ modules/nf_orchestrator/
 * ☑ OpenAPI 스펙 생성(로컬용)
 * ☑ SSE 재연결 지원(Last-Event-ID)
 * ☑ 로컬 토큰(옵션, `NF_ORCHESTRATOR_TOKEN`) 및 루프백 고정 강화
-* ☐ (추가 요구) 시점/인물 chunk group + 타임라인 조회/승인 API(최소)
+* ☑ (추가 요구) 시점/인물 chunk group + 타임라인 조회/승인 API(최소)
   - timeline 문서 지정(`project.settings.timeline_doc_id`) 또는 별도 엔드포인트(선택)
   - `entity_mention_span/time_anchor/timeline_event` 목록 조회 + 승인/거절(PATCH) 워크플로
 

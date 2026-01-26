@@ -106,7 +106,7 @@
 
 * ☑ 문서 저장(원문/raw + snapshot) 최소 구현
 * ☑ Chunk 생성(span) 최소 구현(FTS/Vector 공통 키 확보)
-* ☐ (추가 요구) 사용자 요청 시 시점/인물 chunk group 메타 생성(1차 제안) + Retrieval 필터(entity_id/time_key/timeline_idx) 최소 지원
+* ☑ (추가 요구) 사용자 요청 시 시점/인물 chunk group 메타 생성(1차 제안) + Retrieval 필터(entity_id/time_key/timeline_idx) 최소 지원
 * ☑ `INDEX_FTS` job 구현 + 결과 이벤트 출력
 * ☑ Sync Retrieval(FTS-only) 구현: `/query/retrieval` POST
 * ☑ evidence 조회(`/query/evidence/{eid}`) 최소 구현
@@ -140,7 +140,7 @@
   - schema_version 생성
   - AUTO fact는 `PROPOSED`(D3)
 * ☑ schema view / facts list / approve(PATCH) 워크플로 최소 구현
-* ☐ (추가 요구) 세계관 타임라인 문서 + timeline_event(상대 time_key 우선) 생성/승인 최소 구현
+* ☑ (추가 요구) 세계관 타임라인 문서 + timeline_event(상대 time_key 우선) 생성/승인 최소 구현
 
 관련 문서:
 

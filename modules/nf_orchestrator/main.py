@@ -15,6 +15,7 @@ from modules.nf_orchestrator.services.project_service import ProjectServiceImpl
 from modules.nf_orchestrator.services.query_service import QueryServiceImpl
 from modules.nf_orchestrator.services.schema_service import SchemaServiceImpl
 from modules.nf_orchestrator.services.tag_service import TagServiceImpl
+from modules.nf_orchestrator.services.timeline_service import TimelineServiceImpl
 from modules.nf_orchestrator.services.whitelist_service import WhitelistServiceImpl
 from modules.nf_orchestrator.storage import db
 from modules.nf_orchestrator.storage.repos import job_repo
@@ -59,6 +60,12 @@ def _build_openapi_spec() -> dict[str, Any]:
                 "patch": {"summary": "Update document"},
                 "delete": {"summary": "Delete document"},
             },
+            "/projects/{project_id}/entity-mentions": {"get": {"summary": "List entity mentions"}},
+            "/projects/{project_id}/entity-mentions/{mention_id}": {"patch": {"summary": "Update mention status"}},
+            "/projects/{project_id}/time-anchors": {"get": {"summary": "List time anchors"}},
+            "/projects/{project_id}/time-anchors/{anchor_id}": {"patch": {"summary": "Update time anchor status"}},
+            "/projects/{project_id}/timeline-events": {"get": {"summary": "List timeline events"}},
+            "/projects/{project_id}/timeline-events/{event_id}": {"patch": {"summary": "Update timeline event status"}},
             "/jobs": {"post": {"summary": "Submit job"}},
             "/jobs/{job_id}": {"get": {"summary": "Get job"}},
             "/jobs/{job_id}/cancel": {"post": {"summary": "Cancel job"}},
@@ -79,6 +86,7 @@ class OrchestratorHTTPServer(ThreadingHTTPServer):
         self.tag_service = TagServiceImpl()
         self.entity_service = EntityServiceImpl()
         self.schema_service = SchemaServiceImpl()
+        self.timeline_service = TimelineServiceImpl()
         self.query_service = QueryServiceImpl()
         self.whitelist_service = WhitelistServiceImpl()
         self.job_service = JobServiceImpl()
@@ -202,6 +210,15 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 return
             if resource == "entities":
                 self._handle_entities(project_id, tail)
+                return
+            if resource == "entity-mentions":
+                self._handle_entity_mentions(project_id, tail)
+                return
+            if resource == "time-anchors":
+                self._handle_time_anchors(project_id, tail)
+                return
+            if resource == "timeline-events":
+                self._handle_timeline_events(project_id, tail)
                 return
             if resource == "whitelist":
                 self._handle_whitelist(project_id)
@@ -474,6 +491,126 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                     return
                 self._send_json(HTTPStatus.OK, {"deleted": True})
                 return
+        self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _handle_entity_mentions(self, project_id: str, tail: list[str]) -> None:
+        if not tail and self.command == "GET":
+            query = parse_qs(urlparse(self.path).query)
+            doc_id = query.get("doc_id", [None])[0]
+            entity_id = query.get("entity_id", [None])[0]
+            status_raw = query.get("status", [None])[0]
+            status = None
+            if isinstance(status_raw, str):
+                try:
+                    status = FactStatus(status_raw)
+                except ValueError as exc:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "status가 유효하지 않습니다") from exc
+            mentions = self.server.timeline_service.list_entity_mentions(
+                project_id,
+                doc_id=doc_id if isinstance(doc_id, str) else None,
+                entity_id=entity_id if isinstance(entity_id, str) else None,
+                status=status,
+            )
+            self._send_json(HTTPStatus.OK, {"mentions": dump_json(mentions)})
+            return
+        if len(tail) == 1 and self.command == "PATCH":
+            mention_id = tail[0]
+            payload = self._read_json()
+            status_raw = payload.get("status")
+            if not isinstance(status_raw, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "status가 필요합니다")
+            try:
+                status = FactStatus(status_raw)
+            except ValueError as exc:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "status가 유효하지 않습니다") from exc
+            updated = self.server.timeline_service.set_entity_mention_status(mention_id, status)
+            if updated is None:
+                self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "mention을 찾을 수 없습니다")
+                return
+            self._send_json(HTTPStatus.OK, {"mention": dump_json(updated)})
+            return
+        self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _handle_time_anchors(self, project_id: str, tail: list[str]) -> None:
+        if not tail and self.command == "GET":
+            query = parse_qs(urlparse(self.path).query)
+            doc_id = query.get("doc_id", [None])[0]
+            time_key = query.get("time_key", [None])[0]
+            timeline_idx_raw = query.get("timeline_idx", [None])[0]
+            status_raw = query.get("status", [None])[0]
+            timeline_idx = None
+            if timeline_idx_raw is not None:
+                try:
+                    timeline_idx = int(timeline_idx_raw)
+                except (TypeError, ValueError):
+                    timeline_idx = None
+            status = None
+            if isinstance(status_raw, str):
+                try:
+                    status = FactStatus(status_raw)
+                except ValueError as exc:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "status가 유효하지 않습니다") from exc
+            anchors = self.server.timeline_service.list_time_anchors(
+                project_id,
+                doc_id=doc_id if isinstance(doc_id, str) else None,
+                time_key=time_key if isinstance(time_key, str) else None,
+                timeline_idx=timeline_idx,
+                status=status,
+            )
+            self._send_json(HTTPStatus.OK, {"anchors": dump_json(anchors)})
+            return
+        if len(tail) == 1 and self.command == "PATCH":
+            anchor_id = tail[0]
+            payload = self._read_json()
+            status_raw = payload.get("status")
+            if not isinstance(status_raw, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "status가 필요합니다")
+            try:
+                status = FactStatus(status_raw)
+            except ValueError as exc:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "status가 유효하지 않습니다") from exc
+            updated = self.server.timeline_service.set_time_anchor_status(anchor_id, status)
+            if updated is None:
+                self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "anchor를 찾을 수 없습니다")
+                return
+            self._send_json(HTTPStatus.OK, {"anchor": dump_json(updated)})
+            return
+        self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _handle_timeline_events(self, project_id: str, tail: list[str]) -> None:
+        if not tail and self.command == "GET":
+            query = parse_qs(urlparse(self.path).query)
+            source_doc_id = query.get("source_doc_id", [None])[0]
+            status_raw = query.get("status", [None])[0]
+            status = None
+            if isinstance(status_raw, str):
+                try:
+                    status = FactStatus(status_raw)
+                except ValueError as exc:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "status가 유효하지 않습니다") from exc
+            events = self.server.timeline_service.list_timeline_events(
+                project_id,
+                source_doc_id=source_doc_id if isinstance(source_doc_id, str) else None,
+                status=status,
+            )
+            self._send_json(HTTPStatus.OK, {"events": dump_json(events)})
+            return
+        if len(tail) == 1 and self.command == "PATCH":
+            event_id = tail[0]
+            payload = self._read_json()
+            status_raw = payload.get("status")
+            if not isinstance(status_raw, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "status가 필요합니다")
+            try:
+                status = FactStatus(status_raw)
+            except ValueError as exc:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "status가 유효하지 않습니다") from exc
+            updated = self.server.timeline_service.set_timeline_event_status(event_id, status)
+            if updated is None:
+                self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "event를 찾을 수 없습니다")
+                return
+            self._send_json(HTTPStatus.OK, {"event": dump_json(updated)})
+            return
         self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
 
     def _handle_whitelist(self, project_id: str) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import resource
 import time
 import uuid
@@ -16,6 +17,7 @@ from modules.nf_orchestrator.storage.repos import (
     document_repo,
     evidence_repo,
     job_repo,
+    project_repo,
     schema_repo,
 )
 from modules.nf_retrieval.fts.fts_index import fts_search, index_chunks
@@ -45,6 +47,7 @@ from modules.nf_shared.protocol.dtos import (
     Span,
     SuggestMode,
     TagKind,
+    DocumentType,
     Verdict,
     VerdictEvidenceLink,
     VerdictLog,
@@ -197,6 +200,187 @@ def _memory_pressure(max_ram_mb: int) -> bool:
 def _estimate_index_mb(text: str, chunk_count: int) -> float:
     text_mb = len(text.encode("utf-8")) / (1024 * 1024)
     return text_mb * 2.0 + chunk_count * 0.001
+
+
+def _sentence_spans(text: str) -> list[tuple[int, int, str]]:
+    spans: list[tuple[int, int, str]] = []
+    for match in re.finditer(r"[^\n]+", text):
+        segment = match.group(0).strip()
+        if not segment:
+            continue
+        spans.append((match.start(), match.end(), segment))
+    return spans
+
+
+_RELATIVE_TIME_RE = re.compile(r"\\d+\\s*(?:일|달|개월|년)\\s*(?:후|뒤|전)")
+_RELATIVE_TIME_TOKENS = (
+    "다음 날",
+    "그날",
+    "이튿날",
+    "며칠 후",
+    "며칠 뒤",
+    "첫날",
+    "둘째 날",
+    "셋째 날",
+)
+
+
+def _extract_time_phrases(text: str) -> list[str]:
+    phrases = [match.group(0).strip() for match in _RELATIVE_TIME_RE.finditer(text)]
+    for token in _RELATIVE_TIME_TOKENS:
+        if token in text:
+            phrases.append(token)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for phrase in phrases:
+        if phrase in seen:
+            continue
+        seen.add(phrase)
+        ordered.append(phrase)
+    return ordered
+
+
+def _extract_entity_mentions(
+    spans: list[tuple[int, int, str]],
+    alias_index: dict[str, set[str]],
+) -> list[tuple[str, int, int]]:
+    mentions: list[tuple[str, int, int]] = []
+    for span_start, span_end, segment in spans:
+        matched: set[str] = set()
+        for alias_text, entity_ids in alias_index.items():
+            if not alias_text or alias_text not in segment:
+                continue
+            if len(entity_ids) == 1:
+                matched.update(entity_ids)
+        for entity_id in matched:
+            mentions.append((entity_id, span_start, span_end))
+    return mentions
+
+
+def _episode_key(doc) -> str:
+    if getattr(doc, "type", None) is DocumentType.EPISODE:
+        numbers = re.findall(r"\\d+", doc.title or "")
+        if numbers:
+            return f"episode:{numbers[0]}"
+    return f"doc:{doc.doc_id}"
+
+
+def _build_timeline_events(text: str) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for idx, (span_start, span_end, segment) in enumerate(_sentence_spans(text), start=1):
+        phrases = _extract_time_phrases(segment)
+        time_key = phrases[0] if phrases else segment[:40]
+        events.append(
+            {
+                "timeline_idx": idx,
+                "label": segment,
+                "time_key": time_key,
+                "span_start": span_start,
+                "span_end": span_end,
+            }
+        )
+    return events
+
+
+def _match_timeline_idx(
+    segment: str, time_key: str, timeline_events: list[dict[str, Any]]
+) -> int | None:
+    for event in timeline_events:
+        label = event.get("label") or ""
+        event_time_key = event.get("time_key") or ""
+        if time_key and (time_key in label or time_key in event_time_key):
+            return int(event.get("timeline_idx"))
+        if label and label in segment:
+            return int(event.get("timeline_idx"))
+    return None
+
+
+def _filter_results_by_meta(
+    conn,
+    project_id: str,
+    results: list[dict[str, Any]],
+    filters: dict[str, Any],
+) -> list[dict[str, Any]]:
+    entity_id = filters.get("entity_id")
+    time_key = filters.get("time_key")
+    timeline_idx = filters.get("timeline_idx")
+    if not isinstance(entity_id, str):
+        entity_id = None
+    if not isinstance(time_key, str):
+        time_key = None
+    if not isinstance(timeline_idx, int):
+        try:
+            timeline_idx = int(timeline_idx)
+        except (TypeError, ValueError):
+            timeline_idx = None
+
+    if not entity_id and not time_key and timeline_idx is None:
+        return results
+
+    entity_cache: dict[tuple[str, str], list[tuple[int, int]]] = {}
+    time_cache: dict[tuple[str, str | None, int | None], list[tuple[int, int]]] = {}
+
+    def span_overlaps(span_start: int, span_end: int, spans: list[tuple[int, int]]) -> bool:
+        for other_start, other_end in spans:
+            if span_start < other_end and other_start < span_end:
+                return True
+        return False
+
+    def load_entity_spans(doc_id: str, entity_id: str) -> list[tuple[int, int]]:
+        key = (doc_id, entity_id)
+        if key in entity_cache:
+            return entity_cache[key]
+        rows = conn.execute(
+            """
+            SELECT span_start, span_end
+            FROM entity_mention_span
+            WHERE project_id = ? AND doc_id = ? AND entity_id = ? AND status != ?
+            """,
+            (project_id, doc_id, entity_id, FactStatus.REJECTED.value),
+        ).fetchall()
+        spans = [(row["span_start"], row["span_end"]) for row in rows]
+        entity_cache[key] = spans
+        return spans
+
+    def load_time_spans(doc_id: str, time_key: str | None, timeline_idx: int | None) -> list[tuple[int, int]]:
+        key = (doc_id, time_key, timeline_idx)
+        if key in time_cache:
+            return time_cache[key]
+        query = """
+            SELECT span_start, span_end
+            FROM time_anchor
+            WHERE project_id = ? AND doc_id = ? AND status != ?
+        """
+        params: list[Any] = [project_id, doc_id, FactStatus.REJECTED.value]
+        if time_key is not None:
+            query += " AND time_key = ?"
+            params.append(time_key)
+        if timeline_idx is not None:
+            query += " AND timeline_idx = ?"
+            params.append(timeline_idx)
+        rows = conn.execute(query, params).fetchall()
+        spans = [(row["span_start"], row["span_end"]) for row in rows]
+        time_cache[key] = spans
+        return spans
+
+    filtered: list[dict[str, Any]] = []
+    for result in results:
+        evidence = result.get("evidence") or {}
+        doc_id = evidence.get("doc_id")
+        span_start = int(evidence.get("span_start", 0))
+        span_end = int(evidence.get("span_end", 0))
+        if not isinstance(doc_id, str):
+            continue
+        if entity_id:
+            spans = load_entity_spans(doc_id, entity_id)
+            if not span_overlaps(span_start, span_end, spans):
+                continue
+        if time_key or timeline_idx is not None:
+            spans = load_time_spans(doc_id, time_key, timeline_idx)
+            if not span_overlaps(span_start, span_end, spans):
+                continue
+        filtered.append(result)
+    return filtered
 
 
 def _run_job(job_type: JobType, ctx: WorkerContext) -> None:
@@ -413,7 +597,57 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
         raise RuntimeError("scope missing")
 
     indexed = 0
+    mentions_created = 0
+    anchors_created = 0
+    timeline_events_created = 0
+    grouping = ctx.params.get("grouping") if isinstance(ctx.params, dict) else None
+    if not isinstance(grouping, dict):
+        grouping = None
+    group_entities = bool(grouping.get("entity_mentions")) if grouping else False
+    group_time = bool(grouping.get("time_anchors")) if grouping else False
+    timeline_doc_id = grouping.get("timeline_doc_id") if grouping else None
     with db.connect(ctx._db_path) as conn:
+        timeline_events: list[dict[str, Any]] = []
+        if timeline_doc_id is None and grouping:
+            project = project_repo.get_project(conn, ctx.project_id)
+            if project and isinstance(project.settings, dict):
+                timeline_doc_id = project.settings.get("timeline_doc_id")
+        if grouping and isinstance(timeline_doc_id, str):
+            timeline_doc = document_repo.get_document(conn, timeline_doc_id)
+            if timeline_doc is not None:
+                timeline_snapshot = document_repo.get_snapshot(conn, timeline_doc.head_snapshot_id)
+                if timeline_snapshot is not None:
+                    timeline_text = docstore.read_text(timeline_snapshot.path)
+                    timeline_events = _build_timeline_events(timeline_text)
+                    schema_repo.delete_timeline_events(
+                        conn,
+                        project_id=ctx.project_id,
+                        source_doc_id=timeline_doc_id,
+                    )
+                    for event in timeline_events:
+                        schema_repo.create_timeline_event(
+                            conn,
+                            project_id=ctx.project_id,
+                            timeline_idx=int(event["timeline_idx"]),
+                            label=str(event["label"]),
+                            time_key=str(event["time_key"]),
+                            source_doc_id=timeline_doc_id,
+                            source_snapshot_id=timeline_snapshot.snapshot_id,
+                            span_start=int(event["span_start"]),
+                            span_end=int(event["span_end"]),
+                            status=FactStatus.PROPOSED,
+                            created_by=FactSource.AUTO,
+                        )
+                        timeline_events_created += 1
+
+        alias_index: dict[str, set[str]] = {}
+        if group_entities:
+            entities = schema_repo.list_entities(conn, ctx.project_id)
+            aliases = []
+            for entity in entities:
+                aliases.extend(schema_repo.list_entity_aliases(conn, ctx.project_id, entity.entity_id))
+            alias_index = build_alias_index(entities, aliases)
+
         if scope == "global":
             docs = document_repo.list_documents(conn, ctx.project_id)
         else:
@@ -439,6 +673,55 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
             chunk_repo.replace_chunks_for_snapshot(conn, snapshot.snapshot_id, chunks)
             index_chunks(conn, snapshot_id=snapshot.snapshot_id, chunks=chunks, text=text)
             indexed += len(chunks)
+            if not grouping:
+                continue
+            spans = _sentence_spans(text)
+            if group_entities and alias_index:
+                schema_repo.delete_entity_mention_spans(
+                    conn,
+                    project_id=ctx.project_id,
+                    doc_id=doc.doc_id,
+                    snapshot_id=snapshot.snapshot_id,
+                )
+                for entity_id, span_start, span_end in _extract_entity_mentions(spans, alias_index):
+                    schema_repo.create_entity_mention_span(
+                        conn,
+                        project_id=ctx.project_id,
+                        doc_id=doc.doc_id,
+                        snapshot_id=snapshot.snapshot_id,
+                        entity_id=entity_id,
+                        span_start=span_start,
+                        span_end=span_end,
+                        status=FactStatus.PROPOSED,
+                        created_by=FactSource.AUTO,
+                    )
+                    mentions_created += 1
+            if group_time:
+                schema_repo.delete_time_anchors(
+                    conn,
+                    project_id=ctx.project_id,
+                    doc_id=doc.doc_id,
+                    snapshot_id=snapshot.snapshot_id,
+                )
+                episode_key = _episode_key(doc)
+                for idx, (span_start, span_end, segment) in enumerate(spans, start=1):
+                    phrases = _extract_time_phrases(segment)
+                    for phrase in phrases:
+                        time_key = f"{episode_key}/scene:{idx}/rel:{phrase}"
+                        timeline_idx = _match_timeline_idx(segment, time_key, timeline_events)
+                        schema_repo.create_time_anchor(
+                            conn,
+                            project_id=ctx.project_id,
+                            doc_id=doc.doc_id,
+                            snapshot_id=snapshot.snapshot_id,
+                            span_start=span_start,
+                            span_end=span_end,
+                            time_key=time_key,
+                            timeline_idx=timeline_idx,
+                            status=FactStatus.PROPOSED,
+                            created_by=FactSource.AUTO,
+                        )
+                        anchors_created += 1
 
     ctx.emit(
         JobEvent(
@@ -448,7 +731,12 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
             level=JobEventLevel.INFO,
             message="fts indexed",
             progress=1.0,
-            payload={"chunks_indexed": indexed},
+            payload={
+                "chunks_indexed": indexed,
+                "entity_mentions_created": mentions_created,
+                "time_anchors_created": anchors_created,
+                "timeline_events_created": timeline_events_created,
+            },
         )
     )
 
@@ -491,6 +779,9 @@ def _handle_retrieve_vec(ctx: WorkerContext) -> None:
         "k": k,
     }
     results = vector_search(req)
+    if results and isinstance(filters, dict):
+        with db.connect(ctx._db_path) as conn:
+            results = _filter_results_by_meta(conn, ctx.project_id, results, filters)
     if not results:
         with db.connect(ctx._db_path) as conn:
             results = fts_search(conn, req)

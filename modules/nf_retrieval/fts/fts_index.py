@@ -6,7 +6,7 @@ from typing import Any
 from modules.nf_retrieval.contracts import RetrievalRequest, RetrievalResult
 from modules.nf_retrieval.fts.query_builder import build_query
 from modules.nf_retrieval.fts.snippet import make_snippet
-from modules.nf_shared.protocol.dtos import Chunk, EvidenceMatchType
+from modules.nf_shared.protocol.dtos import Chunk, EvidenceMatchType, FactStatus
 
 
 def index_chunks(conn: sqlite3.Connection, *, snapshot_id: str, chunks: list[Chunk], text: str) -> None:
@@ -70,8 +70,78 @@ def fts_search(conn: sqlite3.Connection, req: RetrievalRequest) -> list[Retrieva
     params.append(limit)
 
     rows = conn.execute(sql, params).fetchall()
+    entity_filter = filters.get("entity_id")
+    time_key_filter = filters.get("time_key")
+    timeline_idx_filter = filters.get("timeline_idx")
+    if not isinstance(entity_filter, str):
+        entity_filter = None
+    if not isinstance(time_key_filter, str):
+        time_key_filter = None
+    if not isinstance(timeline_idx_filter, int):
+        try:
+            timeline_idx_filter = int(timeline_idx_filter)
+        except (TypeError, ValueError):
+            timeline_idx_filter = None
+
+    entity_cache: dict[tuple[str, str], list[tuple[int, int]]] = {}
+    time_cache: dict[tuple[str, str | None, int | None], list[tuple[int, int]]] = {}
+
+    def span_overlaps(span_start: int, span_end: int, spans: list[tuple[int, int]]) -> bool:
+        for other_start, other_end in spans:
+            if span_start < other_end and other_start < span_end:
+                return True
+        return False
+
+    def load_entity_spans(doc_id: str, entity_id: str) -> list[tuple[int, int]]:
+        key = (doc_id, entity_id)
+        if key in entity_cache:
+            return entity_cache[key]
+        rows_inner = conn.execute(
+            """
+            SELECT span_start, span_end
+            FROM entity_mention_span
+            WHERE project_id = ? AND doc_id = ? AND entity_id = ? AND status != ?
+            """,
+            (req.get("project_id"), doc_id, entity_id, FactStatus.REJECTED.value),
+        ).fetchall()
+        spans = [(row["span_start"], row["span_end"]) for row in rows_inner]
+        entity_cache[key] = spans
+        return spans
+
+    def load_time_spans(doc_id: str, time_key: str | None, timeline_idx: int | None) -> list[tuple[int, int]]:
+        key = (doc_id, time_key, timeline_idx)
+        if key in time_cache:
+            return time_cache[key]
+        query_inner = """
+            SELECT span_start, span_end
+            FROM time_anchor
+            WHERE project_id = ? AND doc_id = ? AND status != ?
+        """
+        params_inner: list[Any] = [req.get("project_id"), doc_id, FactStatus.REJECTED.value]
+        if time_key is not None:
+            query_inner += " AND time_key = ?"
+            params_inner.append(time_key)
+        if timeline_idx is not None:
+            query_inner += " AND timeline_idx = ?"
+            params_inner.append(timeline_idx)
+        rows_inner = conn.execute(query_inner, params_inner).fetchall()
+        spans = [(row["span_start"], row["span_end"]) for row in rows_inner]
+        time_cache[key] = spans
+        return spans
     results: list[RetrievalResult] = []
     for row in rows:
+        if entity_filter or time_key_filter or timeline_idx_filter is not None:
+            doc_id = row["doc_id"]
+            span_start = row["span_start"]
+            span_end = row["span_end"]
+            if entity_filter:
+                spans = load_entity_spans(doc_id, entity_filter)
+                if not span_overlaps(span_start, span_end, spans):
+                    continue
+            if time_key_filter or timeline_idx_filter is not None:
+                spans = load_time_spans(doc_id, time_key_filter, timeline_idx_filter)
+                if not span_overlaps(span_start, span_end, spans):
+                    continue
         content = row["content"] or ""
         snippet = row["snippet"] or ""
         if not snippet:
