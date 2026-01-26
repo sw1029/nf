@@ -44,50 +44,50 @@ modules/nf_schema/
 
 ## 1) 온톨로지/태그 시스템
 
-* ☐ `tag_path` 규격 고정(“설정/인물/주인공/나이”)
-* ☐ 기본 태그(def) + 사용자 정의 태그 지원
-* ☐ tag_def 제약(schema_type/범위/enum)을 저장/검증
+* ☑ `tag_path` 규격 고정(“설정/인물/주인공/나이”)
+* ☑ 기본 태그(def) + 사용자 정의 태그 지원
+* ☑ tag_def 제약(schema_type/범위/enum)을 저장/검증
 
 ## 2) 청크/섹션 생성(인덱싱 키)
 
-* ☐ 입력: `DocumentSnapshot`(텍스트)
-* ☐ 출력: `Chunk[]`(span 기반), 필요 시 `Section[]`
-* ☐ chunk는 FTS/벡터 공통 키(`chunk_id`)로 사용(`plan/contracts.md`)
+* ☑ 입력: `DocumentSnapshot`(텍스트)
+* ☑ 출력: `Chunk[]`(span 기반), 필요 시 `Section[]`
+* ☑ chunk는 FTS/벡터 공통 키(`chunk_id`)로 사용(`plan/contracts.md`)
 
 ## 3) 엔티티/동일성 (D2: 옵션2 우선)
 
-* ☐ `entity`/`entity_alias`를 MVP부터 사용
-* ☐ 동일성 해석 기본 정책:
+* ☑ `entity`/`entity_alias`를 MVP부터 사용
+* ☑ 동일성 해석 기본 정책:
   - tag_path에서 추정되는 엔티티 후보를 `entity`로 정규화(가능하면)
   - alias 매칭은 보수적: 다의성/충돌 시 entity_id 미지정(null) 또는 UNKNOWN 강등
-* ☐ 사용자 주도 alias 관리(오케스트레이터 UI/서비스를 통한 CRUD)
+* ☑ 사용자 주도 alias 관리(오케스트레이터 UI/서비스를 통한 CRUD)
 
 ## 4) 팩트 생성/승인 정책 (D3)
 
-* ☐ explicit/implicit 모두 `FactStatus`를 가진다
-* ☐ `AUTO` fact는 기본 `PROPOSED`로 저장(유저 승인 필요)
-* ☐ `USER` 근거(태깅/입력 기반)는 `APPROVED`로 저장(기본)
-* ☐ `SchemaVersion` 생성 시 `source_snapshot_id`를 저장하여 재현성 확보
+* ☑ explicit/implicit 모두 `FactStatus`를 가진다
+* ☑ `AUTO` fact는 기본 `PROPOSED`로 저장(유저 승인 필요)
+* ☑ `USER` 근거(태깅/입력 기반)는 `APPROVED`로 저장(기본)
+* ☑ `SchemaVersion` 생성 시 `source_snapshot_id`를 저장하여 재현성 확보
 
 ## 5) 명시 필드 추출(고정밀, 저재현율)
 
-* ☐ 최소 필드: 나이/시간/장소/관계/사망 여부/소속
-* ☐ 단위/형식 정규화: `units.py`
-* ☐ 근거는 반드시 `Evidence`로 연결(evidence_required)
+* ☑ 최소 필드: 나이/시간/장소/관계/사망 여부/소속
+* ☑ 단위/형식 정규화: `units.py`
+* ☑ 근거는 반드시 `Evidence`로 연결(evidence_required)
 
 ## 6) 암시/추정 레이어
 
-* ☐ 기본값 unknown 허용
-* ☐ 자동 확정 금지: `PROPOSED`로만 저장
+* ☑ 기본값 unknown 허용
+* ☑ 자동 확정 금지: `PROPOSED`로만 저장
 
 ## 7) 게이팅/충돌
 
-* ☐ validators: 타입/범위/누락/상호제약
-* ☐ conflict: 충돌 시 unknown/PROPOSED 강등 규칙
+* ☑ validators: 타입/범위/누락/상호제약
+* ☑ conflict: 충돌 시 unknown/PROPOSED 강등 규칙
 
 ## 8) 테스트(pytest)
 
-* ☐ `tests/test_nf_schema_policy.py`: AUTO fact는 PROPOSED 강제(D3)
+* ☑ `tests/test_nf_schema_policy.py`: AUTO fact는 PROPOSED 강제(D3)
 * ☐ (차순위) chunk 생성(span) 단위 테스트
 * ☐ (차순위) identity/alias 매칭 보수성 테스트(충돌 시 null/unknown)
 

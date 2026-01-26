@@ -1,17 +1,29 @@
-from typing import Literal, Sequence
+from typing import Any, Literal
+
+from modules.nf_orchestrator.storage import db
+from modules.nf_retrieval.contracts import RetrievalRequest, RetrievalResult
+from modules.nf_retrieval.fts.fts_index import fts_search
 
 
 def run_retrieval_job(
-    query: str | None = None,
+    project_id: str,
+    query: str,
+    *,
     mode: Literal["fts", "vector"] = "fts",
-    filters: Sequence[str] | None = None,
-) -> None:
+    filters: dict[str, Any] | None = None,
+    k: int = 10,
+    db_path=None,
+) -> list[RetrievalResult]:
     """
-    검색 잡 실행(placeholder).
-
-    예정:
-    - 동기 요청은 FTS-only
-    - 백그라운드 잡으로 벡터 확장 + 스트리밍 결과
+    검색 실행(FTS-only 기본). 벡터 모드는 추후 확장.
     """
-    _ = (query, mode, filters)
-    raise NotImplementedError("nf_retrieval.run_retrieval_job는 placeholder입니다.")
+    req: RetrievalRequest = {
+        "project_id": project_id,
+        "query": query,
+        "filters": filters or {},
+        "k": k,
+    }
+    with db.connect(db_path) as conn:
+        if mode == "fts":
+            return fts_search(conn, req)
+        return fts_search(conn, req)

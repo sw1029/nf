@@ -41,28 +41,28 @@ modules/nf_retrieval/
 
 ## 1) FTS (동기, 인용 우선)
 
-* ☐ SQLite FTS5 인덱스 생성/갱신
+* ☑ SQLite FTS5 인덱스 생성/갱신
   - 저장 필드: `chunk_id`, `doc_id`, `snapshot_id`, `section_path`, `tag_path`, `span_start/span_end`
-* ☐ `query_builder`: claim 텍스트 + 슬롯 기반(예: 나이/시간/장소) 질의 생성
-* ☐ `snippet`: Evidence 스니펫 생성(길이 제한, tag_path/section_path 포함)
-* ☐ API: `fts_search(request: RetrievalRequest) -> RetrievalResult[]`
+* ☑ `query_builder`: claim 텍스트 + 슬롯 기반(예: 나이/시간/장소) 질의 생성
+* ☑ `snippet`: Evidence 스니펫 생성(길이 제한, tag_path/section_path 포함)
+* ☑ API: `fts_search(request: RetrievalRequest) -> RetrievalResult[]`
 
 ## 2) 벡터 (비동기 잡)
 
-* ☐ shard 기반 저장/로드/언로드
-* ☐ `vector_manifest.json` + `chunk_map_path`로 chunk_id ↔ 벡터 row 매핑
-* ☐ API(워커용): `vector_search(request) -> RetrievalResult[]`
-* ☐ 잡 타입: `RETRIEVE_VEC`에서만 외부 노출(D5)
+* ☑ shard 기반 저장/로드/언로드
+* ☑ `vector_manifest.json` + `chunk_map_path`로 chunk_id ↔ 벡터 row 매핑
+* ☑ API(워커용): `vector_search(request) -> RetrievalResult[]`
+* ☑ 잡 타입: `RETRIEVE_VEC`에서만 외부 노출(D5)
 
 ## 3) RetrievalResult 계약
 
-* ☐ 최소 필드:
+* ☑ 최소 필드:
   - `evidence`: `doc_id/snapshot_id/chunk_id/section_path/tag_path/snippet/fts_score/match_type/confirmed`
   - `score`(fts_score 또는 벡터 점수), `source`(fts|vector)
 
 ## 4) 테스트(pytest)
 
-* ☐ `tests/test_nf_retrieval_contracts.py`: RetrievalRequest/Result 계약(TypedDict) + Searcher 프로토콜 스모크
+* ☑ `tests/test_nf_retrieval_contracts.py`: RetrievalRequest/Result 계약(TypedDict) + Searcher 프로토콜 스모크
 * ☐ (차순위) FTS 인덱스 구축/검색 스모크(임시 SQLite)
 * ☐ (차순위) snippet 길이/메타 포함 테스트
 * ☐ (차순위) manifest/chunk_map 구조 검증 테스트

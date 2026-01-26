@@ -39,28 +39,28 @@ modules/nf_model_gateway/
 
 ## 1) Safety Gate: evidence_required (필수)
 
-* ☐ 입력에 Evidence가 없으면 “생성/판정” 결과를 UNKNOWN/보류로 강등
-* ☐ 모델 출력은 항상 “근거 포함” 또는 “근거 부족”을 명시하도록 강제
+* ☑ 입력에 Evidence가 없으면 “생성/판정” 결과를 UNKNOWN/보류로 강등
+* ☑ 모델 출력은 항상 “근거 포함” 또는 “근거 부족”을 명시하도록 강제
 
 ## 2) 로컬 소형 모델(ONNX) 인터페이스(없어도 동작)
 
-* ☐ NLI/분류기 호출 인터페이스만 고정
+* ☑ NLI/분류기 호출 인터페이스만 고정
   - `infer_nli(premise_evidence, hypothesis_claim) -> score`
-* ☐ 태그 품질 점수 인터페이스(옵션)
+* ☑ 태그 품질 점수 인터페이스(옵션)
 
 ## 3) 원격 API 클라이언트(옵트인)
 
-* ☐ API 키/레이트리밋/회로차단 최소 골격
-* ☐ “SUGGEST/API” 요청에만 사용(기본 꺼짐)
+* ☑ API 키/레이트리밋/회로차단 최소 골격
+* ☑ “SUGGEST/API” 요청에만 사용(기본 꺼짐)
 
 ## 4) 로컬 생성기 분기(차순위; 1차는 분기만)
 
-* ☐ `suggest_local_gen(...)` 경로를 “선택 가능”하게만 노출
-* ☐ ModelStore 다운로드/버전관리와 연결 포인트만 마련(실 모델은 차순위)
+* ☑ `suggest_local_gen(...)` 경로를 “선택 가능”하게만 노출
+* ☑ ModelStore 다운로드/버전관리와 연결 포인트만 마련(실 모델은 차순위)
 
 ## 5) 테스트(pytest)
 
-* ☐ `tests/test_nf_model_gateway_contracts.py`: EvidenceBundle/ModelGateway 계약 스모크
+* ☑ `tests/test_nf_model_gateway_contracts.py`: EvidenceBundle/ModelGateway 계약 스모크
 * ☐ (차순위) evidence_required 게이트 동작(unit)
 * ☐ (차순위) 원격 클라이언트는 키 미설정 시 안전하게 비활성화(unit)
 
@@ -68,8 +68,8 @@ modules/nf_model_gateway/
 
 # [S] 권장 — 권장
 
-* ☐ 제공자 추상화: OpenAI/Gemini 공통 인터페이스
-* ☐ 요청/응답 로그의 민감정보 마스킹
+* ☑ 제공자 추상화: OpenAI/Gemini 공통 인터페이스
+* ☑ 요청/응답 로그의 민감정보 마스킹
 
 ---
 

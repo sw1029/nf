@@ -12,9 +12,17 @@ class JobServiceImpl:
     def __init__(self, db_path: Path | None = None) -> None:
         self._db_path = db_path
 
-    def submit(self, project_id: str, job_type: JobType, inputs: dict[str, Any], params: dict[str, Any]) -> Job:
+    def submit(
+        self,
+        project_id: str,
+        job_type: JobType,
+        inputs: dict[str, Any],
+        params: dict[str, Any],
+        *,
+        priority: int = 100,
+    ) -> Job:
         with db.connect(self._db_path) as conn:
-            job = job_repo.create_job(conn, project_id, job_type, inputs, params)
+            job = job_repo.create_job(conn, project_id, job_type, inputs, params, priority=priority)
             job_repo.add_job_event(
                 conn,
                 job.job_id,
@@ -31,11 +39,11 @@ class JobServiceImpl:
             if job is not None:
                 job_repo.add_job_event(
                     conn,
-                job_id,
-                JobEventLevel.WARN,
-                "잡 취소됨",
-                progress=1.0,
-            )
+                    job_id,
+                    JobEventLevel.WARN,
+                    "잡 취소됨",
+                    progress=1.0,
+                )
             return job
 
     def get(self, job_id: str) -> Job | None:

@@ -91,9 +91,9 @@
 
 ### Phase 20 — Workers(Job Runner) + Queue/Events 골격
 
-* ☐ `job_queue` 폴링/리스/하트비트/취소 플로우 구현
-* ☐ `job_event` 기록/스트리밍(Orchestrator SSE와 연결) 골격
-* ☐ “실행기 등록/디스패치” 구조 확립(타입별 handler)
+* ☑ `job_queue` 폴링/리스/하트비트/취소 플로우 구현
+* ☑ `job_event` 기록/스트리밍(Orchestrator SSE와 연결) 골격
+* ☑ “실행기 등록/디스패치” 구조 확립(타입별 handler)
 
 관련 문서:
 
@@ -104,11 +104,11 @@
 
 ### Phase 30 — 문서 저장/Chunk + FTS 인덱싱/Sync Retrieval
 
-* ☐ 문서 저장(원문/raw + snapshot) 최소 구현
-* ☐ Chunk 생성(span) 최소 구현(FTS/Vector 공통 키 확보)
-* ☐ `INDEX_FTS` job 구현 + 결과 이벤트 출력
-* ☐ Sync Retrieval(FTS-only) 구현: `/query/retrieval` POST
-* ☐ evidence 조회(`/query/evidence/{eid}`) 최소 구현
+* ☑ 문서 저장(원문/raw + snapshot) 최소 구현
+* ☑ Chunk 생성(span) 최소 구현(FTS/Vector 공통 키 확보)
+* ☑ `INDEX_FTS` job 구현 + 결과 이벤트 출력
+* ☑ Sync Retrieval(FTS-only) 구현: `/query/retrieval` POST
+* ☑ evidence 조회(`/query/evidence/{eid}`) 최소 구현
 
 관련 문서:
 
@@ -133,12 +133,12 @@
 
 ### Phase 50 — 태그/엔티티/스키마(INGEST) + 승인 워크플로(D2/D3)
 
-* ☐ tag_def/tag_assignment CRUD 최소 구현(스키마 생성 입력)
-* ☐ entity/entity_alias CRUD 최소 구현(D2 옵션2 우선)
-* ☐ `INGEST` job 최소 구현:
+* ☑ tag_def/tag_assignment CRUD 최소 구현(스키마 생성 입력)
+* ☑ entity/entity_alias CRUD 최소 구현(D2 옵션2 우선)
+* ☑ `INGEST` job 최소 구현:
   - schema_version 생성
   - AUTO fact는 `PROPOSED`(D3)
-* ☐ schema view / facts list / approve(PATCH) 워크플로 최소 구현
+* ☑ schema view / facts list / approve(PATCH) 워크플로 최소 구현
 
 관련 문서:
 
@@ -149,10 +149,10 @@
 
 ### Phase 60 — 정합성(CONSISTENCY) + 로그/화이트리스트
 
-* ☐ `CONSISTENCY` job 최소 구현:
+* ☑ `CONSISTENCY` job 최소 구현:
   - Segment/Claim → Evidence(FTS-first) → Judge(L1/L2) → VerdictLog 저장
-* ☐ verdict/evidence 링크 저장 + 조회(`/query/verdicts` 등) 최소 구현
-* ☐ whitelist_item 저장/적용(재경고 억제) 최소 구현
+* ☑ verdict/evidence 링크 저장 + 조회(`/query/verdicts` 등) 최소 구현
+* ☑ whitelist_item 저장/적용(재경고 억제) 최소 구현
 
 관련 문서:
 
@@ -163,9 +163,9 @@
 
 ### Phase 70 — Vector 인덱스/검색 + `RETRIEVE_VEC` 스트리밍(D5)
 
-* ☐ `INDEX_VEC` job: shard build + manifest 갱신(최소)
-* ☐ `RETRIEVE_VEC` job: 결과를 이벤트로 페이지/청크 스트리밍(D5)
-* ☐ shard 로드/언로드 + 리소스 상한(최소) 도입
+* ☑ `INDEX_VEC` job: shard build + manifest 갱신(최소)
+* ☑ `RETRIEVE_VEC` job: 결과를 이벤트로 페이지/청크 스트리밍(D5)
+* ☑ shard 로드/언로드 + 리소스 상한(최소) 도입
 
 관련 문서:
 
@@ -176,9 +176,9 @@
 
 ### Phase 80 — Suggest(LOCAL_RULE 우선) + Model Gateway 옵션(D4)
 
-* ☐ `SUGGEST` job: `LOCAL_RULE` 최소 구현(근거 묶기/요약/템플릿)
-* ☐ `mode=API`는 opt-in으로만 실행 + 키/레이트리밋/회로차단 최소
-* ☐ `LOCAL_GEN`은 “분기/인터페이스만”(차순위, 실구현 보류)
+* ☑ `SUGGEST` job: `LOCAL_RULE` 최소 구현(근거 묶기/요약/템플릿)
+* ☑ `mode=API`는 opt-in으로만 실행 + 키/레이트리밋/회로차단 최소
+* ☑ `LOCAL_GEN`은 “분기/인터페이스만”(차순위, 실구현 보류)
 
 관련 문서:
 
@@ -189,8 +189,8 @@
 
 ### Phase 90 — Export + Proofread(차순위 포함)
 
-* ☐ `EXPORT` job: txt/docx 내보내기 최소 구현
-* ☐ Proofread(rule-base) 최소 구현(1차는 실시간 표시가 기본; batch job은 차순위)
+* ☑ `EXPORT` job: txt/docx 내보내기 최소 구현
+* ☑ Proofread(rule-base) 최소 구현(1차는 실시간 표시가 기본; batch job은 차순위)
 
 관련 문서:
 

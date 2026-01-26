@@ -71,22 +71,22 @@ modules/nf_orchestrator/
 
 * ☑ 루프백 HTTP 서버(기본) + JSON
 * ☑ `/health` (준비/생존)
-* ☐ CRUD
+* ☑ CRUD
   - ☑ `/projects` GET/POST
   - ☑ `/projects/{project_id}` GET/PATCH/DELETE
-  - `/projects/{project_id}/documents` GET/POST
-  - `/projects/{project_id}/documents/{did}` GET/PATCH/DELETE
-  - `/projects/{project_id}/episodes` GET/POST
-  - `/projects/{project_id}/tags` GET/POST
-  - `/projects/{project_id}/entities` GET/POST
-  - `/projects/{project_id}/entities/{eid}/aliases` GET/POST/DELETE
-  - `/projects/{project_id}/whitelist` POST/DELETE
-* ☐ 스키마 뷰 + 승인(D3)
+  - ☑ `/projects/{project_id}/documents` GET/POST
+  - ☑ `/projects/{project_id}/documents/{did}` GET/PATCH/DELETE
+  - ☑ `/projects/{project_id}/episodes` GET/POST
+  - ☑ `/projects/{project_id}/tags` GET/POST
+  - ☑ `/projects/{project_id}/entities` GET/POST
+  - ☑ `/projects/{project_id}/entities/{eid}/aliases` GET/POST/DELETE
+  - ☑ `/projects/{project_id}/whitelist` POST/DELETE
+* ☑ 스키마 뷰 + 승인(D3)
   - `/projects/{project_id}/schema` GET (현재 승인된 스키마 뷰)
   - `/projects/{project_id}/schema/facts` GET (filters: status/source/layer)
   - `/projects/{project_id}/schema/facts/{fact_id}` GET
   - `/projects/{project_id}/schema/facts/{fact_id}` PATCH `{status: APPROVED|REJECTED}`
-* ☐ 쿼리(동기)
+* ☑ 쿼리(동기)
   - `/query/retrieval` POST (**FTS-only**)
   - `/query/evidence/{eid}` GET
   - `/query/verdicts` POST
@@ -100,7 +100,7 @@ modules/nf_orchestrator/
 
 * ☑ `JobType` 지원:
   - `INGEST`, `INDEX_FTS`, `INDEX_VEC`, `CONSISTENCY`, `RETRIEVE_VEC`, `SUGGEST`, `PROOFREAD`, `EXPORT`
-* ☐ `payload_json` 스키마를 타입별로 고정(최소)
+* ☑ `payload_json` 스키마를 타입별로 고정(최소)
   - `INGEST`: `{doc_id, snapshot_id?}`
   - `INDEX_FTS`: `{scope: doc_id|episode_range|global, snapshot_id?}`
   - `INDEX_VEC`: `{scope, shard_policy}`
@@ -113,15 +113,15 @@ modules/nf_orchestrator/
 ## 3) 스트리밍(SSE) 규격
 
 * ☑ `JobEvent` 계약 준수(`plan/contracts.md`)
-* ☐ `RETRIEVE_VEC`는 결과를 `JobEvent.payload`로 분할 송신 가능
+* ☑ `RETRIEVE_VEC`는 결과를 `JobEvent.payload`로 분할 송신 가능
   - 페이로드 예: `{results: [RetrievalResult...], page: n}`
 
 ## 4) 정책 강제(필수)
 
-* ☐ `global_heavy_job_semaphore`로 무거운 잡 동시성 제한
-* ☐ `sync_retrieval_mode=FTS_ONLY` 강제(D5)
-* ☐ `explicit_fact_auto_approve=false` 기본 강제(D3 차순위 스위치)
-* ☐ `enable_local_generator=false` 기본(D4 차순위)
+* ☑ `global_heavy_job_semaphore`로 무거운 잡 동시성 제한
+* ☑ `sync_retrieval_mode=FTS_ONLY` 강제(D5)
+* ☑ `explicit_fact_auto_approve=false` 기본 강제(D3 차순위 스위치)
+* ☑ `enable_local_generator=false` 기본(D4 차순위)
 
 ## 5) 서비스 계층(최소 계약)
 
@@ -139,7 +139,7 @@ modules/nf_orchestrator/
 
 # [S] 권장 — 권장
 
-* ☐ OpenAPI 스펙 생성(로컬용)
+* ☑ OpenAPI 스펙 생성(로컬용)
 * ☑ SSE 재연결 지원(Last-Event-ID)
 * ☑ 로컬 토큰(옵션, `NF_ORCHESTRATOR_TOKEN`) 및 루프백 고정 강화
 

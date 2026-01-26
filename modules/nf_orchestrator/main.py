@@ -7,21 +7,82 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from modules.nf_orchestrator.services.document_service import DocumentServiceImpl
+from modules.nf_orchestrator.services.entity_service import EntityServiceImpl
+from modules.nf_orchestrator.services.episode_service import EpisodeServiceImpl
 from modules.nf_orchestrator.services.job_service import JobServiceImpl
 from modules.nf_orchestrator.services.project_service import ProjectServiceImpl
+from modules.nf_orchestrator.services.query_service import QueryServiceImpl
+from modules.nf_orchestrator.services.schema_service import SchemaServiceImpl
+from modules.nf_orchestrator.services.tag_service import TagServiceImpl
+from modules.nf_orchestrator.services.whitelist_service import WhitelistServiceImpl
+from modules.nf_orchestrator.storage import db
+from modules.nf_orchestrator.storage.repos import job_repo
+from modules.nf_shared.config import load_config
 from modules.nf_shared.errors import AppError, ErrorCode
-from modules.nf_shared.protocol.dtos import JobEvent, JobType
+from modules.nf_shared.protocol.dtos import (
+    DocumentType,
+    EntityKind,
+    FactSource,
+    FactStatus,
+    JobEvent,
+    JobType,
+    SchemaLayer,
+    SchemaType,
+    SuggestMode,
+    TagKind,
+)
 from modules.nf_shared.protocol.serialization import dump_json
 
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
 
 
+def _build_openapi_spec() -> dict[str, Any]:
+    return {
+        "openapi": "3.0.3",
+        "info": {"title": "nf-orchestrator", "version": "0.1.0"},
+        "paths": {
+            "/health": {"get": {"summary": "Health check"}},
+            "/projects": {"get": {"summary": "List projects"}, "post": {"summary": "Create project"}},
+            "/projects/{project_id}": {
+                "get": {"summary": "Get project"},
+                "patch": {"summary": "Update project"},
+                "delete": {"summary": "Delete project"},
+            },
+            "/projects/{project_id}/documents": {
+                "get": {"summary": "List documents"},
+                "post": {"summary": "Create document"},
+            },
+            "/projects/{project_id}/documents/{doc_id}": {
+                "get": {"summary": "Get document"},
+                "patch": {"summary": "Update document"},
+                "delete": {"summary": "Delete document"},
+            },
+            "/jobs": {"post": {"summary": "Submit job"}},
+            "/jobs/{job_id}": {"get": {"summary": "Get job"}},
+            "/jobs/{job_id}/cancel": {"post": {"summary": "Cancel job"}},
+            "/jobs/{job_id}/events": {"get": {"summary": "Stream job events"}},
+            "/query/retrieval": {"post": {"summary": "FTS-only retrieval"}},
+            "/query/evidence/{eid}": {"get": {"summary": "Get evidence"}},
+            "/query/verdicts": {"post": {"summary": "List verdicts"}},
+        },
+    }
+
+
 class OrchestratorHTTPServer(ThreadingHTTPServer):
     def __init__(self, server_address, RequestHandlerClass, *, token: str | None = None) -> None:
         super().__init__(server_address, RequestHandlerClass)
         self.project_service = ProjectServiceImpl()
+        self.document_service = DocumentServiceImpl()
+        self.episode_service = EpisodeServiceImpl()
+        self.tag_service = TagServiceImpl()
+        self.entity_service = EntityServiceImpl()
+        self.schema_service = SchemaServiceImpl()
+        self.query_service = QueryServiceImpl()
+        self.whitelist_service = WhitelistServiceImpl()
         self.job_service = JobServiceImpl()
+        self.settings = load_config()
         self.token = token
 
 
@@ -53,6 +114,9 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             if self.command == "GET" and path == "/health":
                 self._send_json(HTTPStatus.OK, {"status": "ok"})
                 return
+            if self.command == "GET" and path == "/openapi.json":
+                self._send_json(HTTPStatus.OK, _build_openapi_spec())
+                return
 
             if segments[:1] == ["projects"]:
                 self._handle_projects(segments)
@@ -60,6 +124,10 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
 
             if segments[:1] == ["jobs"]:
                 self._handle_jobs(segments)
+                return
+
+            if segments[:1] == ["query"]:
+                self._handle_query(segments)
                 return
 
             self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "찾을 수 없음")
@@ -115,7 +183,456 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, {"deleted": True})
                 return
 
+        if len(segments) >= 3:
+            project_id = segments[1]
+            project = self.server.project_service.get_project(project_id)
+            if project is None:
+                self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "프로젝트를 찾을 수 없습니다")
+                return
+            resource = segments[2]
+            tail = segments[3:]
+            if resource == "documents":
+                self._handle_documents(project_id, tail)
+                return
+            if resource == "episodes":
+                self._handle_episodes(project_id, tail)
+                return
+            if resource == "tags":
+                self._handle_tags(project_id, tail)
+                return
+            if resource == "entities":
+                self._handle_entities(project_id, tail)
+                return
+            if resource == "whitelist":
+                self._handle_whitelist(project_id)
+                return
+            if resource == "schema":
+                self._handle_schema(project_id, tail)
+                return
+
         self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _handle_documents(self, project_id: str, tail: list[str]) -> None:
+        if not tail:
+            if self.command == "GET":
+                docs = self.server.document_service.list_documents(project_id)
+                self._send_json(HTTPStatus.OK, {"documents": dump_json(docs)})
+                return
+            if self.command == "POST":
+                payload = self._read_json()
+                title = payload.get("title")
+                doc_type_raw = payload.get("type")
+                content = payload.get("content")
+                if not isinstance(title, str) or not title.strip():
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "title이 필요합니다")
+                if not isinstance(doc_type_raw, str):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "type이 필요합니다")
+                if not isinstance(content, str):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "content가 필요합니다")
+                try:
+                    doc_type = DocumentType(doc_type_raw)
+                except ValueError as exc:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, f"지원하지 않는 문서 타입: {doc_type_raw}") from exc
+                doc = self.server.document_service.create_document(project_id, title.strip(), doc_type, content)
+                self._send_json(HTTPStatus.CREATED, {"document": dump_json(doc)})
+                return
+        if len(tail) == 1:
+            doc_id = tail[0]
+            if self.command == "GET":
+                doc = self.server.document_service.get_document(doc_id)
+                if doc is None:
+                    self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "문서를 찾을 수 없습니다")
+                    return
+                self._send_json(HTTPStatus.OK, {"document": dump_json(doc)})
+                return
+            if self.command == "PATCH":
+                payload = self._read_json()
+                title = payload.get("title")
+                doc_type_raw = payload.get("type")
+                content = payload.get("content")
+                if title is not None and not isinstance(title, str):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "title은 문자열이어야 합니다")
+                doc_type = None
+                if doc_type_raw is not None:
+                    if not isinstance(doc_type_raw, str):
+                        raise AppError(ErrorCode.VALIDATION_ERROR, "type은 문자열이어야 합니다")
+                    try:
+                        doc_type = DocumentType(doc_type_raw)
+                    except ValueError as exc:
+                        raise AppError(ErrorCode.VALIDATION_ERROR, f"지원하지 않는 문서 타입: {doc_type_raw}") from exc
+                if content is not None and not isinstance(content, str):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "content는 문자열이어야 합니다")
+                doc = self.server.document_service.update_document(
+                    doc_id,
+                    title=title.strip() if isinstance(title, str) else None,
+                    doc_type=doc_type,
+                    content=content,
+                )
+                if doc is None:
+                    self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "문서를 찾을 수 없습니다")
+                    return
+                self._send_json(HTTPStatus.OK, {"document": dump_json(doc)})
+                return
+            if self.command == "DELETE":
+                deleted = self.server.document_service.delete_document(doc_id)
+                if not deleted:
+                    self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "문서를 찾을 수 없습니다")
+                    return
+                self._send_json(HTTPStatus.OK, {"deleted": True})
+                return
+        self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _handle_episodes(self, project_id: str, tail: list[str]) -> None:
+        if tail:
+            self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+            return
+        if self.command == "GET":
+            episodes = self.server.episode_service.list_episodes(project_id)
+            self._send_json(HTTPStatus.OK, {"episodes": dump_json(episodes)})
+            return
+        if self.command == "POST":
+            payload = self._read_json()
+            start_n = payload.get("start_n")
+            end_m = payload.get("end_m")
+            label = payload.get("label")
+            if not isinstance(start_n, int) or not isinstance(end_m, int):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "start_n/end_m은 정수여야 합니다")
+            if not isinstance(label, str) or not label.strip():
+                raise AppError(ErrorCode.VALIDATION_ERROR, "label이 필요합니다")
+            episode = self.server.episode_service.create_episode(project_id, start_n, end_m, label.strip())
+            self._send_json(HTTPStatus.CREATED, {"episode": dump_json(episode)})
+            return
+        self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _handle_tags(self, project_id: str, tail: list[str]) -> None:
+        if tail and tail[0] != "assignments":
+            if len(tail) == 1 and self.command == "DELETE":
+                tag_id = tail[0]
+                deleted = self.server.tag_service.delete_tag_def(tag_id)
+                if not deleted:
+                    self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "tag를 찾을 수 없습니다")
+                    return
+                self._send_json(HTTPStatus.OK, {"deleted": True})
+                return
+            self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+            return
+        if self.command == "GET":
+            if tail and tail[0] == "assignments":
+                params = parse_qs(urlparse(self.path).query)
+                doc_id = params.get("doc_id", [None])[0]
+                snapshot_id = params.get("snapshot_id", [None])[0]
+                assignments = self.server.tag_service.list_tag_assignments(
+                    project_id,
+                    doc_id=doc_id,
+                    snapshot_id=snapshot_id,
+                )
+                self._send_json(HTTPStatus.OK, {"assignments": dump_json(assignments)})
+                return
+            tags = self.server.tag_service.list_tag_defs(project_id)
+            self._send_json(HTTPStatus.OK, {"tags": dump_json(tags)})
+            return
+        if self.command == "POST":
+            if tail and tail[0] == "assignments":
+                payload = self._read_json()
+                doc_id = payload.get("doc_id")
+                snapshot_id = payload.get("snapshot_id")
+                span_start = payload.get("span_start")
+                span_end = payload.get("span_end")
+                tag_path = payload.get("tag_path")
+                user_value = payload.get("user_value")
+                created_by_raw = payload.get("created_by") or FactSource.USER.value
+                if not isinstance(doc_id, str) or not isinstance(snapshot_id, str):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "doc_id/snapshot_id가 필요합니다")
+                if not isinstance(span_start, int) or not isinstance(span_end, int):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "span_start/span_end는 정수여야 합니다")
+                if not isinstance(tag_path, str) or not tag_path.strip():
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "tag_path가 필요합니다")
+                try:
+                    created_by = FactSource(created_by_raw)
+                except ValueError as exc:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "created_by가 유효하지 않습니다") from exc
+                try:
+                    assignment = self.server.tag_service.create_tag_assignment(
+                        project_id,
+                        doc_id,
+                        snapshot_id,
+                        span_start,
+                        span_end,
+                        tag_path.strip(),
+                        user_value,
+                        created_by,
+                    )
+                except ValueError as exc:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
+                self._send_json(HTTPStatus.CREATED, {"assignment": dump_json(assignment)})
+                return
+            payload = self._read_json()
+            tag_path = payload.get("tag_path")
+            kind_raw = payload.get("kind")
+            schema_type_raw = payload.get("schema_type")
+            constraints = payload.get("constraints") or {}
+            if not isinstance(tag_path, str) or not tag_path.strip():
+                raise AppError(ErrorCode.VALIDATION_ERROR, "tag_path가 필요합니다")
+            if not isinstance(kind_raw, str) or not isinstance(schema_type_raw, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "kind/schema_type이 필요합니다")
+            if not isinstance(constraints, dict):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "constraints는 객체여야 합니다")
+            try:
+                kind = TagKind(kind_raw)
+                schema_type = SchemaType(schema_type_raw)
+            except ValueError as exc:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "유효하지 않은 kind/schema_type") from exc
+            try:
+                tag_def = self.server.tag_service.create_tag_def(
+                    project_id,
+                    tag_path.strip(),
+                    kind,
+                    schema_type,
+                    constraints,
+                )
+            except ValueError as exc:
+                raise AppError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
+            self._send_json(HTTPStatus.CREATED, {"tag": dump_json(tag_def)})
+            return
+        if self.command == "DELETE" and tail and tail[0] == "assignments" and len(tail) == 2:
+            assign_id = tail[1]
+            deleted = self.server.tag_service.delete_tag_assignment(assign_id)
+            if not deleted:
+                self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "assignment를 찾을 수 없습니다")
+                return
+            self._send_json(HTTPStatus.OK, {"deleted": True})
+            return
+        self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _handle_entities(self, project_id: str, tail: list[str]) -> None:
+        if not tail:
+            if self.command == "GET":
+                entities = self.server.entity_service.list_entities(project_id)
+                self._send_json(HTTPStatus.OK, {"entities": dump_json(entities)})
+                return
+            if self.command == "POST":
+                payload = self._read_json()
+                kind_raw = payload.get("kind")
+                canonical_name = payload.get("canonical_name")
+                if not isinstance(kind_raw, str) or not isinstance(canonical_name, str):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "kind/canonical_name이 필요합니다")
+                try:
+                    kind = EntityKind(kind_raw)
+                except ValueError as exc:
+                    raise AppError(
+                        ErrorCode.VALIDATION_ERROR, f"지원하지 않는 엔티티 종류: {kind_raw}"
+                    ) from exc
+                entity = self.server.entity_service.create_entity(project_id, kind, canonical_name.strip())
+                self._send_json(HTTPStatus.CREATED, {"entity": dump_json(entity)})
+                return
+        if len(tail) == 1 and self.command == "DELETE":
+            entity_id = tail[0]
+            deleted = self.server.entity_service.delete_entity(entity_id)
+            if not deleted:
+                self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "entity를 찾을 수 없습니다")
+                return
+            self._send_json(HTTPStatus.OK, {"deleted": True})
+            return
+        if len(tail) >= 2 and tail[1] == "aliases":
+            entity_id = tail[0]
+            if len(tail) == 2:
+                if self.command == "GET":
+                    aliases = self.server.entity_service.list_aliases(project_id, entity_id)
+                    self._send_json(HTTPStatus.OK, {"aliases": dump_json(aliases)})
+                    return
+                if self.command == "POST":
+                    payload = self._read_json()
+                    alias_text = payload.get("alias_text")
+                    created_by_raw = payload.get("created_by") or FactSource.USER.value
+                    if not isinstance(alias_text, str) or not alias_text.strip():
+                        raise AppError(ErrorCode.VALIDATION_ERROR, "alias_text가 필요합니다")
+                    try:
+                        created_by = FactSource(created_by_raw)
+                    except ValueError as exc:
+                        raise AppError(ErrorCode.VALIDATION_ERROR, "created_by가 유효하지 않습니다") from exc
+                    alias = self.server.entity_service.create_alias(
+                        project_id, entity_id, alias_text.strip(), created_by
+                    )
+                    self._send_json(HTTPStatus.CREATED, {"alias": dump_json(alias)})
+                    return
+                if self.command == "DELETE":
+                    payload = self._read_json()
+                    alias_id = payload.get("alias_id")
+                    if not isinstance(alias_id, str):
+                        raise AppError(ErrorCode.VALIDATION_ERROR, "alias_id가 필요합니다")
+                    deleted = self.server.entity_service.delete_alias(alias_id)
+                    if not deleted:
+                        self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "alias를 찾을 수 없습니다")
+                        return
+                    self._send_json(HTTPStatus.OK, {"deleted": True})
+                    return
+            if len(tail) == 3 and self.command == "DELETE":
+                alias_id = tail[2]
+                deleted = self.server.entity_service.delete_alias(alias_id)
+                if not deleted:
+                    self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "alias를 찾을 수 없습니다")
+                    return
+                self._send_json(HTTPStatus.OK, {"deleted": True})
+                return
+        self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _handle_whitelist(self, project_id: str) -> None:
+        if self.command == "POST":
+            payload = self._read_json()
+            claim_text = payload.get("claim_text")
+            scope = payload.get("scope")
+            note = payload.get("note")
+            if not isinstance(claim_text, str) or not claim_text.strip():
+                raise AppError(ErrorCode.VALIDATION_ERROR, "claim_text가 필요합니다")
+            if not isinstance(scope, str) or not scope.strip():
+                raise AppError(ErrorCode.VALIDATION_ERROR, "scope가 필요합니다")
+            item = self.server.whitelist_service.add_item(project_id, claim_text, scope.strip(), note)
+            self._send_json(HTTPStatus.CREATED, {"whitelist": item})
+            return
+        if self.command == "DELETE":
+            payload = self._read_json()
+            claim_text = payload.get("claim_text")
+            if not isinstance(claim_text, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "claim_text가 필요합니다")
+            deleted = self.server.whitelist_service.delete_item(project_id, claim_text)
+            if not deleted:
+                self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "whitelist를 찾을 수 없습니다")
+                return
+            self._send_json(HTTPStatus.OK, {"deleted": True})
+            return
+        self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _handle_schema(self, project_id: str, tail: list[str]) -> None:
+        if not tail:
+            if self.command == "GET":
+                view = self.server.schema_service.get_schema_view(project_id)
+                self._send_json(HTTPStatus.OK, {"schema": dump_json(view)})
+                return
+        if tail[:1] == ["facts"]:
+            if len(tail) == 1:
+                if self.command != "GET":
+                    self._send_app_error(
+                        HTTPStatus.METHOD_NOT_ALLOWED,
+                        ErrorCode.VALIDATION_ERROR,
+                        "허용되지 않는 메서드",
+                    )
+                    return
+                params = parse_qs(urlparse(self.path).query)
+                status_raw = params.get("status", [None])[0]
+                layer_raw = params.get("layer", [None])[0]
+                source_raw = params.get("source", [None])[0]
+                try:
+                    status = FactStatus(status_raw) if status_raw else None
+                except ValueError as exc:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "유효하지 않은 status") from exc
+                if layer_raw:
+                    try:
+                        SchemaLayer(layer_raw)
+                    except ValueError as exc:
+                        raise AppError(ErrorCode.VALIDATION_ERROR, "유효하지 않은 layer") from exc
+                if source_raw:
+                    try:
+                        FactSource(source_raw)
+                    except ValueError as exc:
+                        raise AppError(ErrorCode.VALIDATION_ERROR, "유효하지 않은 source") from exc
+                facts = self.server.schema_service.list_facts(
+                    project_id,
+                    status=status,
+                    layer=layer_raw,
+                    source=source_raw,
+                )
+                self._send_json(HTTPStatus.OK, {"facts": dump_json(facts)})
+                return
+            if len(tail) == 2:
+                fact_id = tail[1]
+                if self.command == "GET":
+                    fact = self.server.schema_service.get_fact(fact_id)
+                    if fact is None or fact.project_id != project_id:
+                        self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "fact를 찾을 수 없습니다")
+                        return
+                    self._send_json(HTTPStatus.OK, {"fact": dump_json(fact)})
+                    return
+                if self.command == "PATCH":
+                    payload = self._read_json()
+                    status_raw = payload.get("status")
+                    if not isinstance(status_raw, str):
+                        raise AppError(ErrorCode.VALIDATION_ERROR, "status가 필요합니다")
+                    try:
+                        status = FactStatus(status_raw)
+                    except ValueError as exc:
+                        raise AppError(ErrorCode.VALIDATION_ERROR, "유효하지 않은 status") from exc
+                    try:
+                        fact = self.server.schema_service.set_fact_status(project_id, fact_id, status)
+                    except ValueError:
+                        self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "fact를 찾을 수 없습니다")
+                        return
+                    self._send_json(HTTPStatus.OK, {"fact": dump_json(fact)})
+                    return
+        self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _handle_query(self, segments: list[str]) -> None:
+        if len(segments) == 2 and segments[1] == "retrieval":
+            if self.command != "POST":
+                self._send_app_error(
+                    HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드"
+                )
+                return
+            payload = self._read_json()
+            project_id = payload.get("project_id")
+            query_text = payload.get("query")
+            filters = payload.get("filters") or {}
+            k = payload.get("k") or 10
+            if not isinstance(project_id, str) or not isinstance(query_text, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "project_id/query가 필요합니다")
+            if not isinstance(filters, dict):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "filters는 객체여야 합니다")
+            try:
+                k = int(k)
+            except (TypeError, ValueError) as exc:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "k는 정수여야 합니다") from exc
+            if self.server.settings.sync_retrieval_mode != "FTS_ONLY":
+                raise AppError(ErrorCode.POLICY_VIOLATION, "sync retrieval은 FTS_ONLY만 허용됩니다")
+            req = {
+                "project_id": project_id,
+                "query": query_text,
+                "filters": filters,
+                "k": k,
+            }
+            results = self.server.query_service.retrieval_fts(req)
+            stored = self.server.query_service.store_evidence_from_results(project_id, results)
+            for result, evidence in zip(results, stored):
+                evidence_raw = result.get("evidence") or {}
+                evidence_raw["eid"] = evidence.eid
+                result["evidence"] = evidence_raw
+            self._send_json(HTTPStatus.OK, {"results": results})
+            return
+        if len(segments) == 3 and segments[1] == "evidence":
+            if self.command != "GET":
+                self._send_app_error(
+                    HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드"
+                )
+                return
+            evidence = self.server.query_service.get_evidence(segments[2])
+            if evidence is None:
+                self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "evidence를 찾을 수 없습니다")
+                return
+            self._send_json(HTTPStatus.OK, {"evidence": dump_json(evidence)})
+            return
+        if len(segments) == 2 and segments[1] == "verdicts":
+            if self.command != "POST":
+                self._send_app_error(
+                    HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드"
+                )
+                return
+            payload = self._read_json()
+            project_id = payload.get("project_id")
+            input_doc_id = payload.get("input_doc_id")
+            if not isinstance(project_id, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "project_id가 필요합니다")
+            verdicts = self.server.query_service.list_verdicts(project_id, input_doc_id=input_doc_id)
+            self._send_json(HTTPStatus.OK, {"verdicts": dump_json(verdicts)})
+            return
+        self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "찾을 수 없음")
 
     def _handle_jobs(self, segments: list[str]) -> None:
         if len(segments) == 1:
@@ -138,9 +655,15 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 return
             inputs = payload.get("inputs") or {}
             params = payload.get("params") or {}
+            priority = payload.get("priority", 100)
             if not isinstance(inputs, dict) or not isinstance(params, dict):
                 raise AppError(ErrorCode.VALIDATION_ERROR, "inputs와 params는 객체여야 합니다")
-            job = self.server.job_service.submit(project_id, job_type, inputs, params)
+            if not isinstance(priority, int):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "priority는 정수여야 합니다")
+            self._validate_job_payload(job_type, inputs)
+            self._enforce_job_policy(job_type, inputs)
+            self._enforce_heavy_job_semaphore(job_type)
+            job = self.server.job_service.submit(project_id, job_type, inputs, params, priority=priority)
             self._send_json(HTTPStatus.CREATED, {"job": dump_json(job)})
             return
 
@@ -175,6 +698,62 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             return
 
         self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _validate_job_payload(self, job_type: JobType, inputs: dict[str, Any]) -> None:
+        def require_str(key: str) -> None:
+            if not isinstance(inputs.get(key), str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, f"{key}가 필요합니다")
+
+        def require_dict(key: str) -> None:
+            if not isinstance(inputs.get(key), dict):
+                raise AppError(ErrorCode.VALIDATION_ERROR, f"{key}가 필요합니다")
+
+        if job_type == JobType.INGEST:
+            require_str("doc_id")
+        elif job_type == JobType.INDEX_FTS:
+            require_str("scope")
+        elif job_type == JobType.INDEX_VEC:
+            require_str("scope")
+            require_dict("shard_policy")
+        elif job_type == JobType.CONSISTENCY:
+            require_str("input_doc_id")
+            require_str("input_snapshot_id")
+            require_dict("range")
+        elif job_type == JobType.RETRIEVE_VEC:
+            require_str("query")
+            if "filters" in inputs and not isinstance(inputs.get("filters"), dict):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "filters는 객체여야 합니다")
+        elif job_type == JobType.SUGGEST:
+            require_dict("range")
+            require_str("mode")
+        elif job_type == JobType.PROOFREAD:
+            require_str("doc_id")
+            require_str("snapshot_id")
+        elif job_type == JobType.EXPORT:
+            require_dict("range")
+            require_str("format")
+
+    def _enforce_job_policy(self, job_type: JobType, inputs: dict[str, Any]) -> None:
+        if job_type == JobType.SUGGEST:
+            mode_raw = inputs.get("mode")
+            if isinstance(mode_raw, str):
+                try:
+                    mode = SuggestMode(mode_raw)
+                except ValueError as exc:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "유효하지 않은 mode") from exc
+                if mode is SuggestMode.API and not self.server.settings.enable_remote_api:
+                    raise AppError(ErrorCode.POLICY_VIOLATION, "remote API가 비활성화되었습니다")
+                if mode is SuggestMode.LOCAL_GEN and not self.server.settings.enable_local_generator:
+                    raise AppError(ErrorCode.POLICY_VIOLATION, "local generator가 비활성화되었습니다")
+
+    def _enforce_heavy_job_semaphore(self, job_type: JobType) -> None:
+        heavy_types = [JobType.INDEX_VEC, JobType.CONSISTENCY, JobType.RETRIEVE_VEC]
+        if job_type not in heavy_types:
+            return
+        with db.connect() as conn:
+            running = job_repo.count_running_jobs(conn, heavy_types)
+        if running >= 1:
+            raise AppError(ErrorCode.POLICY_VIOLATION, "heavy job 동시 실행이 제한됩니다")
 
     def _stream_job_events(self, job_id: str) -> None:
         job = self.server.job_service.get(job_id)

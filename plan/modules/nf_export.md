@@ -30,21 +30,21 @@ modules/nf_export/
 
 ## 1) ExportRequest/Result 계약
 
-* ☐ 입력: `{project_id, range, format, include_meta}`
-* ☐ 출력: `{artifact_path, size_bytes, created_at}`
+* ☑ 입력: `{project_id, range, format, include_meta}`
+* ☑ 출력: `{artifact_path, size_bytes, created_at}`
 
 ## 2) TXT 내보내기
 
-* ☐ 원문 + 선택 메타 섹션(최소)
+* ☑ 원문 + 선택 메타 섹션(최소)
 
 ## 3) DOCX 내보내기
 
-* ☐ 기본 스타일 템플릿 적용(선택)
-* ☐ 메타 포함 시: 표/부록 형태로 태그/근거 요약
+* ☑ 기본 스타일 템플릿 적용(선택)
+* ☑ 메타 포함 시: 표/부록 형태로 태그/근거 요약
 
 ## 4) 테스트(pytest)
 
-* ☐ `tests/test_nf_export_contracts.py`: Exporter/ExportFormat 계약 스모크
+* ☑ `tests/test_nf_export_contracts.py`: Exporter/ExportFormat 계약 스모크
 * ☐ (차순위) TXT 내보내기 스모크(임시 파일)
 * ☐ (차순위) DOCX 내보내기 스모크(라이브러리 의존은 구현 시 결정)
 

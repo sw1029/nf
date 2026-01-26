@@ -1,11 +1,7 @@
 """
-내보내기(export) placeholder.
-
-책임(예정):
-- 메타데이터 포함 선택형 txt/docx 내보내기
-- 산출물 처리
+내보내기(export) 기능.
 """
 
-__version__ = "0.0.0-placeholder"
+__version__ = "0.1.0"
 
 from .exporter import export_document  # noqa: F401

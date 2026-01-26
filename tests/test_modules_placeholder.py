@@ -6,12 +6,15 @@ import pytest
 
 PLACEHOLDER_MODULE_SPECS = [
     ("modules.nf_desktop", "launch_app"),
-    ("modules.nf_workers", "run_worker"),
-    ("modules.nf_schema", "load_schema_registry"),
-    ("modules.nf_retrieval", "run_retrieval_job"),
-    ("modules.nf_consistency", "evaluate_consistency"),
-    ("modules.nf_model_gateway", "select_model"),
-    ("modules.nf_export", "export_document"),
+]
+
+IMPLEMENTED_MODULES = [
+    "modules.nf_workers",
+    "modules.nf_schema",
+    "modules.nf_retrieval",
+    "modules.nf_consistency",
+    "modules.nf_model_gateway",
+    "modules.nf_export",
 ]
 
 
@@ -31,8 +34,17 @@ def test_placeholder_functions_raise_not_implemented(module_path: str, func_name
 @pytest.mark.unit
 @pytest.mark.placeholder
 @pytest.mark.parametrize("module_path, _", PLACEHOLDER_MODULE_SPECS)
-def test_modules_expose_version(module_path: str, _: str) -> None:
+def test_placeholder_versions(module_path: str, _: str) -> None:
     module = importlib.import_module(module_path)
     assert hasattr(module, "__version__")
     assert isinstance(module.__version__, str)
     assert module.__version__.endswith("placeholder")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("module_path", IMPLEMENTED_MODULES)
+def test_implemented_versions(module_path: str) -> None:
+    module = importlib.import_module(module_path)
+    assert hasattr(module, "__version__")
+    assert isinstance(module.__version__, str)
+    assert not module.__version__.endswith("placeholder")

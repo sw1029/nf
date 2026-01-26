@@ -38,10 +38,14 @@ class SchemaService(Protocol):
 
 class JobService(Protocol):
     def submit(
-        self, project_id: ProjectID, job_type: JobType, inputs: dict[str, Any], params: dict[str, Any]
+        self,
+        project_id: ProjectID,
+        job_type: JobType,
+        inputs: dict[str, Any],
+        params: dict[str, Any],
+        priority: int = 100,
     ) -> Job: ...
 
     def cancel(self, job_id: JobID) -> None: ...
 
     def get(self, job_id: JobID) -> Job: ...
-

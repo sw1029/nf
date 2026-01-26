@@ -42,48 +42,48 @@ modules/nf_consistency/
 
 ## 1) Segment/Claim 추출
 
-* ☐ 문장/절 세그먼트 분리
-* ☐ 하드 필드 힌트 기반 클레임 후보 추출(시간/나이/장소/관계 키워드)
-* ☐ 출력: `(segment_span, claim_text, slots)` 리스트
+* ☑ 문장/절 세그먼트 분리
+* ☑ 하드 필드 힌트 기반 클레임 후보 추출(시간/나이/장소/관계 키워드)
+* ☑ 출력: `(segment_span, claim_text, slots)` 리스트
 
 ## 2) Evidence Builder (근거 강제)
 
-* ☐ 기본: FTS로 evidence를 구성(정확 인용)
-* ☐ 잡 내부에서는 필요 시 벡터 확장 가능(무거운 잡 경로)
+* ☑ 기본: FTS로 evidence를 구성(정확 인용)
+* ☑ 잡 내부에서는 필요 시 벡터 확장 가능(무거운 잡 경로)
   - 단, “근거 부재를 모델로 뒤집지 못함” 정책 유지
-* ☐ Evidence는 `snapshot_id/chunk_id` 포함(가능하면)
+* ☑ Evidence는 `snapshot_id/chunk_id` 포함(가능하면)
 
 ## 3) Judge Layer 1 (명시만)
 
-* ☐ schema_explicit_fact(승인된 것)과 비교하여 위배 감지
-* ☐ 위배 시: `tag_path` + Evidence 스니펫을 반드시 포함
+* ☑ schema_explicit_fact(승인된 것)과 비교하여 위배 감지
+* ☑ 위배 시: `tag_path` + Evidence 스니펫을 반드시 포함
 
 ## 4) Judge Layer 2 (휴리스틱, 보수적)
 
-* ☐ alias/정규화/약한 동일성 처리(충돌 시 unknown)
-* ☐ entity_id 불명확 시 unknown 우선
+* ☑ alias/정규화/약한 동일성 처리(충돌 시 unknown)
+* ☑ entity_id 불명확 시 unknown 우선
 
 ## 5) Judge Layer 3 (옵션 경로; 구조는 Must)
 
-* ☐ 호출 조건 게이트:
+* ☑ 호출 조건 게이트:
   - 사용자 활성화
   - L1/2 결론 불가
   - evidence 존재
-* ☐ 모델 점수는 breakdown에만 반영(과신 방지)
+* ☑ 모델 점수는 breakdown에만 반영(과신 방지)
 
 ## 6) Whitelist
 
-* ☐ claim_fingerprint 기반 재경고 억제
-* ☐ whitelist 적용 시 결과를 “오류→추가정보”로 표기할 수 있는 상태 필드 유지
+* ☑ claim_fingerprint 기반 재경고 억제
+* ☑ whitelist 적용 시 결과를 “오류→추가정보”로 표기할 수 있는 상태 필드 유지
 
 ## 7) Verdict Logging
 
-* ☐ `VerdictLog` + `VerdictEvidenceLink` 저장 계약 준수
-* ☐ schema_ver/input_snapshot_id를 함께 기록(재현성)
+* ☑ `VerdictLog` + `VerdictEvidenceLink` 저장 계약 준수
+* ☑ schema_ver/input_snapshot_id를 함께 기록(재현성)
 
 ## 8) 테스트(pytest)
 
-* ☐ `tests/test_nf_consistency_contracts.py`: ConsistencyRequest/ConsistencyEngine 계약 스모크
+* ☑ `tests/test_nf_consistency_contracts.py`: ConsistencyRequest/ConsistencyEngine 계약 스모크
 * ☐ (차순위) L1 위배 감지 스모크(간단 schema + claim)
 * ☐ (차순위) 충돌/애매 시 unknown 강등 테스트
 * ☐ (차순위) whitelist 적용 시 재경고 억제 테스트
@@ -92,7 +92,7 @@ modules/nf_consistency/
 
 # [S] 권장 — 권장
 
-* ☐ 신뢰도 보정(보수적)
+* ☑ 신뢰도 보정(보수적)
 * ☐ Unknown 사유 표준 문구(UX)
 
 ---
