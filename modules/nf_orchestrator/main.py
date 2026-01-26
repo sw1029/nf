@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import time
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -17,8 +21,9 @@ from modules.nf_orchestrator.services.schema_service import SchemaServiceImpl
 from modules.nf_orchestrator.services.tag_service import TagServiceImpl
 from modules.nf_orchestrator.services.timeline_service import TimelineServiceImpl
 from modules.nf_orchestrator.services.whitelist_service import WhitelistServiceImpl
-from modules.nf_orchestrator.storage import db
+from modules.nf_orchestrator.storage import db, docstore
 from modules.nf_orchestrator.storage.repos import job_repo
+from modules.nf_retrieval.vector import shard_store
 from modules.nf_shared.config import load_config
 from modules.nf_shared.errors import AppError, ErrorCode
 from modules.nf_shared.protocol.dtos import (
@@ -37,6 +42,7 @@ from modules.nf_shared.protocol.serialization import dump_json
 
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
+_DEBUG_UI_PATH = Path(__file__).with_name("debug_ui.html")
 
 
 def _build_openapi_spec() -> dict[str, Any]:
@@ -92,6 +98,15 @@ class OrchestratorHTTPServer(ThreadingHTTPServer):
         self.job_service = JobServiceImpl()
         self.settings = load_config()
         self.token = token
+        self.debug_state: dict[str, Any] = {
+            "force_error_code": None,
+            "force_latency_ms": 0,
+            "disable_heavy_job_limit": False,
+            "sse_drop_after": 0,
+            "sse_fragment_ms": 0,
+            "max_loaded_shards": self.settings.max_loaded_shards,
+            "max_ram_mb": self.settings.max_ram_mb,
+        }
 
 
 class OrchestratorHandler(BaseHTTPRequestHandler):
@@ -112,13 +127,21 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
     def _dispatch(self) -> None:
         if not self._enforce_loopback():
             return
-        if not self._authorize():
-            return
-
         path = urlparse(self.path).path
         segments = [seg for seg in path.split("/") if seg]
 
         try:
+            if segments[:1] == ["_debug"]:
+                if not self._authorize_debug():
+                    return
+                self._handle_debug(segments[1:])
+                return
+
+            if not self._authorize():
+                return
+            if not self._apply_debug_injections(path):
+                return
+
             if self.command == "GET" and path == "/health":
                 self._send_json(HTTPStatus.OK, {"status": "ok"})
                 return
@@ -228,6 +251,62 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 return
 
         self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _handle_debug(self, tail: list[str]) -> None:
+        if not tail:
+            if self.command == "GET":
+                self._serve_debug_ui()
+                return
+            self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+            return
+
+        if tail[0] == "config":
+            if self.command == "GET":
+                self._send_json(HTTPStatus.OK, self._debug_config_payload())
+                return
+            self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+            return
+        if tail[0] == "status":
+            if self.command == "GET":
+                self._send_json(HTTPStatus.OK, self._debug_status_payload())
+                return
+            self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+            return
+
+        if tail[0] == "toggles":
+            if self.command == "GET":
+                self._send_json(HTTPStatus.OK, {"debug_state": self._debug_state_payload()})
+                return
+            if self.command == "PATCH":
+                payload = self._read_json()
+                updated = self._update_debug_toggles(payload)
+                self._send_json(HTTPStatus.OK, {"debug_state": updated})
+                return
+            self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+            return
+
+        if tail[0] == "fixtures":
+            if self.command == "POST":
+                payload = self._read_json()
+                result = self._create_debug_fixtures(payload)
+                self._send_json(HTTPStatus.CREATED, result)
+                return
+            self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+            return
+
+        if tail[0] == "reset":
+            if self.command == "POST":
+                payload = self._read_json()
+                confirm = payload.get("confirm")
+                if confirm != "RESET":
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "confirm=RESET가 필요합니다")
+                result = self._reset_debug_storage()
+                self._send_json(HTTPStatus.OK, result)
+                return
+            self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+            return
+
+        self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "찾을 수 없음")
 
     def _handle_documents(self, project_id: str, tail: list[str]) -> None:
         if not tail:
@@ -798,7 +877,7 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             if not isinstance(priority, int):
                 raise AppError(ErrorCode.VALIDATION_ERROR, "priority는 정수여야 합니다")
             self._validate_job_payload(job_type, inputs)
-            self._enforce_job_policy(job_type, inputs)
+            self._enforce_job_policy(job_type, inputs, project.settings)
             self._enforce_heavy_job_semaphore(job_type)
             job = self.server.job_service.submit(project_id, job_type, inputs, params, priority=priority)
             self._send_json(HTTPStatus.CREATED, {"job": dump_json(job)})
@@ -870,7 +949,12 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             require_dict("range")
             require_str("format")
 
-    def _enforce_job_policy(self, job_type: JobType, inputs: dict[str, Any]) -> None:
+    def _enforce_job_policy(
+        self,
+        job_type: JobType,
+        inputs: dict[str, Any],
+        project_settings: dict[str, Any] | None = None,
+    ) -> None:
         if job_type == JobType.SUGGEST:
             mode_raw = inputs.get("mode")
             if isinstance(mode_raw, str):
@@ -878,12 +962,21 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                     mode = SuggestMode(mode_raw)
                 except ValueError as exc:
                     raise AppError(ErrorCode.VALIDATION_ERROR, "유효하지 않은 mode") from exc
-                if mode is SuggestMode.API and not self.server.settings.enable_remote_api:
-                    raise AppError(ErrorCode.POLICY_VIOLATION, "remote API가 비활성화되었습니다")
-                if mode is SuggestMode.LOCAL_GEN and not self.server.settings.enable_local_generator:
-                    raise AppError(ErrorCode.POLICY_VIOLATION, "local generator가 비활성화되었습니다")
+                project_settings = project_settings or {}
+                if mode is SuggestMode.API:
+                    if not self.server.settings.enable_remote_api:
+                        raise AppError(ErrorCode.POLICY_VIOLATION, "remote API가 비활성화되었습니다")
+                    if not project_settings.get("enable_remote_api", False):
+                        raise AppError(ErrorCode.POLICY_VIOLATION, "프로젝트 remote API가 비활성화되었습니다")
+                if mode is SuggestMode.LOCAL_GEN:
+                    if not self.server.settings.enable_local_generator:
+                        raise AppError(ErrorCode.POLICY_VIOLATION, "local generator가 비활성화되었습니다")
+                    if not project_settings.get("enable_local_generator", False):
+                        raise AppError(ErrorCode.POLICY_VIOLATION, "프로젝트 local generator가 비활성화되었습니다")
 
     def _enforce_heavy_job_semaphore(self, job_type: JobType) -> None:
+        if self.server.debug_state.get("disable_heavy_job_limit"):
+            return
         heavy_types = [JobType.INDEX_VEC, JobType.CONSISTENCY, JobType.RETRIEVE_VEC]
         if job_type not in heavy_types:
             return
@@ -920,13 +1013,28 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.end_headers()
 
+        drop_after = int(self.server.debug_state.get("sse_drop_after") or 0)
+        fragment_ms = int(self.server.debug_state.get("sse_fragment_ms") or 0)
+
         events = self.server.job_service.list_events(job_id, after_seq=after_seq)
+        sent = 0
         for seq, event in events:
-            self._write_sse_event(seq, event)
+            self._write_sse_event(seq, event, fragment_ms=fragment_ms)
+            sent += 1
+            if drop_after and sent >= drop_after:
+                return
         self.wfile.write(b": keep-alive\n\n")
 
-    def _write_sse_event(self, seq: int, event: JobEvent) -> None:
+    def _write_sse_event(self, seq: int, event: JobEvent, *, fragment_ms: int = 0) -> None:
         payload = json.dumps(dump_json(event), ensure_ascii=False)
+        if fragment_ms > 0:
+            self.wfile.write(f"id: {seq}\n".encode("utf-8"))
+            self.wfile.write(b"event: message\n")
+            self.wfile.flush()
+            time.sleep(fragment_ms / 1000)
+            self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+            self.wfile.flush()
+            return
         self.wfile.write(f"id: {seq}\n".encode("utf-8"))
         self.wfile.write(b"event: message\n")
         self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
@@ -945,6 +1053,200 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             raise AppError(ErrorCode.VALIDATION_ERROR, "JSON 본문은 객체여야 합니다")
         return payload
 
+    def _serve_debug_ui(self) -> None:
+        try:
+            html = _DEBUG_UI_PATH.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "디버그 UI를 찾을 수 없습니다")
+            return
+        body = html.encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _debug_state_payload(self) -> dict[str, Any]:
+        return dict(self.server.debug_state)
+
+    def _debug_config_payload(self) -> dict[str, Any]:
+        settings = self.server.settings
+        return {
+            "debug_ui_enabled": settings.enable_debug_web_ui,
+            "require_api_token": bool(self.server.token),
+            "settings": {
+                "enable_remote_api": settings.enable_remote_api,
+                "enable_layer3_model": settings.enable_layer3_model,
+                "enable_local_generator": settings.enable_local_generator,
+                "sync_retrieval_mode": settings.sync_retrieval_mode,
+                "vector_index_mode": settings.vector_index_mode,
+                "max_loaded_shards": settings.max_loaded_shards,
+                "max_ram_mb": settings.max_ram_mb,
+                "evidence_required_for_model_output": settings.evidence_required_for_model_output,
+                "implicit_fact_auto_approve": settings.implicit_fact_auto_approve,
+                "explicit_fact_auto_approve": settings.explicit_fact_auto_approve,
+            },
+            "debug_state": self._debug_state_payload(),
+        }
+
+    def _debug_status_payload(self) -> dict[str, Any]:
+        now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        last_event = None
+        status_counts: dict[str, int] = {}
+        with db.connect() as conn:
+            row = conn.execute(
+                "SELECT seq, job_id, ts, level, message FROM job_events ORDER BY seq DESC LIMIT 1"
+            ).fetchone()
+            if row is not None:
+                last_event = {
+                    "seq": row["seq"],
+                    "job_id": row["job_id"],
+                    "ts": row["ts"],
+                    "level": row["level"],
+                    "message": row["message"],
+                }
+            counts = conn.execute(
+                "SELECT status, COUNT(*) AS cnt FROM jobs GROUP BY status"
+            ).fetchall()
+        for row in counts:
+            status_counts[row["status"]] = int(row["cnt"])
+        return {
+            "now": now_ts,
+            "orchestrator": {"ok": True},
+            "worker_last_event": last_event,
+            "job_status_counts": status_counts,
+        }
+
+    def _update_debug_toggles(self, payload: dict[str, Any]) -> dict[str, Any]:
+        state = self.server.debug_state
+        if "force_error_code" in payload:
+            raw = payload.get("force_error_code")
+            if raw in (None, "", 0):
+                state["force_error_code"] = None
+            else:
+                try:
+                    state["force_error_code"] = int(raw)
+                except (TypeError, ValueError) as exc:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "force_error_code는 정수여야 합니다") from exc
+        if "force_latency_ms" in payload:
+            raw = payload.get("force_latency_ms")
+            try:
+                latency_ms = int(raw)
+            except (TypeError, ValueError) as exc:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "force_latency_ms는 정수여야 합니다") from exc
+            if latency_ms < 0:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "force_latency_ms는 0 이상이어야 합니다")
+            state["force_latency_ms"] = latency_ms
+        if "disable_heavy_job_limit" in payload:
+            state["disable_heavy_job_limit"] = bool(payload.get("disable_heavy_job_limit"))
+        if "sse_drop_after" in payload:
+            raw = payload.get("sse_drop_after")
+            try:
+                drop_after = int(raw)
+            except (TypeError, ValueError) as exc:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "sse_drop_after는 정수여야 합니다") from exc
+            if drop_after < 0:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "sse_drop_after는 0 이상이어야 합니다")
+            state["sse_drop_after"] = drop_after
+        if "sse_fragment_ms" in payload:
+            raw = payload.get("sse_fragment_ms")
+            try:
+                fragment_ms = int(raw)
+            except (TypeError, ValueError) as exc:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "sse_fragment_ms는 정수여야 합니다") from exc
+            if fragment_ms < 0:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "sse_fragment_ms는 0 이상이어야 합니다")
+            state["sse_fragment_ms"] = fragment_ms
+        reload_config = False
+        if "max_loaded_shards" in payload:
+            raw = payload.get("max_loaded_shards")
+            try:
+                max_loaded = int(raw)
+            except (TypeError, ValueError) as exc:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "max_loaded_shards는 정수여야 합니다") from exc
+            if max_loaded <= 0:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "max_loaded_shards는 1 이상이어야 합니다")
+            os.environ["NF_MAX_LOADED_SHARDS"] = str(max_loaded)
+            state["max_loaded_shards"] = max_loaded
+            reload_config = True
+        if "max_ram_mb" in payload:
+            raw = payload.get("max_ram_mb")
+            try:
+                max_ram = int(raw)
+            except (TypeError, ValueError) as exc:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "max_ram_mb는 정수여야 합니다") from exc
+            if max_ram <= 0:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "max_ram_mb는 1 이상이어야 합니다")
+            os.environ["NF_MAX_RAM_MB"] = str(max_ram)
+            state["max_ram_mb"] = max_ram
+            reload_config = True
+        if reload_config:
+            self.server.settings = load_config()
+        return self._debug_state_payload()
+
+    def _create_debug_fixtures(self, payload: dict[str, Any]) -> dict[str, Any]:
+        project_name = payload.get("project_name") or "Sample Project"
+        if not isinstance(project_name, str) or not project_name.strip():
+            raise AppError(ErrorCode.VALIDATION_ERROR, "project_name은 문자열이어야 합니다")
+        project = self.server.project_service.create_project(project_name.strip(), settings={})
+        text = (
+            "Episode 1\n"
+            "The night market wakes up, and a courier slips through the crowd.\n"
+            "A quiet exchange happens under a broken sign.\n"
+        )
+        doc = self.server.document_service.create_document(
+            project.project_id,
+            "Sample Episode",
+            DocumentType.EPISODE,
+            text,
+        )
+        tags = self.server.tag_service.list_tag_defs(project.project_id)
+        return {
+            "project": dump_json(project),
+            "document": dump_json(doc),
+            "tags_seeded": len(tags),
+        }
+
+    def _reset_debug_storage(self) -> dict[str, Any]:
+        db_path = db.get_db_path()
+        if db_path.exists():
+            db_path.unlink()
+        shutil.rmtree(docstore.DEFAULT_DOCSTORE_PATH, ignore_errors=True)
+        shutil.rmtree(docstore.DEFAULT_EXPORT_PATH, ignore_errors=True)
+        shutil.rmtree(shard_store.DEFAULT_VECTOR_PATH, ignore_errors=True)
+        return {"reset": True}
+
+    def _apply_debug_injections(self, path: str) -> bool:
+        state = self.server.debug_state
+        latency_ms = state.get("force_latency_ms") or 0
+        if isinstance(latency_ms, int) and latency_ms > 0:
+            time.sleep(latency_ms / 1000)
+        error_code = state.get("force_error_code")
+        if error_code:
+            state["force_error_code"] = None
+            try:
+                status = HTTPStatus(int(error_code))
+            except (TypeError, ValueError):
+                status = HTTPStatus.INTERNAL_SERVER_ERROR
+            self._send_app_error(status, ErrorCode.POLICY_VIOLATION, "debug forced error")
+            return False
+        return True
+
+    def _authorize_debug(self) -> bool:
+        settings = self.server.settings
+        token = settings.debug_web_ui_token
+        if not settings.enable_debug_web_ui or not token:
+            self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "찾을 수 없음")
+            return False
+        provided = self.headers.get("X-NF-Debug-Token")
+        if not provided:
+            params = parse_qs(urlparse(self.path).query)
+            provided = params.get("debug_token", [None])[0]
+        if provided == token:
+            return True
+        self._send_app_error(HTTPStatus.UNAUTHORIZED, ErrorCode.POLICY_VIOLATION, "인증되지 않음")
+        return False
+
     def _authorize(self) -> bool:
         token = self.server.token
         if not token:
@@ -953,6 +1255,10 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
         if auth.startswith("Bearer ") and auth.split(" ", 1)[1] == token:
             return True
         if self.headers.get("X-NF-Token") == token:
+            return True
+        params = parse_qs(urlparse(self.path).query)
+        query_token = params.get("token", [None])[0] or params.get("nf_token", [None])[0]
+        if query_token == token:
             return True
         self._send_app_error(HTTPStatus.UNAUTHORIZED, ErrorCode.POLICY_VIOLATION, "인증되지 않음")
         return False

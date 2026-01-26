@@ -1,0 +1,2323 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NF Loopback Debug UI</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap");
+
+      :root {
+        --bg-1: #f5f0e6;
+        --bg-2: #eef7f3;
+        --ink: #1f1a16;
+        --muted: #6d5f55;
+        --accent: #e76f51;
+        --accent-2: #2a9d8f;
+        --accent-3: #f4a261;
+        --panel: #fffaf3;
+        --border: #e2d6c6;
+        --shadow: 0 18px 50px rgba(28, 22, 18, 0.12);
+        --code-bg: #14181b;
+        --code-ink: #f2f1ed;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Space Grotesk", "Noto Sans", sans-serif;
+        color: var(--ink);
+        background: radial-gradient(circle at top left, rgba(231, 111, 81, 0.12), transparent 55%),
+          radial-gradient(circle at 30% 20%, rgba(42, 157, 143, 0.12), transparent 50%),
+          linear-gradient(130deg, var(--bg-1), var(--bg-2));
+        min-height: 100vh;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background-image: linear-gradient(90deg, rgba(0, 0, 0, 0.03) 1px, transparent 1px),
+          linear-gradient(0deg, rgba(0, 0, 0, 0.03) 1px, transparent 1px);
+        background-size: 42px 42px;
+        pointer-events: none;
+        opacity: 0.5;
+      }
+
+      .page {
+        position: relative;
+        padding: 28px clamp(18px, 3vw, 36px) 60px;
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+
+      header.hero {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 22px;
+        align-items: stretch;
+        margin-bottom: 24px;
+      }
+
+      .hero-card {
+        flex: 1 1 320px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 22px;
+        box-shadow: var(--shadow);
+        animation: liftIn 0.6s ease both;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        gap: 8px;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.2em;
+        color: var(--muted);
+      }
+
+      .eyebrow span {
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: rgba(231, 111, 81, 0.12);
+        border: 1px solid rgba(231, 111, 81, 0.35);
+      }
+
+      h1 {
+        margin: 14px 0 8px;
+        font-size: clamp(1.8rem, 3vw, 2.6rem);
+      }
+
+      p.subtle {
+        color: var(--muted);
+        margin: 0;
+        line-height: 1.5;
+      }
+
+      .token-grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .grid {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 18px;
+        box-shadow: var(--shadow);
+        animation: liftIn 0.7s ease both;
+      }
+
+      .panel.wide {
+        grid-column: span 2;
+      }
+
+      @media (max-width: 980px) {
+        .panel.wide {
+          grid-column: span 1;
+        }
+      }
+
+      h2 {
+        margin: 0 0 10px;
+        font-size: 1.1rem;
+      }
+
+      label {
+        display: block;
+        font-size: 0.72rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+
+      input,
+      textarea,
+      select {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 10px 12px;
+        font-family: inherit;
+        font-size: 0.95rem;
+        background: #fff;
+      }
+
+      textarea {
+        min-height: 90px;
+        resize: vertical;
+      }
+
+      .mono {
+        font-family: "JetBrains Mono", "Courier New", monospace;
+      }
+
+      button {
+        border: none;
+        border-radius: 999px;
+        padding: 10px 16px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        cursor: pointer;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        background: var(--accent);
+        color: #fff;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 16px rgba(231, 111, 81, 0.25);
+      }
+
+      button.secondary {
+        background: var(--accent-2);
+      }
+
+      button.ghost {
+        background: transparent;
+        color: var(--ink);
+        border: 1px solid var(--border);
+      }
+
+      .row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      .row > * {
+        flex: 1 1 160px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 10px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(42, 157, 143, 0.12);
+        color: var(--muted);
+        font-size: 0.75rem;
+      }
+
+      .status {
+        margin-top: 10px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: rgba(231, 111, 81, 0.12);
+        border: 1px solid rgba(231, 111, 81, 0.3);
+        font-size: 0.85rem;
+      }
+
+      .codebox {
+        background: var(--code-bg);
+        color: var(--code-ink);
+        border-radius: 14px;
+        padding: 12px;
+        font-size: 0.82rem;
+        overflow-x: auto;
+      }
+
+      .console {
+        max-height: 280px;
+        overflow: auto;
+        display: grid;
+        gap: 8px;
+      }
+
+      .console-line {
+        padding: 8px 10px;
+        border-radius: 10px;
+        background: rgba(0, 0, 0, 0.04);
+        font-size: 0.82rem;
+      }
+
+      .progress-wrap {
+        background: rgba(0, 0, 0, 0.08);
+        border-radius: 999px;
+        overflow: hidden;
+        height: 8px;
+      }
+
+      .progress-bar {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, var(--accent), var(--accent-3));
+        transition: width 0.2s ease;
+      }
+
+      .result-card {
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 12px;
+        background: #fff;
+        display: grid;
+        gap: 6px;
+      }
+
+      .preview {
+        border: 1px dashed var(--border);
+        border-radius: 14px;
+        padding: 12px;
+        background: #fff;
+        min-height: 120px;
+        white-space: pre-wrap;
+      }
+
+      .lint {
+        background: rgba(231, 111, 81, 0.18);
+        border-bottom: 2px solid var(--accent);
+        cursor: help;
+      }
+
+      .log-item {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: #fff;
+        font-size: 0.82rem;
+      }
+
+      .pill.danger {
+        background: rgba(231, 111, 81, 0.15);
+        color: #6d3d2f;
+      }
+
+      .small {
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+
+      @keyframes liftIn {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="hero">
+        <div class="hero-card">
+          <div class="eyebrow">
+            <span>DEV ONLY</span>
+            <span>LOOPBACK ONLY</span>
+          </div>
+          <h1>NF Loopback Debug UI</h1>
+          <p class="subtle">
+            Minimal console for orchestrator, workers, and policy checks. Use only on localhost.
+          </p>
+          <div class="status" id="status-line">Idle.</div>
+        </div>
+        <div class="hero-card token-grid">
+          <div class="stack">
+            <label for="debug-token">Debug token (for /_debug)</label>
+            <input id="debug-token" class="mono" placeholder="NF_DEBUG_WEB_UI_TOKEN">
+          </div>
+          <div class="stack">
+            <label for="api-token">API token (for /projects, /jobs...)</label>
+            <input id="api-token" class="mono" placeholder="NF_ORCHESTRATOR_TOKEN">
+          </div>
+          <div class="row">
+            <button id="save-tokens">Apply</button>
+            <button class="ghost" id="load-config">Load config</button>
+          </div>
+          <pre id="config-output" class="codebox mono">Config not loaded.</pre>
+        </div>
+      </header>
+
+      <main class="grid">
+        <section class="panel wide">
+          <h2>Dashboard</h2>
+          <div class="stack">
+            <div class="row">
+              <button id="status-refresh" class="secondary">Refresh status</button>
+              <button id="config-refresh" class="ghost">Refresh config</button>
+            </div>
+            <div class="row">
+              <div class="pill">Active project: <span id="active-project">none</span></div>
+              <div class="pill">Worker last event: <span id="worker-last-event">none</span></div>
+              <div class="pill">Queued jobs: <span id="queued-count">0</span></div>
+              <div class="pill">Running jobs: <span id="running-count">0</span></div>
+            </div>
+            <pre id="status-output" class="codebox mono">No status yet.</pre>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Projects</h2>
+          <div class="stack">
+            <div class="row">
+              <button id="projects-refresh" class="secondary">Refresh</button>
+              <select id="project-select">
+                <option value="">Select project</option>
+              </select>
+            </div>
+            <div class="stack">
+              <label for="project-name">Create project</label>
+              <input id="project-name" placeholder="Project name">
+            </div>
+            <div class="stack">
+              <label for="project-settings">Settings JSON</label>
+              <textarea id="project-settings" class="mono">{}</textarea>
+            </div>
+            <button id="project-create">Create</button>
+            <pre id="project-output" class="codebox mono">No project data.</pre>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Documents</h2>
+          <div class="stack">
+            <button id="docs-refresh" class="secondary">Refresh</button>
+            <div class="stack">
+              <label for="doc-title">Title</label>
+              <input id="doc-title" placeholder="Episode 1">
+            </div>
+            <div class="stack">
+              <label for="doc-type">Type</label>
+              <select id="doc-type">
+                <option value="EPISODE">EPISODE</option>
+                <option value="SETTING">SETTING</option>
+                <option value="PLOT">PLOT</option>
+                <option value="CHAR">CHAR</option>
+                <option value="NOTE">NOTE</option>
+              </select>
+            </div>
+            <div class="stack">
+              <label for="doc-content">Content</label>
+              <textarea id="doc-content" class="mono"></textarea>
+            </div>
+            <button id="doc-create">Create</button>
+            <pre id="docs-output" class="codebox mono">No documents.</pre>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Tags</h2>
+          <div class="stack">
+            <button id="tags-refresh" class="secondary">Refresh</button>
+            <div class="stack">
+              <label for="tag-path">Tag path</label>
+              <input id="tag-path" placeholder="setting/character/name">
+            </div>
+            <div class="row">
+              <div class="stack">
+                <label for="tag-kind">Kind</label>
+                <select id="tag-kind">
+                  <option value="EXPLICIT">EXPLICIT</option>
+                  <option value="IMPLICIT">IMPLICIT</option>
+                  <option value="USER">USER</option>
+                </select>
+              </div>
+              <div class="stack">
+                <label for="tag-schema">Schema</label>
+                <select id="tag-schema">
+                  <option value="str">str</option>
+                  <option value="int">int</option>
+                  <option value="float">float</option>
+                  <option value="enum">enum</option>
+                  <option value="time">time</option>
+                  <option value="loc">loc</option>
+                  <option value="rel">rel</option>
+                  <option value="bool">bool</option>
+                  <option value="unknown">unknown</option>
+                </select>
+              </div>
+            </div>
+            <div class="stack">
+              <label for="tag-constraints">Constraints JSON</label>
+              <textarea id="tag-constraints" class="mono">{}</textarea>
+            </div>
+            <button id="tag-create">Create tag</button>
+            <pre id="tags-output" class="codebox mono">No tags.</pre>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <h2>Policy settings (project)</h2>
+          <div class="stack">
+            <div class="row">
+              <div class="stack">
+                <label for="policy-project-id">Project ID</label>
+                <input id="policy-project-id" class="mono" placeholder="project_id">
+              </div>
+              <button id="policy-load" class="secondary">Load</button>
+              <button id="policy-apply">Apply</button>
+            </div>
+            <div class="row">
+              <div class="stack">
+                <label for="policy-sync">sync_retrieval_mode (fixed)</label>
+                <input id="policy-sync" class="mono" value="FTS_ONLY" disabled>
+              </div>
+              <div class="stack">
+                <label for="policy-remote">enable_remote_api</label>
+                <select id="policy-remote">
+                  <option value="false">false</option>
+                  <option value="true">true</option>
+                </select>
+              </div>
+              <div class="stack">
+                <label for="policy-local-gen">enable_local_generator</label>
+                <select id="policy-local-gen">
+                  <option value="false">false</option>
+                  <option value="true">true</option>
+                </select>
+              </div>
+            </div>
+            <div class="row">
+              <div class="stack">
+                <label for="policy-explicit">explicit_fact_auto_approve (experimental)</label>
+                <select id="policy-explicit">
+                  <option value="false">false</option>
+                  <option value="true">true</option>
+                </select>
+              </div>
+              <div class="stack">
+                <label for="policy-timeline-doc">timeline_doc_id (optional)</label>
+                <input id="policy-timeline-doc" class="mono" placeholder="timeline_doc_id">
+              </div>
+            </div>
+            <div class="pill danger">Server config still applies; project toggles cannot override disabled server policy.</div>
+            <pre id="policy-output" class="codebox mono">No policy data.</pre>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <h2>Jobs</h2>
+          <div class="stack">
+            <div class="row">
+              <div class="stack">
+                <label for="job-type">Type</label>
+                <select id="job-type">
+                  <option value="INDEX_FTS">INDEX_FTS</option>
+                  <option value="INDEX_VEC">INDEX_VEC</option>
+                  <option value="INGEST">INGEST</option>
+                  <option value="CONSISTENCY">CONSISTENCY</option>
+                  <option value="RETRIEVE_VEC">RETRIEVE_VEC</option>
+                  <option value="SUGGEST">SUGGEST</option>
+                  <option value="PROOFREAD">PROOFREAD</option>
+                  <option value="EXPORT">EXPORT</option>
+                </select>
+              </div>
+              <div class="stack">
+                <label for="job-project">Project ID</label>
+                <input id="job-project" class="mono" placeholder="project_id">
+              </div>
+              <div class="stack">
+                <label for="job-priority">Priority</label>
+                <input id="job-priority" type="number" value="100">
+              </div>
+            </div>
+            <div class="row">
+              <div class="stack">
+                <label for="job-inputs">Inputs JSON</label>
+                <textarea id="job-inputs" class="mono">{}</textarea>
+              </div>
+              <div class="stack">
+                <label for="job-params">Params JSON</label>
+                <textarea id="job-params" class="mono">{}</textarea>
+              </div>
+            </div>
+            <div class="row">
+              <button id="job-submit">Submit</button>
+              <button id="job-poll" class="ghost">Poll</button>
+              <button id="job-cancel" class="ghost">Cancel</button>
+            </div>
+            <pre id="job-output" class="codebox mono">No job submitted.</pre>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <h2>SSE Viewer</h2>
+          <div class="stack">
+            <div class="row">
+              <div class="stack">
+                <label for="sse-job-id">Job ID</label>
+                <input id="sse-job-id" class="mono" placeholder="job_id">
+              </div>
+              <button id="sse-connect">Connect</button>
+              <button id="sse-reconnect" class="ghost">Reconnect</button>
+              <button id="sse-disconnect" class="ghost">Disconnect</button>
+              <button id="sse-copy" class="ghost">Copy payload</button>
+            </div>
+            <div class="row">
+              <div class="stack">
+                <label for="sse-last-id">Last Event ID</label>
+                <input id="sse-last-id" class="mono" placeholder="0">
+              </div>
+            </div>
+            <div class="progress-wrap">
+              <div class="progress-bar" id="sse-progress"></div>
+            </div>
+            <div id="sse-events" class="console"></div>
+            <pre id="sse-payload" class="codebox mono">No payload yet.</pre>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <h2>Retrieval (FTS-only)</h2>
+          <div class="stack">
+            <div class="row">
+              <div class="stack">
+                <label for="retrieval-query">Query</label>
+                <input id="retrieval-query" placeholder="search text">
+              </div>
+              <div class="stack">
+                <label for="retrieval-k">k</label>
+                <input id="retrieval-k" type="number" value="5">
+              </div>
+            </div>
+            <div class="stack">
+              <label for="retrieval-filters">Filters JSON</label>
+              <textarea id="retrieval-filters" class="mono">{}</textarea>
+            </div>
+            <div class="row">
+              <button id="retrieval-run">Run retrieval</button>
+              <button id="retrieval-vector" class="secondary">Vector extend</button>
+              <button id="retrieval-vector-stop" class="ghost">Stop vector stream</button>
+            </div>
+            <div id="retrieval-results" class="stack"></div>
+            <div id="vector-results" class="stack"></div>
+            <div class="stack">
+              <label for="grouping-scope">Grouping scope (doc_id or global)</label>
+              <input id="grouping-scope" class="mono" placeholder="doc_id or global">
+            </div>
+            <div class="row">
+              <div class="stack">
+                <label for="grouping-timeline">timeline_doc_id (optional)</label>
+                <input id="grouping-timeline" class="mono" placeholder="timeline_doc_id">
+              </div>
+              <button id="grouping-time" class="secondary">Create time anchors</button>
+              <button id="grouping-entity" class="secondary">Create entity mentions</button>
+              <button id="grouping-both" class="ghost">Create both</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <h2>Consistency + Whitelist</h2>
+          <div class="stack">
+            <div class="row">
+              <div class="stack">
+                <label for="consistency-doc">input_doc_id</label>
+                <input id="consistency-doc" class="mono" placeholder="doc_id">
+              </div>
+              <div class="stack">
+                <label for="consistency-snapshot">input_snapshot_id</label>
+                <input id="consistency-snapshot" class="mono" placeholder="snapshot_id">
+              </div>
+              <div class="stack">
+                <label for="consistency-schema">schema_ver (optional)</label>
+                <input id="consistency-schema" class="mono" placeholder="schema_ver">
+              </div>
+            </div>
+            <div class="row">
+              <div class="stack">
+                <label for="consistency-range-start">range.start</label>
+                <input id="consistency-range-start" type="number" placeholder="0">
+              </div>
+              <div class="stack">
+                <label for="consistency-range-end">range.end</label>
+                <input id="consistency-range-end" type="number" placeholder="1000">
+              </div>
+              <button id="consistency-submit">Submit CONSISTENCY</button>
+              <button id="consistency-verdicts" class="ghost">Load verdicts</button>
+            </div>
+            <pre id="consistency-output" class="codebox mono">No consistency data.</pre>
+            <div class="row">
+              <div class="stack">
+                <label for="whitelist-claim">Whitelist claim_text</label>
+                <input id="whitelist-claim" placeholder="claim text">
+              </div>
+              <div class="stack">
+                <label for="whitelist-scope">scope</label>
+                <input id="whitelist-scope" placeholder="global or doc_id">
+              </div>
+              <div class="stack">
+                <label for="whitelist-note">note (optional)</label>
+                <input id="whitelist-note" placeholder="note">
+              </div>
+              <button id="whitelist-add" class="secondary">Add whitelist</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <h2>Schema review</h2>
+          <div class="stack">
+            <div class="row">
+              <div class="stack">
+                <label for="facts-status">Status</label>
+                <select id="facts-status">
+                  <option value="">all</option>
+                  <option value="PROPOSED">PROPOSED</option>
+                  <option value="APPROVED">APPROVED</option>
+                  <option value="REJECTED">REJECTED</option>
+                </select>
+              </div>
+              <div class="stack">
+                <label for="facts-layer">Layer</label>
+                <select id="facts-layer">
+                  <option value="">all</option>
+                  <option value="explicit">explicit</option>
+                  <option value="implicit">implicit</option>
+                </select>
+              </div>
+              <div class="stack">
+                <label for="facts-source">Source</label>
+                <select id="facts-source">
+                  <option value="">all</option>
+                  <option value="AUTO">AUTO</option>
+                  <option value="USER">USER</option>
+                </select>
+              </div>
+              <button id="facts-load" class="secondary">Load facts</button>
+            </div>
+            <div class="pill">AUTO facts stay PROPOSED by policy. Use approve/reject to confirm.</div>
+            <div id="facts-list" class="stack"></div>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <h2>Mentions / Time anchors / Timeline events</h2>
+          <div class="stack">
+            <div class="row">
+              <div class="stack">
+                <label for="mention-status">Mention status</label>
+                <select id="mention-status">
+                  <option value="">all</option>
+                  <option value="PROPOSED">PROPOSED</option>
+                  <option value="APPROVED">APPROVED</option>
+                  <option value="REJECTED">REJECTED</option>
+                </select>
+              </div>
+              <div class="stack">
+                <label for="mention-doc">doc_id</label>
+                <input id="mention-doc" class="mono" placeholder="doc_id">
+              </div>
+              <div class="stack">
+                <label for="mention-entity">entity_id</label>
+                <input id="mention-entity" class="mono" placeholder="entity_id">
+              </div>
+              <button id="mentions-load" class="secondary">Load mentions</button>
+            </div>
+            <div id="mentions-list" class="stack"></div>
+            <div class="row">
+              <div class="stack">
+                <label for="anchor-status">Time anchor status</label>
+                <select id="anchor-status">
+                  <option value="">all</option>
+                  <option value="PROPOSED">PROPOSED</option>
+                  <option value="APPROVED">APPROVED</option>
+                  <option value="REJECTED">REJECTED</option>
+                </select>
+              </div>
+              <div class="stack">
+                <label for="anchor-doc">doc_id</label>
+                <input id="anchor-doc" class="mono" placeholder="doc_id">
+              </div>
+              <div class="stack">
+                <label for="anchor-time">time_key</label>
+                <input id="anchor-time" class="mono" placeholder="time_key">
+              </div>
+              <div class="stack">
+                <label for="anchor-idx">timeline_idx</label>
+                <input id="anchor-idx" type="number" placeholder="1">
+              </div>
+              <button id="anchors-load" class="secondary">Load anchors</button>
+            </div>
+            <div id="anchors-list" class="stack"></div>
+            <div class="row">
+              <div class="stack">
+                <label for="timeline-status">Timeline event status</label>
+                <select id="timeline-status">
+                  <option value="">all</option>
+                  <option value="PROPOSED">PROPOSED</option>
+                  <option value="APPROVED">APPROVED</option>
+                  <option value="REJECTED">REJECTED</option>
+                </select>
+              </div>
+              <div class="stack">
+                <label for="timeline-doc">source_doc_id</label>
+                <input id="timeline-doc" class="mono" placeholder="doc_id">
+              </div>
+              <button id="timeline-load" class="secondary">Load events</button>
+            </div>
+            <div id="timeline-list" class="stack"></div>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <h2>Suggest</h2>
+          <div class="stack">
+            <div class="row">
+              <div class="stack">
+                <label for="suggest-mode">Mode</label>
+                <select id="suggest-mode">
+                  <option value="LOCAL_RULE">LOCAL_RULE</option>
+                  <option value="API">API</option>
+                  <option value="LOCAL_GEN">LOCAL_GEN</option>
+                </select>
+              </div>
+              <div class="stack">
+                <label for="suggest-include">Include citations</label>
+                <select id="suggest-include">
+                  <option value="false">false</option>
+                  <option value="true">true</option>
+                </select>
+              </div>
+            </div>
+            <div class="stack">
+              <label for="suggest-claim">Claim text</label>
+              <textarea id="suggest-claim" class="mono"></textarea>
+            </div>
+            <div class="row">
+              <div class="stack">
+                <label for="suggest-doc">range.doc_id</label>
+                <input id="suggest-doc" class="mono" placeholder="doc_id">
+              </div>
+              <div class="stack">
+                <label for="suggest-snapshot">range.snapshot_id</label>
+                <input id="suggest-snapshot" class="mono" placeholder="snapshot_id">
+              </div>
+              <div class="stack">
+                <label for="suggest-start">range.start</label>
+                <input id="suggest-start" type="number" placeholder="0">
+              </div>
+              <div class="stack">
+                <label for="suggest-end">range.end</label>
+                <input id="suggest-end" type="number" placeholder="1000">
+              </div>
+              <button id="suggest-submit">Submit SUGGEST</button>
+            </div>
+            <pre id="suggest-output" class="codebox mono">No suggestion.</pre>
+            <div id="suggest-citations" class="stack"></div>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <h2>Proofread + Layout</h2>
+          <div class="stack">
+            <div class="row">
+              <div class="stack">
+                <label for="layout-letter">Letter spacing</label>
+                <input id="layout-letter" type="range" min="-0.02" max="0.2" step="0.005" value="0">
+              </div>
+              <div class="stack">
+                <label for="layout-line">Line height</label>
+                <input id="layout-line" type="range" min="1.0" max="2.2" step="0.05" value="1.5">
+              </div>
+            </div>
+            <div class="stack">
+              <label for="layout-text">Preview text</label>
+              <textarea id="layout-text" class="mono">Paste text here for layout + lint preview.</textarea>
+            </div>
+            <div id="layout-preview" class="preview"></div>
+            <div class="row">
+              <div class="stack">
+                <label for="proofread-doc">doc_id</label>
+                <input id="proofread-doc" class="mono" placeholder="doc_id">
+              </div>
+              <div class="stack">
+                <label for="proofread-snapshot">snapshot_id</label>
+                <input id="proofread-snapshot" class="mono" placeholder="snapshot_id">
+              </div>
+              <button id="proofread-submit">Submit PROOFREAD</button>
+            </div>
+            <div id="lint-list" class="stack"></div>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <h2>Export</h2>
+          <div class="stack">
+            <div class="row">
+              <div class="stack">
+                <label for="export-doc">range.doc_id</label>
+                <input id="export-doc" class="mono" placeholder="doc_id">
+              </div>
+              <div class="stack">
+                <label for="export-snapshot">range.snapshot_id (optional)</label>
+                <input id="export-snapshot" class="mono" placeholder="snapshot_id">
+              </div>
+              <div class="stack">
+                <label for="export-format">format</label>
+                <select id="export-format">
+                  <option value="txt">txt</option>
+                  <option value="docx">docx</option>
+                </select>
+              </div>
+              <div class="stack">
+                <label for="export-meta">include_meta</label>
+                <select id="export-meta">
+                  <option value="false">false</option>
+                  <option value="true">true</option>
+                </select>
+              </div>
+              <button id="export-submit">Submit EXPORT</button>
+            </div>
+            <pre id="export-output" class="codebox mono">No export yet.</pre>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <h2>Scenario presets</h2>
+          <div class="stack">
+            <div class="row">
+              <button id="preset-ingest" class="secondary">INGEST -> INDEX_FTS -> CONSISTENCY</button>
+              <button id="preset-retrieval" class="secondary">FTS query -> RETRIEVE_VEC</button>
+            </div>
+            <pre id="preset-output" class="codebox mono">No preset executed.</pre>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <h2>Request log</h2>
+          <div class="stack">
+            <div class="row">
+              <button id="log-copy-curl" class="secondary">Copy last cURL</button>
+              <button id="log-download" class="ghost">Download log</button>
+              <button id="log-clear" class="ghost">Clear</button>
+            </div>
+            <div id="log-list" class="stack"></div>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <h2>Debug toggles, fixtures, reset</h2>
+          <div class="stack">
+            <div class="row">
+              <div class="stack">
+                <label for="toggle-error">Force error code (one-shot)</label>
+                <input id="toggle-error" class="mono" placeholder="e.g. 500">
+              </div>
+              <div class="stack">
+                <label for="toggle-latency">Force latency ms</label>
+                <input id="toggle-latency" type="number" value="0">
+              </div>
+              <div class="stack">
+                <label for="toggle-heavy">Disable heavy job limit</label>
+                <select id="toggle-heavy">
+                  <option value="false">false</option>
+                  <option value="true">true</option>
+                </select>
+              </div>
+            </div>
+            <div class="row">
+              <div class="stack">
+                <label for="toggle-sse-drop">SSE drop after N events</label>
+                <input id="toggle-sse-drop" type="number" value="0">
+              </div>
+              <div class="stack">
+                <label for="toggle-sse-frag">SSE fragment delay ms</label>
+                <input id="toggle-sse-frag" type="number" value="0">
+              </div>
+              <div class="stack">
+                <label for="toggle-max-shards">max_loaded_shards (restart worker)</label>
+                <input id="toggle-max-shards" type="number" value="2">
+              </div>
+              <div class="stack">
+                <label for="toggle-max-ram">max_ram_mb (restart worker)</label>
+                <input id="toggle-max-ram" type="number" value="2048">
+              </div>
+            </div>
+            <div class="row">
+              <button id="toggles-apply" class="secondary">Apply toggles</button>
+              <button id="toggles-refresh" class="ghost">Reload toggles</button>
+            </div>
+            <div class="row">
+              <div class="stack">
+                <label for="fixture-project">Fixture project name</label>
+                <input id="fixture-project" placeholder="Sample Project">
+              </div>
+              <button id="fixture-run" class="secondary">Seed fixtures</button>
+            </div>
+            <div class="row">
+              <div class="stack">
+                <label for="reset-confirm">Reset confirm (type RESET)</label>
+                <input id="reset-confirm" class="mono" placeholder="RESET">
+              </div>
+              <button id="reset-run">Reset storage</button>
+            </div>
+            <pre id="debug-output" class="codebox mono">No debug actions yet.</pre>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <h2>Console</h2>
+          <div id="console-log" class="console"></div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const state = {
+        debugToken: "",
+        apiToken: "",
+        activeProjectId: "",
+        lastJobId: "",
+        lastEventId: 0,
+        sse: null,
+        lastPayload: null,
+        vectorSse: null,
+        suggestSse: null,
+        proofreadSse: null,
+        exportSse: null,
+        lintItems: [],
+        requestLog: [],
+        lastRequest: null,
+        projectSettings: {},
+        serverConfig: null,
+      };
+
+      const el = (id) => document.getElementById(id);
+
+      const statusLine = el("status-line");
+      const debugTokenInput = el("debug-token");
+      const apiTokenInput = el("api-token");
+      const configOutput = el("config-output");
+      const consoleLog = el("console-log");
+
+      function setStatus(text) {
+        statusLine.textContent = text;
+      }
+
+      function logLine(text) {
+        const line = document.createElement("div");
+        line.className = "console-line";
+        line.textContent = text;
+        consoleLog.prepend(line);
+      }
+
+      function logJSON(label, data) {
+        logLine(label + ": " + JSON.stringify(data));
+      }
+
+      function recordRequest(entry) {
+        state.lastRequest = entry;
+        state.requestLog.unshift(entry);
+        if (state.requestLog.length > 20) {
+          state.requestLog.pop();
+        }
+        renderRequestLog();
+      }
+
+      function buildCurl(entry) {
+        const origin = window.location.origin || "http://127.0.0.1:8080";
+        const parts = ["curl -s", "-X", entry.method];
+        Object.entries(entry.headers || {}).forEach(([key, value]) => {
+          parts.push("-H");
+          parts.push(`'${key}: ${value}'`);
+        });
+        if (entry.bodyText) {
+          const body = entry.bodyText.replace(/'/g, "'\\''");
+          parts.push("-d");
+          parts.push(`'${body}'`);
+        }
+        parts.push(origin + entry.path);
+        return parts.join(" ");
+      }
+
+      function renderRequestLog() {
+        const logList = el("log-list");
+        if (!logList) {
+          return;
+        }
+        logList.innerHTML = "";
+        state.requestLog.slice(0, 8).forEach((entry) => {
+          const card = document.createElement("div");
+          card.className = "log-item";
+          const headline = document.createElement("div");
+          headline.textContent =
+            entry.method + " " + entry.path + " (" + entry.status + ")";
+          const meta = document.createElement("div");
+          meta.className = "small mono";
+          meta.textContent = entry.ts;
+          card.appendChild(headline);
+          card.appendChild(meta);
+          logList.appendChild(card);
+        });
+      }
+
+      function downloadLog() {
+        const blob = new Blob([JSON.stringify(state.requestLog, null, 2)], {
+          type: "application/json",
+        });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "nf_debug_requests.json";
+        link.click();
+        URL.revokeObjectURL(url);
+      }
+
+      function readJSON(text, fallback) {
+        if (!text || !text.trim()) {
+          return fallback;
+        }
+        try {
+          return JSON.parse(text);
+        } catch (err) {
+          throw new Error("Invalid JSON: " + err.message);
+        }
+      }
+
+      function escapeHtml(value) {
+        return value
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function saveTokens() {
+        state.debugToken = debugTokenInput.value.trim();
+        state.apiToken = apiTokenInput.value.trim();
+        localStorage.setItem("nf_debug_token", state.debugToken);
+        localStorage.setItem("nf_api_token", state.apiToken);
+        setStatus("Tokens updated.");
+      }
+
+      function loadTokens() {
+        const debugToken = new URLSearchParams(window.location.search).get("debug_token");
+        const savedDebug = localStorage.getItem("nf_debug_token") || "";
+        const savedApi = localStorage.getItem("nf_api_token") || "";
+        state.debugToken = debugToken || savedDebug;
+        state.apiToken = savedApi;
+        debugTokenInput.value = state.debugToken;
+        apiTokenInput.value = state.apiToken;
+      }
+
+      async function requestJSON(path, options = {}) {
+        const opts = { method: "GET", ...options };
+        const headers = opts.headers || {};
+        let bodyText = "";
+        if (opts.auth === "debug" && state.debugToken) {
+          headers["X-NF-Debug-Token"] = state.debugToken;
+        }
+        if (opts.auth !== "debug" && state.apiToken) {
+          headers["X-NF-Token"] = state.apiToken;
+        }
+        if (opts.body) {
+          headers["Content-Type"] = "application/json";
+          bodyText = JSON.stringify(opts.body);
+          opts.body = bodyText;
+        }
+        opts.headers = headers;
+
+        const res = await fetch(path, opts);
+        const contentType = res.headers.get("Content-Type") || "";
+        let data = null;
+        if (contentType.includes("application/json")) {
+          data = await res.json();
+        } else {
+          data = await res.text();
+        }
+        recordRequest({
+          ts: new Date().toISOString(),
+          method: opts.method,
+          path: path,
+          headers: headers,
+          bodyText: bodyText,
+          status: res.status,
+          ok: res.ok,
+          response: data,
+        });
+        if (!res.ok) {
+          logLine("Error " + res.status + " on " + path);
+          logJSON("payload", data);
+          throw new Error("Request failed");
+        }
+        return data;
+      }
+
+      async function loadConfig() {
+        try {
+          const data = await requestJSON("/_debug/config", { auth: "debug" });
+          state.serverConfig = data;
+          if (data.settings && data.settings.sync_retrieval_mode) {
+            el("policy-sync").value = data.settings.sync_retrieval_mode;
+          }
+          configOutput.textContent = JSON.stringify(data, null, 2);
+          logLine("Loaded /_debug/config");
+        } catch (err) {
+          configOutput.textContent = "Failed to load config.";
+          setStatus("Config load failed.");
+        }
+      }
+
+      async function refreshStatus() {
+        try {
+          const data = await requestJSON("/_debug/status", { auth: "debug" });
+          el("status-output").textContent = JSON.stringify(data, null, 2);
+          el("active-project").textContent = state.activeProjectId || "none";
+          const lastEvent = data.worker_last_event;
+          el("worker-last-event").textContent = lastEvent
+            ? lastEvent.ts + " " + lastEvent.message
+            : "none";
+          const counts = data.job_status_counts || {};
+          el("queued-count").textContent = counts.QUEUED || 0;
+          el("running-count").textContent = counts.RUNNING || 0;
+          logLine("Status refreshed.");
+        } catch (err) {
+          setStatus("Status refresh failed.");
+        }
+      }
+
+      async function refreshProjects() {
+        const data = await requestJSON("/projects");
+        const projects = data.projects || [];
+        const select = el("project-select");
+        select.innerHTML = '<option value="">Select project</option>';
+        projects.forEach((proj) => {
+          const option = document.createElement("option");
+          option.value = proj.project_id;
+          option.textContent = proj.name + " (" + proj.project_id + ")";
+          select.appendChild(option);
+        });
+        el("project-output").textContent = JSON.stringify(data, null, 2);
+        logLine("Projects refreshed.");
+      }
+
+      async function createProject() {
+        const name = el("project-name").value.trim();
+        const settings = readJSON(el("project-settings").value, {});
+        const data = await requestJSON("/projects", {
+          method: "POST",
+          body: { name, settings },
+        });
+        el("project-output").textContent = JSON.stringify(data, null, 2);
+        state.activeProjectId = data.project.project_id;
+        el("job-project").value = state.activeProjectId;
+        el("policy-project-id").value = state.activeProjectId;
+        el("active-project").textContent = state.activeProjectId;
+        await refreshProjects();
+      }
+
+      async function refreshDocs() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const data = await requestJSON(`/projects/${state.activeProjectId}/documents`);
+        el("docs-output").textContent = JSON.stringify(data, null, 2);
+        logLine("Documents refreshed.");
+      }
+
+      async function createDoc() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const title = el("doc-title").value.trim();
+        const docType = el("doc-type").value;
+        const content = el("doc-content").value || "";
+        const data = await requestJSON(`/projects/${state.activeProjectId}/documents`, {
+          method: "POST",
+          body: { title, doc_type: docType, content },
+        });
+        el("docs-output").textContent = JSON.stringify(data, null, 2);
+        logLine("Document created.");
+      }
+
+      async function refreshTags() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const data = await requestJSON(`/projects/${state.activeProjectId}/tags`);
+        el("tags-output").textContent = JSON.stringify(data, null, 2);
+        logLine("Tags refreshed.");
+      }
+
+      async function createTag() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const tagPath = el("tag-path").value.trim();
+        const kind = el("tag-kind").value;
+        const schemaType = el("tag-schema").value;
+        const constraints = readJSON(el("tag-constraints").value, {});
+        const data = await requestJSON(`/projects/${state.activeProjectId}/tags`, {
+          method: "POST",
+          body: { tag_path: tagPath, kind, schema_type: schemaType, constraints },
+        });
+        el("tags-output").textContent = JSON.stringify(data, null, 2);
+        logLine("Tag created.");
+      }
+
+      async function loadPolicySettings() {
+        const projectId = el("policy-project-id").value.trim() || state.activeProjectId;
+        if (!projectId) {
+          throw new Error("Provide project id.");
+        }
+        const data = await requestJSON(`/projects/${projectId}`);
+        const settings = data.project.settings || {};
+        state.projectSettings = settings;
+        el("policy-project-id").value = projectId;
+        el("policy-remote").value = settings.enable_remote_api ? "true" : "false";
+        el("policy-local-gen").value = settings.enable_local_generator ? "true" : "false";
+        el("policy-explicit").value = settings.explicit_fact_auto_approve ? "true" : "false";
+        el("policy-timeline-doc").value = settings.timeline_doc_id || "";
+        el("policy-output").textContent = JSON.stringify(data.project, null, 2);
+        logLine("Policy settings loaded.");
+      }
+
+      async function applyPolicySettings() {
+        const projectId = el("policy-project-id").value.trim() || state.activeProjectId;
+        if (!projectId) {
+          throw new Error("Provide project id.");
+        }
+        const settings = { ...state.projectSettings };
+        settings.enable_remote_api = el("policy-remote").value === "true";
+        settings.enable_local_generator = el("policy-local-gen").value === "true";
+        settings.explicit_fact_auto_approve = el("policy-explicit").value === "true";
+        const timelineDoc = el("policy-timeline-doc").value.trim();
+        if (timelineDoc) {
+          settings.timeline_doc_id = timelineDoc;
+        } else {
+          delete settings.timeline_doc_id;
+        }
+        const data = await requestJSON(`/projects/${projectId}`, {
+          method: "PATCH",
+          body: { settings },
+        });
+        state.projectSettings = data.project.settings || {};
+        el("policy-output").textContent = JSON.stringify(data.project, null, 2);
+        logLine("Policy settings applied.");
+      }
+
+      async function submitJob() {
+        const type = el("job-type").value;
+        const projectId = el("job-project").value.trim();
+        const priority = parseInt(el("job-priority").value, 10) || 100;
+        const inputs = readJSON(el("job-inputs").value, {});
+        const params = readJSON(el("job-params").value, {});
+        const data = await requestJSON("/jobs", {
+          method: "POST",
+          body: { type, project_id: projectId, priority, inputs, params },
+        });
+        state.lastJobId = data.job.job_id;
+        el("job-output").textContent = JSON.stringify(data, null, 2);
+        el("sse-job-id").value = state.lastJobId;
+        logLine("Job submitted: " + state.lastJobId);
+      }
+
+      async function pollJob() {
+        const jobId = el("sse-job-id").value.trim() || state.lastJobId;
+        if (!jobId) {
+          throw new Error("Provide job id.");
+        }
+        const data = await requestJSON(`/jobs/${jobId}`);
+        el("job-output").textContent = JSON.stringify(data, null, 2);
+        logLine("Job polled: " + jobId);
+      }
+
+      async function cancelJob() {
+        const jobId = el("sse-job-id").value.trim() || state.lastJobId;
+        if (!jobId) {
+          throw new Error("Provide job id.");
+        }
+        const data = await requestJSON(`/jobs/${jobId}/cancel`, { method: "POST" });
+        el("job-output").textContent = JSON.stringify(data, null, 2);
+        logLine("Job canceled: " + jobId);
+      }
+
+      function connectSSE(afterId) {
+        const jobId = el("sse-job-id").value.trim();
+        if (!jobId) {
+          throw new Error("Provide job id.");
+        }
+        disconnectSSE();
+        const params = new URLSearchParams();
+        if (state.apiToken) {
+          params.set("token", state.apiToken);
+        }
+        if (afterId) {
+          params.set("after", String(afterId));
+        }
+        const url = `/jobs/${jobId}/events` + (params.toString() ? "?" + params.toString() : "");
+        const es = new EventSource(url);
+        state.sse = es;
+        el("sse-events").innerHTML = "";
+        es.onmessage = (evt) => {
+          const data = JSON.parse(evt.data);
+          if (evt.lastEventId) {
+            state.lastEventId = parseInt(evt.lastEventId, 10) || 0;
+            el("sse-last-id").value = state.lastEventId;
+          }
+          const line = document.createElement("div");
+          line.className = "console-line";
+          line.textContent = data.ts + " [" + data.level + "] " + data.message;
+          el("sse-events").prepend(line);
+          if (typeof data.progress === "number") {
+            el("sse-progress").style.width = Math.round(data.progress * 100) + "%";
+          }
+          state.lastPayload = data.payload || null;
+          if (data.payload) {
+            el("sse-payload").textContent = JSON.stringify(data.payload, null, 2);
+            logJSON("event.payload", data.payload);
+          }
+        };
+        es.onerror = () => {
+          logLine("SSE error or closed.");
+        };
+        logLine("SSE connected.");
+      }
+
+      function disconnectSSE() {
+        if (state.sse) {
+          state.sse.close();
+          state.sse = null;
+          logLine("SSE disconnected.");
+        }
+      }
+
+      function reconnectSSE() {
+        const lastIdRaw = el("sse-last-id").value.trim();
+        const afterId = parseInt(lastIdRaw, 10) || state.lastEventId || 0;
+        connectSSE(afterId);
+      }
+
+      async function runRetrieval() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const query = el("retrieval-query").value.trim();
+        const filters = readJSON(el("retrieval-filters").value, {});
+        const k = parseInt(el("retrieval-k").value, 10) || 5;
+        const data = await requestJSON("/query/retrieval", {
+          method: "POST",
+          body: { project_id: state.activeProjectId, query, filters, k },
+        });
+        const resultsEl = el("retrieval-results");
+        resultsEl.innerHTML = "";
+        (data.results || []).forEach((res) => {
+          const card = document.createElement("div");
+          card.className = "result-card";
+          const title = document.createElement("div");
+          title.textContent = res.section_path || res.doc_id || "Result";
+          const snippet = document.createElement("div");
+          snippet.textContent = res.snippet || "";
+          const meta = document.createElement("div");
+          meta.className = "small mono";
+          meta.textContent = JSON.stringify(res.evidence || {});
+          card.appendChild(title);
+          card.appendChild(snippet);
+          card.appendChild(meta);
+          resultsEl.appendChild(card);
+        });
+        logLine("Retrieval done: " + (data.results || []).length + " results.");
+      }
+
+      function stopVectorStream() {
+        if (state.vectorSse) {
+          state.vectorSse.close();
+          state.vectorSse = null;
+          logLine("Vector stream stopped.");
+        }
+      }
+
+      function connectVectorStream(jobId) {
+        stopVectorStream();
+        const params = new URLSearchParams();
+        if (state.apiToken) {
+          params.set("token", state.apiToken);
+        }
+        const url = `/jobs/${jobId}/events` + (params.toString() ? "?" + params.toString() : "");
+        const es = new EventSource(url);
+        state.vectorSse = es;
+        const resultsEl = el("vector-results");
+        resultsEl.innerHTML = "";
+        es.onmessage = (evt) => {
+          const data = JSON.parse(evt.data);
+          const payload = data.payload || {};
+          const results = payload.results || [];
+          results.forEach((res) => {
+            const card = document.createElement("div");
+            card.className = "result-card";
+            const title = document.createElement("div");
+            title.textContent = res.section_path || res.doc_id || "Vector";
+            const snippet = document.createElement("div");
+            snippet.textContent = res.snippet || "";
+            const meta = document.createElement("div");
+            meta.className = "small mono";
+            meta.textContent = JSON.stringify(res.evidence || {});
+            card.appendChild(title);
+            card.appendChild(snippet);
+            card.appendChild(meta);
+            resultsEl.appendChild(card);
+          });
+        };
+        es.onerror = () => {
+          logLine("Vector stream error or closed.");
+        };
+      }
+
+      async function runVectorRetrieval() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const query = el("retrieval-query").value.trim();
+        const filters = readJSON(el("retrieval-filters").value, {});
+        const k = parseInt(el("retrieval-k").value, 10) || 5;
+        const data = await requestJSON("/jobs", {
+          method: "POST",
+          body: {
+            type: "RETRIEVE_VEC",
+            project_id: state.activeProjectId,
+            inputs: { query, filters, k },
+            params: {},
+          },
+        });
+        state.lastJobId = data.job.job_id;
+        el("sse-job-id").value = state.lastJobId;
+        connectVectorStream(state.lastJobId);
+        logLine("Vector retrieval job: " + state.lastJobId);
+      }
+
+      async function submitGrouping(mode) {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const scopeRaw = el("grouping-scope").value.trim();
+        const scope = scopeRaw || "global";
+        const timelineDoc = el("grouping-timeline").value.trim();
+        const grouping = {
+          entity_mentions: mode === "entity" || mode === "both",
+          time_anchors: mode === "time" || mode === "both",
+        };
+        if (timelineDoc) {
+          grouping.timeline_doc_id = timelineDoc;
+        }
+        const data = await requestJSON("/jobs", {
+          method: "POST",
+          body: {
+            type: "INDEX_FTS",
+            project_id: state.activeProjectId,
+            inputs: { scope },
+            params: { grouping },
+          },
+        });
+        state.lastJobId = data.job.job_id;
+        el("sse-job-id").value = state.lastJobId;
+        logLine("Grouping job: " + state.lastJobId);
+      }
+
+      async function submitConsistency() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const inputDocId = el("consistency-doc").value.trim();
+        const inputSnapshotId = el("consistency-snapshot").value.trim();
+        const schemaVer = el("consistency-schema").value.trim();
+        const rangeStartRaw = el("consistency-range-start").value;
+        const rangeEndRaw = el("consistency-range-end").value;
+        const range = {};
+        if (rangeStartRaw !== "") {
+          range.start = parseInt(rangeStartRaw, 10);
+        }
+        if (rangeEndRaw !== "") {
+          range.end = parseInt(rangeEndRaw, 10);
+        }
+        const inputs = {
+          input_doc_id: inputDocId,
+          input_snapshot_id: inputSnapshotId,
+          range: range,
+        };
+        if (schemaVer) {
+          inputs.schema_ver = schemaVer;
+        }
+        const data = await requestJSON("/jobs", {
+          method: "POST",
+          body: {
+            type: "CONSISTENCY",
+            project_id: state.activeProjectId,
+            inputs: inputs,
+            params: {},
+          },
+        });
+        state.lastJobId = data.job.job_id;
+        el("sse-job-id").value = state.lastJobId;
+        el("consistency-output").textContent = JSON.stringify(data, null, 2);
+        logLine("Consistency job: " + state.lastJobId);
+      }
+
+      async function loadVerdicts() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const inputDocId = el("consistency-doc").value.trim();
+        const data = await requestJSON("/query/verdicts", {
+          method: "POST",
+          body: { project_id: state.activeProjectId, input_doc_id: inputDocId || null },
+        });
+        el("consistency-output").textContent = JSON.stringify(data, null, 2);
+        logLine("Verdicts loaded.");
+      }
+
+      async function addWhitelist() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const claimText = el("whitelist-claim").value.trim();
+        const scope = el("whitelist-scope").value.trim();
+        const note = el("whitelist-note").value.trim();
+        const data = await requestJSON(`/projects/${state.activeProjectId}/whitelist`, {
+          method: "POST",
+          body: { claim_text: claimText, scope, note: note || null },
+        });
+        el("consistency-output").textContent = JSON.stringify(data, null, 2);
+        logLine("Whitelist updated.");
+      }
+
+      function renderFactList(facts) {
+        const list = el("facts-list");
+        list.innerHTML = "";
+        facts.forEach((fact) => {
+          const card = document.createElement("div");
+          card.className = "result-card";
+          const title = document.createElement("div");
+          title.textContent = fact.tag_path + " = " + JSON.stringify(fact.value);
+          const meta = document.createElement("div");
+          meta.className = "small mono";
+          meta.textContent =
+            "fact_id=" +
+            fact.fact_id +
+            " status=" +
+            fact.status +
+            " source=" +
+            fact.source;
+          const actions = document.createElement("div");
+          actions.className = "row";
+          const approveBtn = document.createElement("button");
+          approveBtn.textContent = "Approve";
+          approveBtn.className = "secondary";
+          approveBtn.addEventListener("click", () => updateFactStatus(fact.fact_id, "APPROVED"));
+          const rejectBtn = document.createElement("button");
+          rejectBtn.textContent = "Reject";
+          rejectBtn.className = "ghost";
+          rejectBtn.addEventListener("click", () => updateFactStatus(fact.fact_id, "REJECTED"));
+          const evidenceBtn = document.createElement("button");
+          evidenceBtn.textContent = "Evidence";
+          evidenceBtn.className = "ghost";
+          evidenceBtn.addEventListener("click", () => fetchEvidence(fact.evidence_eid));
+          actions.appendChild(approveBtn);
+          actions.appendChild(rejectBtn);
+          actions.appendChild(evidenceBtn);
+          card.appendChild(title);
+          card.appendChild(meta);
+          card.appendChild(actions);
+          list.appendChild(card);
+        });
+      }
+
+      async function loadFacts() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const status = el("facts-status").value;
+        const layer = el("facts-layer").value;
+        const source = el("facts-source").value;
+        const params = new URLSearchParams();
+        if (status) params.set("status", status);
+        if (layer) params.set("layer", layer);
+        if (source) params.set("source", source);
+        const query = params.toString() ? "?" + params.toString() : "";
+        const data = await requestJSON(`/projects/${state.activeProjectId}/schema/facts${query}`);
+        renderFactList(data.facts || []);
+        logLine("Facts loaded.");
+      }
+
+      async function updateFactStatus(factId, status) {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        await requestJSON(`/projects/${state.activeProjectId}/schema/facts/${factId}`, {
+          method: "PATCH",
+          body: { status },
+        });
+        loadFacts().catch((err) => setStatus(err.message));
+      }
+
+      async function fetchEvidence(eid) {
+        if (!eid) {
+          return;
+        }
+        const data = await requestJSON(`/query/evidence/${eid}`);
+        logJSON("evidence", data);
+      }
+
+      function renderMentionList(items, targetId, updateFn) {
+        const list = el(targetId);
+        list.innerHTML = "";
+        items.forEach((item) => {
+          const card = document.createElement("div");
+          card.className = "result-card";
+          const title = document.createElement("div");
+          title.textContent = item.doc_id + " " + item.span_start + "-" + item.span_end;
+          const meta = document.createElement("div");
+          meta.className = "small mono";
+          meta.textContent =
+            "id=" + (item.mention_id || item.anchor_id || item.timeline_event_id) + " status=" + item.status;
+          const actions = document.createElement("div");
+          actions.className = "row";
+          const approveBtn = document.createElement("button");
+          approveBtn.textContent = "Approve";
+          approveBtn.className = "secondary";
+          approveBtn.addEventListener("click", () => updateFn(item, "APPROVED"));
+          const rejectBtn = document.createElement("button");
+          rejectBtn.textContent = "Reject";
+          rejectBtn.className = "ghost";
+          rejectBtn.addEventListener("click", () => updateFn(item, "REJECTED"));
+          actions.appendChild(approveBtn);
+          actions.appendChild(rejectBtn);
+          card.appendChild(title);
+          card.appendChild(meta);
+          card.appendChild(actions);
+          list.appendChild(card);
+        });
+      }
+
+      async function loadMentions() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const status = el("mention-status").value;
+        const docId = el("mention-doc").value.trim();
+        const entityId = el("mention-entity").value.trim();
+        const params = new URLSearchParams();
+        if (status) params.set("status", status);
+        if (docId) params.set("doc_id", docId);
+        if (entityId) params.set("entity_id", entityId);
+        const query = params.toString() ? "?" + params.toString() : "";
+        const data = await requestJSON(`/projects/${state.activeProjectId}/entity-mentions${query}`);
+        renderMentionList(data.mentions || [], "mentions-list", updateMentionStatus);
+      }
+
+      async function updateMentionStatus(item, status) {
+        await requestJSON(`/projects/${state.activeProjectId}/entity-mentions/${item.mention_id}`, {
+          method: "PATCH",
+          body: { status },
+        });
+        loadMentions().catch((err) => setStatus(err.message));
+      }
+
+      async function loadAnchors() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const status = el("anchor-status").value;
+        const docId = el("anchor-doc").value.trim();
+        const timeKey = el("anchor-time").value.trim();
+        const timelineIdxRaw = el("anchor-idx").value;
+        const params = new URLSearchParams();
+        if (status) params.set("status", status);
+        if (docId) params.set("doc_id", docId);
+        if (timeKey) params.set("time_key", timeKey);
+        if (timelineIdxRaw !== "") params.set("timeline_idx", timelineIdxRaw);
+        const query = params.toString() ? "?" + params.toString() : "";
+        const data = await requestJSON(`/projects/${state.activeProjectId}/time-anchors${query}`);
+        renderMentionList(data.anchors || [], "anchors-list", updateAnchorStatus);
+      }
+
+      async function updateAnchorStatus(item, status) {
+        await requestJSON(`/projects/${state.activeProjectId}/time-anchors/${item.anchor_id}`, {
+          method: "PATCH",
+          body: { status },
+        });
+        loadAnchors().catch((err) => setStatus(err.message));
+      }
+
+      async function loadTimelineEvents() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const status = el("timeline-status").value;
+        const docId = el("timeline-doc").value.trim();
+        const params = new URLSearchParams();
+        if (status) params.set("status", status);
+        if (docId) params.set("source_doc_id", docId);
+        const query = params.toString() ? "?" + params.toString() : "";
+        const data = await requestJSON(`/projects/${state.activeProjectId}/timeline-events${query}`);
+        renderMentionList(data.events || [], "timeline-list", updateTimelineStatus);
+      }
+
+      async function updateTimelineStatus(item, status) {
+        await requestJSON(`/projects/${state.activeProjectId}/timeline-events/${item.timeline_event_id}`, {
+          method: "PATCH",
+          body: { status },
+        });
+        loadTimelineEvents().catch((err) => setStatus(err.message));
+      }
+
+      function stopSuggestStream() {
+        if (state.suggestSse) {
+          state.suggestSse.close();
+          state.suggestSse = null;
+        }
+      }
+
+      function connectSuggestStream(jobId) {
+        stopSuggestStream();
+        const params = new URLSearchParams();
+        if (state.apiToken) {
+          params.set("token", state.apiToken);
+        }
+        const url = `/jobs/${jobId}/events` + (params.toString() ? "?" + params.toString() : "");
+        const es = new EventSource(url);
+        state.suggestSse = es;
+        es.onmessage = (evt) => {
+          const data = JSON.parse(evt.data);
+          const payload = data.payload || {};
+          if (payload.text) {
+            el("suggest-output").textContent = payload.text;
+          }
+          const citations = payload.citations || [];
+          const list = el("suggest-citations");
+          list.innerHTML = "";
+          citations.forEach((c) => {
+            const card = document.createElement("div");
+            card.className = "result-card";
+            card.textContent = c.tag_path + " " + c.section_path + " " + c.snippet_text;
+            list.appendChild(card);
+          });
+        };
+        es.onerror = () => {
+          logLine("Suggest stream error or closed.");
+        };
+      }
+
+      async function submitSuggest() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const mode = el("suggest-mode").value;
+        const includeCitations = el("suggest-include").value === "true";
+        const claimText = el("suggest-claim").value;
+        const range = {};
+        const docId = el("suggest-doc").value.trim();
+        const snapshotId = el("suggest-snapshot").value.trim();
+        const startRaw = el("suggest-start").value;
+        const endRaw = el("suggest-end").value;
+        if (docId) range.doc_id = docId;
+        if (snapshotId) range.snapshot_id = snapshotId;
+        if (startRaw !== "") range.start = parseInt(startRaw, 10);
+        if (endRaw !== "") range.end = parseInt(endRaw, 10);
+        const data = await requestJSON("/jobs", {
+          method: "POST",
+          body: {
+            type: "SUGGEST",
+            project_id: state.activeProjectId,
+            inputs: {
+              mode: mode,
+              range: range,
+              claim_text: claimText,
+              include_citations: includeCitations,
+            },
+            params: {},
+          },
+        });
+        state.lastJobId = data.job.job_id;
+        el("sse-job-id").value = state.lastJobId;
+        connectSuggestStream(state.lastJobId);
+        logLine("Suggest job: " + state.lastJobId);
+      }
+
+      function renderLintItems(items) {
+        const list = el("lint-list");
+        list.innerHTML = "";
+        items.forEach((item) => {
+          const card = document.createElement("div");
+          card.className = "result-card";
+          card.textContent =
+            item.rule_id +
+            " [" +
+            item.severity +
+            "] " +
+            item.message +
+            " (" +
+            item.span_start +
+            "-" +
+            item.span_end +
+            ")";
+          list.appendChild(card);
+        });
+      }
+
+      function renderPreview() {
+        const text = el("layout-text").value || "";
+        const preview = el("layout-preview");
+        const letterSpacing = el("layout-letter").value;
+        const lineHeight = el("layout-line").value;
+        preview.style.letterSpacing = letterSpacing + "em";
+        preview.style.lineHeight = lineHeight;
+        if (!state.lintItems || state.lintItems.length === 0) {
+          preview.textContent = text;
+          return;
+        }
+        const sorted = [...state.lintItems].sort((a, b) => a.span_start - b.span_start);
+        let html = "";
+        let cursor = 0;
+        sorted.forEach((item) => {
+          const start = Math.max(0, item.span_start);
+          const end = Math.max(start, item.span_end);
+          html += escapeHtml(text.slice(cursor, start));
+          const segment = escapeHtml(text.slice(start, end));
+          const title = escapeHtml(item.message || item.rule_id);
+          html += `<span class="lint" title="${title}">${segment}</span>`;
+          cursor = end;
+        });
+        html += escapeHtml(text.slice(cursor));
+        preview.innerHTML = html;
+      }
+
+      function stopProofreadStream() {
+        if (state.proofreadSse) {
+          state.proofreadSse.close();
+          state.proofreadSse = null;
+        }
+      }
+
+      function connectProofreadStream(jobId) {
+        stopProofreadStream();
+        const params = new URLSearchParams();
+        if (state.apiToken) {
+          params.set("token", state.apiToken);
+        }
+        const url = `/jobs/${jobId}/events` + (params.toString() ? "?" + params.toString() : "");
+        const es = new EventSource(url);
+        state.proofreadSse = es;
+        es.onmessage = (evt) => {
+          const data = JSON.parse(evt.data);
+          const payload = data.payload || {};
+          if (payload.lint_items) {
+            state.lintItems = payload.lint_items;
+            renderLintItems(payload.lint_items);
+            renderPreview();
+          }
+        };
+        es.onerror = () => {
+          logLine("Proofread stream error or closed.");
+        };
+      }
+
+      async function submitProofread() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const docId = el("proofread-doc").value.trim();
+        const snapshotId = el("proofread-snapshot").value.trim();
+        const data = await requestJSON("/jobs", {
+          method: "POST",
+          body: {
+            type: "PROOFREAD",
+            project_id: state.activeProjectId,
+            inputs: { doc_id: docId, snapshot_id: snapshotId },
+            params: {},
+          },
+        });
+        state.lastJobId = data.job.job_id;
+        el("sse-job-id").value = state.lastJobId;
+        connectProofreadStream(state.lastJobId);
+        logLine("Proofread job: " + state.lastJobId);
+      }
+
+      function stopExportStream() {
+        if (state.exportSse) {
+          state.exportSse.close();
+          state.exportSse = null;
+        }
+      }
+
+      function connectExportStream(jobId) {
+        stopExportStream();
+        const params = new URLSearchParams();
+        if (state.apiToken) {
+          params.set("token", state.apiToken);
+        }
+        const url = `/jobs/${jobId}/events` + (params.toString() ? "?" + params.toString() : "");
+        const es = new EventSource(url);
+        state.exportSse = es;
+        es.onmessage = (evt) => {
+          const data = JSON.parse(evt.data);
+          const payload = data.payload || {};
+          if (payload.artifact_path) {
+            el("export-output").textContent = JSON.stringify(payload, null, 2);
+          }
+        };
+        es.onerror = () => {
+          logLine("Export stream error or closed.");
+        };
+      }
+
+      async function submitExport() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const docId = el("export-doc").value.trim();
+        const snapshotId = el("export-snapshot").value.trim();
+        const format = el("export-format").value;
+        const includeMeta = el("export-meta").value === "true";
+        const range = { doc_id: docId };
+        if (snapshotId) range.snapshot_id = snapshotId;
+        const data = await requestJSON("/jobs", {
+          method: "POST",
+          body: {
+            type: "EXPORT",
+            project_id: state.activeProjectId,
+            inputs: { range: range, format: format, include_meta: includeMeta },
+            params: {},
+          },
+        });
+        state.lastJobId = data.job.job_id;
+        el("sse-job-id").value = state.lastJobId;
+        connectExportStream(state.lastJobId);
+        logLine("Export job: " + state.lastJobId);
+      }
+
+      async function runPresetIngest() {
+        if (!state.activeProjectId) {
+          throw new Error("Select a project first.");
+        }
+        const docId = el("consistency-doc").value.trim();
+        const snapshotId = el("consistency-snapshot").value.trim();
+        const rangeStartRaw = el("consistency-range-start").value;
+        const rangeEndRaw = el("consistency-range-end").value;
+        const range = {};
+        if (rangeStartRaw !== "") {
+          range.start = parseInt(rangeStartRaw, 10);
+        }
+        if (rangeEndRaw !== "") {
+          range.end = parseInt(rangeEndRaw, 10);
+        }
+        const presetLog = [];
+        const ingestInputs = { doc_id: docId };
+        if (snapshotId) ingestInputs.snapshot_id = snapshotId;
+        const ingest = await requestJSON("/jobs", {
+          method: "POST",
+          body: {
+            type: "INGEST",
+            project_id: state.activeProjectId,
+            inputs: ingestInputs,
+            params: {},
+          },
+        });
+        presetLog.push({ ingest: ingest.job.job_id });
+        const index = await requestJSON("/jobs", {
+          method: "POST",
+          body: {
+            type: "INDEX_FTS",
+            project_id: state.activeProjectId,
+            inputs: { scope: docId || "global" },
+            params: {},
+          },
+        });
+        presetLog.push({ index_fts: index.job.job_id });
+        const consistency = await requestJSON("/jobs", {
+          method: "POST",
+          body: {
+            type: "CONSISTENCY",
+            project_id: state.activeProjectId,
+            inputs: {
+              input_doc_id: docId,
+              input_snapshot_id: snapshotId,
+              range: range,
+            },
+            params: {},
+          },
+        });
+        presetLog.push({ consistency: consistency.job.job_id });
+        el("preset-output").textContent = JSON.stringify(presetLog, null, 2);
+        logLine("Preset ingest/index/consistency queued.");
+      }
+
+      async function runPresetRetrieval() {
+        await runRetrieval();
+        await runVectorRetrieval();
+        el("preset-output").textContent = "FTS + vector retrieval triggered.";
+      }
+
+      async function applyToggles() {
+        const forceError = el("toggle-error").value.trim();
+        const latency = parseInt(el("toggle-latency").value, 10) || 0;
+        const disableHeavy = el("toggle-heavy").value === "true";
+        const sseDrop = parseInt(el("toggle-sse-drop").value, 10) || 0;
+        const sseFrag = parseInt(el("toggle-sse-frag").value, 10) || 0;
+        const maxShardsRaw = el("toggle-max-shards").value;
+        const maxRamRaw = el("toggle-max-ram").value;
+        const body = {
+          force_error_code: forceError || null,
+          force_latency_ms: latency,
+          disable_heavy_job_limit: disableHeavy,
+          sse_drop_after: sseDrop,
+          sse_fragment_ms: sseFrag,
+        };
+        if (maxShardsRaw !== "") {
+          body.max_loaded_shards = parseInt(maxShardsRaw, 10);
+        }
+        if (maxRamRaw !== "") {
+          body.max_ram_mb = parseInt(maxRamRaw, 10);
+        }
+        const data = await requestJSON("/_debug/toggles", {
+          method: "PATCH",
+          auth: "debug",
+          body: body,
+        });
+        el("debug-output").textContent = JSON.stringify(data, null, 2);
+        logLine("Debug toggles updated.");
+      }
+
+      async function refreshToggles() {
+        const data = await requestJSON("/_debug/toggles", { auth: "debug" });
+        el("debug-output").textContent = JSON.stringify(data, null, 2);
+        const stateData = data.debug_state || {};
+        if (stateData.force_error_code) {
+          el("toggle-error").value = stateData.force_error_code;
+        }
+        if (typeof stateData.force_latency_ms === "number") {
+          el("toggle-latency").value = stateData.force_latency_ms;
+        }
+        if (typeof stateData.sse_drop_after === "number") {
+          el("toggle-sse-drop").value = stateData.sse_drop_after;
+        }
+        if (typeof stateData.sse_fragment_ms === "number") {
+          el("toggle-sse-frag").value = stateData.sse_fragment_ms;
+        }
+        if (typeof stateData.max_loaded_shards === "number") {
+          el("toggle-max-shards").value = stateData.max_loaded_shards;
+        }
+        if (typeof stateData.max_ram_mb === "number") {
+          el("toggle-max-ram").value = stateData.max_ram_mb;
+        }
+        logLine("Debug toggles loaded.");
+      }
+
+      async function runFixtures() {
+        const projectName = el("fixture-project").value.trim() || "Sample Project";
+        const data = await requestJSON("/_debug/fixtures", {
+          method: "POST",
+          auth: "debug",
+          body: { project_name: projectName },
+        });
+        el("debug-output").textContent = JSON.stringify(data, null, 2);
+        if (data.project) {
+          state.activeProjectId = data.project.project_id;
+          el("job-project").value = state.activeProjectId;
+          el("policy-project-id").value = state.activeProjectId;
+          el("active-project").textContent = state.activeProjectId;
+        }
+        await refreshProjects();
+        logLine("Fixtures seeded.");
+      }
+
+      async function runReset() {
+        const confirm = el("reset-confirm").value.trim();
+        const data = await requestJSON("/_debug/reset", {
+          method: "POST",
+          auth: "debug",
+          body: { confirm },
+        });
+        el("debug-output").textContent = JSON.stringify(data, null, 2);
+        logLine("Storage reset.");
+      }
+
+      document.addEventListener("DOMContentLoaded", () => {
+        loadTokens();
+        el("save-tokens").addEventListener("click", () => {
+          try {
+            saveTokens();
+          } catch (err) {
+            setStatus(err.message);
+          }
+        });
+        el("load-config").addEventListener("click", loadConfig);
+        el("config-refresh").addEventListener("click", loadConfig);
+        el("status-refresh").addEventListener("click", () => {
+          refreshStatus().catch((err) => setStatus(err.message));
+        });
+        el("projects-refresh").addEventListener("click", refreshProjects);
+        el("project-create").addEventListener("click", () => {
+          createProject().catch((err) => setStatus(err.message));
+        });
+        el("project-select").addEventListener("change", (evt) => {
+          state.activeProjectId = evt.target.value;
+          el("job-project").value = state.activeProjectId;
+          el("policy-project-id").value = state.activeProjectId;
+          el("active-project").textContent = state.activeProjectId || "none";
+          setStatus("Active project: " + state.activeProjectId);
+        });
+        el("docs-refresh").addEventListener("click", () => {
+          refreshDocs().catch((err) => setStatus(err.message));
+        });
+        el("doc-create").addEventListener("click", () => {
+          createDoc().catch((err) => setStatus(err.message));
+        });
+        el("tags-refresh").addEventListener("click", () => {
+          refreshTags().catch((err) => setStatus(err.message));
+        });
+        el("tag-create").addEventListener("click", () => {
+          createTag().catch((err) => setStatus(err.message));
+        });
+        el("policy-load").addEventListener("click", () => {
+          loadPolicySettings().catch((err) => setStatus(err.message));
+        });
+        el("policy-apply").addEventListener("click", () => {
+          applyPolicySettings().catch((err) => setStatus(err.message));
+        });
+        el("job-submit").addEventListener("click", () => {
+          submitJob().catch((err) => setStatus(err.message));
+        });
+        el("job-poll").addEventListener("click", () => {
+          pollJob().catch((err) => setStatus(err.message));
+        });
+        el("job-cancel").addEventListener("click", () => {
+          cancelJob().catch((err) => setStatus(err.message));
+        });
+        el("sse-connect").addEventListener("click", () => {
+          try {
+            connectSSE();
+          } catch (err) {
+            setStatus(err.message);
+          }
+        });
+        el("sse-reconnect").addEventListener("click", () => {
+          try {
+            reconnectSSE();
+          } catch (err) {
+            setStatus(err.message);
+          }
+        });
+        el("sse-disconnect").addEventListener("click", disconnectSSE);
+        el("sse-copy").addEventListener("click", () => {
+          if (!state.lastPayload) {
+            setStatus("No payload to copy.");
+            return;
+          }
+          const text = JSON.stringify(state.lastPayload, null, 2);
+          navigator.clipboard.writeText(text).then(
+            () => setStatus("Payload copied."),
+            () => setStatus("Copy failed.")
+          );
+        });
+        el("retrieval-run").addEventListener("click", () => {
+          runRetrieval().catch((err) => setStatus(err.message));
+        });
+        el("retrieval-vector").addEventListener("click", () => {
+          runVectorRetrieval().catch((err) => setStatus(err.message));
+        });
+        el("retrieval-vector-stop").addEventListener("click", stopVectorStream);
+        el("grouping-time").addEventListener("click", () => {
+          submitGrouping("time").catch((err) => setStatus(err.message));
+        });
+        el("grouping-entity").addEventListener("click", () => {
+          submitGrouping("entity").catch((err) => setStatus(err.message));
+        });
+        el("grouping-both").addEventListener("click", () => {
+          submitGrouping("both").catch((err) => setStatus(err.message));
+        });
+        el("consistency-submit").addEventListener("click", () => {
+          submitConsistency().catch((err) => setStatus(err.message));
+        });
+        el("consistency-verdicts").addEventListener("click", () => {
+          loadVerdicts().catch((err) => setStatus(err.message));
+        });
+        el("whitelist-add").addEventListener("click", () => {
+          addWhitelist().catch((err) => setStatus(err.message));
+        });
+        el("facts-load").addEventListener("click", () => {
+          loadFacts().catch((err) => setStatus(err.message));
+        });
+        el("mentions-load").addEventListener("click", () => {
+          loadMentions().catch((err) => setStatus(err.message));
+        });
+        el("anchors-load").addEventListener("click", () => {
+          loadAnchors().catch((err) => setStatus(err.message));
+        });
+        el("timeline-load").addEventListener("click", () => {
+          loadTimelineEvents().catch((err) => setStatus(err.message));
+        });
+        el("suggest-submit").addEventListener("click", () => {
+          submitSuggest().catch((err) => setStatus(err.message));
+        });
+        el("layout-letter").addEventListener("input", renderPreview);
+        el("layout-line").addEventListener("input", renderPreview);
+        el("layout-text").addEventListener("input", renderPreview);
+        el("proofread-submit").addEventListener("click", () => {
+          submitProofread().catch((err) => setStatus(err.message));
+        });
+        el("export-submit").addEventListener("click", () => {
+          submitExport().catch((err) => setStatus(err.message));
+        });
+        el("preset-ingest").addEventListener("click", () => {
+          runPresetIngest().catch((err) => setStatus(err.message));
+        });
+        el("preset-retrieval").addEventListener("click", () => {
+          runPresetRetrieval().catch((err) => setStatus(err.message));
+        });
+        el("log-copy-curl").addEventListener("click", () => {
+          if (!state.lastRequest) {
+            setStatus("No request captured.");
+            return;
+          }
+          const curl = buildCurl(state.lastRequest);
+          navigator.clipboard.writeText(curl).then(
+            () => setStatus("cURL copied."),
+            () => setStatus("Copy failed.")
+          );
+        });
+        el("log-download").addEventListener("click", downloadLog);
+        el("log-clear").addEventListener("click", () => {
+          state.requestLog = [];
+          state.lastRequest = null;
+          renderRequestLog();
+          setStatus("Request log cleared.");
+        });
+        el("toggles-apply").addEventListener("click", () => {
+          applyToggles().catch((err) => setStatus(err.message));
+        });
+        el("toggles-refresh").addEventListener("click", () => {
+          refreshToggles().catch((err) => setStatus(err.message));
+        });
+        el("fixture-run").addEventListener("click", () => {
+          runFixtures().catch((err) => setStatus(err.message));
+        });
+        el("reset-run").addEventListener("click", () => {
+          runReset().catch((err) => setStatus(err.message));
+        });
+        renderPreview();
+      });
+    </script>
+  </body>
+</html>

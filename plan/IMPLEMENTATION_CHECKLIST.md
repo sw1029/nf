@@ -121,10 +121,10 @@
 
 ### Phase 40 — 개발용 루프백 Web UI(임시)
 
-* ☐ `/_debug` 임시 UI 제공(기본 off)
-* ☐ Jobs submit + SSE viewer(타임라인/프로그레스/JSON payload) 구현
-* ☐ Retrieval(FTS-only) 폼 + 결과 렌더 구현
-* ☐ 테스트 토글/fixture/리셋(강력 경고) 최소 구현
+* ☑ `/_debug` 임시 UI 제공(기본 off)
+* ☑ Jobs submit + SSE viewer(타임라인/프로그레스/JSON payload) 구현
+* ☑ Retrieval(FTS-only) 폼 + 결과 렌더 구현
+* ☑ 테스트 토글/fixture/리셋(강력 경고) 최소 구현
 
 관련 문서:
 

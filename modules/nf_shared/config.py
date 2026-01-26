@@ -13,6 +13,7 @@ class Settings:
     enable_remote_api: bool = False
     enable_layer3_model: bool = False
     enable_local_generator: bool = False  # 차순위(분기)
+    enable_debug_web_ui: bool = False
 
     sync_retrieval_mode: str = "FTS_ONLY"
     vector_index_mode: str = "SHARDED"
@@ -23,6 +24,7 @@ class Settings:
     evidence_required_for_model_output: bool = True
     implicit_fact_auto_approve: bool = False
     explicit_fact_auto_approve: bool = False  # 차순위(선택)
+    debug_web_ui_token: str = ""
 
 
 DEFAULT_CONFIG_PATHS: tuple[Path, ...] = (
