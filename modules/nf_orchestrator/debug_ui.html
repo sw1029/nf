@@ -155,6 +155,12 @@
         background: #fff;
       }
 
+      input[type="color"] {
+        padding: 0;
+        height: 44px;
+        cursor: pointer;
+      }
+
       textarea {
         min-height: 90px;
         resize: vertical;
@@ -1141,9 +1147,10 @@
             <p><strong>입력</strong>: (레이아웃) 미리보기 텍스트 + 슬라이더 / (교정) <span class="mono">doc_id</span>, <span class="mono">snapshot_id</span></p>
             <p><strong>출력</strong>: lint 항목(<span class="mono">lint_items[]</span>) 목록</p>
             <ul>
-              <li>상단 슬라이더로 자간/행간을 조절해 프리뷰 렌더링을 확인합니다.</li>
+              <li>상단 컨트롤로 자간/행간/글자 크기/여백/배경/폰트를 조절해 프리뷰 렌더링을 확인합니다.</li>
               <li><span class="mono">doc_id</span>/<span class="mono">snapshot_id</span> 입력 후 <span class="mono">교정(PROOFREAD) 제출</span>로 lint 결과를 받아옵니다.</li>
               <li>lint 항목을 클릭해 위치/규칙/수정 제안을 확인합니다.</li>
+              <li>레이아웃 스타일 설정은 브라우저 저장소(localStorage)에 저장되어 리로드 후에도 유지됩니다.</li>
             </ul>
           </details>
           <div class="stack">
@@ -1156,6 +1163,40 @@
                 <label for="layout-line">행간</label>
                 <input id="layout-line" type="range" min="1.0" max="2.2" step="0.05" value="1.5">
               </div>
+              <div class="stack">
+                <label for="layout-font-size">글자 크기(px)</label>
+                <input id="layout-font-size" type="range" min="10" max="32" step="1" value="14">
+              </div>
+              <div class="stack">
+                <label for="layout-padding-x">좌우 여백(px)</label>
+                <input id="layout-padding-x" type="range" min="0" max="80" step="2" value="12">
+              </div>
+            </div>
+            <div class="row">
+              <div class="stack">
+                <label for="layout-bg">배경색</label>
+                <input id="layout-bg" type="color" value="#ffffff">
+              </div>
+              <div class="stack">
+                <label for="layout-font-preset">폰트 프리셋</label>
+                <select id="layout-font-preset">
+                  <option value="system">시스템(기본)</option>
+                  <option value="sans_kr">Sans KR(가독성)</option>
+                  <option value="serif">Serif</option>
+                  <option value="mono">Mono</option>
+                  <option value="custom">커스텀</option>
+                </select>
+              </div>
+              <div class="stack">
+                <label for="layout-font-custom">커스텀 font-family</label>
+                <input
+                  id="layout-font-custom"
+                  class="mono"
+                  placeholder='system-ui, "Noto Sans KR", "Malgun Gothic", sans-serif'
+                  disabled
+                >
+              </div>
+              <button id="layout-style-reset" class="ghost">스타일 리셋</button>
             </div>
             <div class="stack">
               <label for="layout-text">미리보기 텍스트</label>
@@ -2460,13 +2501,165 @@
         });
       }
 
+      const LAYOUT_STYLE_STORAGE_KEY = "nf_layout_style_v1";
+
+      const LAYOUT_STYLE_DEFAULTS = {
+        letterSpacingEm: 0,
+        lineHeight: 1.5,
+        fontSizePx: 14,
+        paddingX: 12,
+        bgColor: "#ffffff",
+        fontPreset: "system",
+        fontCustom: "",
+      };
+
+      function clampNumber(value, min, max, fallback) {
+        const num = Number(value);
+        if (!Number.isFinite(num)) return fallback;
+        return Math.max(min, Math.min(max, num));
+      }
+
+      function normalizeHexColor(value, fallback = "#ffffff") {
+        if (typeof value !== "string") return fallback;
+        const v = value.trim();
+        if (/^#[0-9a-fA-F]{6}$/.test(v)) return v;
+        return fallback;
+      }
+
+      function normalizeLayoutStyle(raw) {
+        const obj = raw && typeof raw === "object" ? raw : {};
+        return {
+          letterSpacingEm: clampNumber(obj.letterSpacingEm, -0.02, 0.2, LAYOUT_STYLE_DEFAULTS.letterSpacingEm),
+          lineHeight: clampNumber(obj.lineHeight, 1.0, 2.2, LAYOUT_STYLE_DEFAULTS.lineHeight),
+          fontSizePx: clampNumber(obj.fontSizePx, 10, 32, LAYOUT_STYLE_DEFAULTS.fontSizePx),
+          paddingX: clampNumber(obj.paddingX, 0, 80, LAYOUT_STYLE_DEFAULTS.paddingX),
+          bgColor: normalizeHexColor(obj.bgColor, LAYOUT_STYLE_DEFAULTS.bgColor),
+          fontPreset: String(obj.fontPreset || LAYOUT_STYLE_DEFAULTS.fontPreset),
+          fontCustom: String(obj.fontCustom || LAYOUT_STYLE_DEFAULTS.fontCustom),
+        };
+      }
+
+      function getFontFamilyForPreset(preset) {
+        if (preset === "sans_kr") {
+          return 'system-ui, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", "Noto Sans CJK KR", sans-serif';
+        }
+        if (preset === "serif") {
+          return 'ui-serif, Georgia, "Times New Roman", Times, serif';
+        }
+        if (preset === "mono") {
+          return 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+        }
+        return 'system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
+      }
+
+      function hexToRgb(hex) {
+        const m = /^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/.exec(hex);
+        if (!m) return null;
+        return { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
+      }
+
+      function pickTextColorForBackground(bgHex) {
+        const rgb = hexToRgb(bgHex);
+        if (!rgb) return "";
+        const r = rgb.r / 255;
+        const g = rgb.g / 255;
+        const b = rgb.b / 255;
+        const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        return luminance < 0.55 ? "#f9fafb" : "#111827";
+      }
+
+      function updateFontCustomEnabled() {
+        const presetEl = el("layout-font-preset");
+        const customEl = el("layout-font-custom");
+        if (!presetEl || !customEl) return;
+        const enabled = presetEl.value === "custom";
+        customEl.disabled = !enabled;
+      }
+
+      function getLayoutStyleFromInputs() {
+        const raw = {
+          letterSpacingEm: el("layout-letter")?.value,
+          lineHeight: el("layout-line")?.value,
+          fontSizePx: el("layout-font-size")?.value,
+          paddingX: el("layout-padding-x")?.value,
+          bgColor: el("layout-bg")?.value,
+          fontPreset: el("layout-font-preset")?.value,
+          fontCustom: el("layout-font-custom")?.value,
+        };
+        return normalizeLayoutStyle(raw);
+      }
+
+      function applyLayoutStyle(preview, style) {
+        preview.style.letterSpacing = style.letterSpacingEm + "em";
+        preview.style.lineHeight = String(style.lineHeight);
+        preview.style.fontSize = style.fontSizePx + "px";
+        preview.style.paddingLeft = style.paddingX + "px";
+        preview.style.paddingRight = style.paddingX + "px";
+        preview.style.backgroundColor = style.bgColor;
+        preview.style.color = pickTextColorForBackground(style.bgColor) || "";
+
+        const fontFamily =
+          style.fontPreset === "custom" ? (style.fontCustom || "").trim() : getFontFamilyForPreset(style.fontPreset);
+        preview.style.fontFamily = fontFamily || "";
+      }
+
+      function saveLayoutStyle() {
+        const style = getLayoutStyleFromInputs();
+        try {
+          localStorage.setItem(LAYOUT_STYLE_STORAGE_KEY, JSON.stringify(style));
+        } catch {
+          // ignore
+        }
+      }
+
+      function setLayoutInputs(style) {
+        el("layout-letter").value = String(style.letterSpacingEm);
+        el("layout-line").value = String(style.lineHeight);
+        el("layout-font-size").value = String(style.fontSizePx);
+        el("layout-padding-x").value = String(style.paddingX);
+        el("layout-bg").value = style.bgColor;
+        el("layout-font-preset").value = style.fontPreset;
+        el("layout-font-custom").value = style.fontCustom;
+        updateFontCustomEnabled();
+      }
+
+      function loadLayoutStyle() {
+        let raw = null;
+        try {
+          raw = localStorage.getItem(LAYOUT_STYLE_STORAGE_KEY);
+        } catch {
+          raw = null;
+        }
+        if (!raw) {
+          updateFontCustomEnabled();
+          return;
+        }
+        try {
+          const parsed = JSON.parse(raw);
+          const style = normalizeLayoutStyle({ ...LAYOUT_STYLE_DEFAULTS, ...parsed });
+          setLayoutInputs(style);
+        } catch {
+          updateFontCustomEnabled();
+        }
+      }
+
+      function resetLayoutStyle() {
+        setLayoutInputs({ ...LAYOUT_STYLE_DEFAULTS });
+        saveLayoutStyle();
+        renderPreview();
+        setStatus("레이아웃 스타일을 기본값으로 되돌렸습니다.");
+      }
+
+      function onLayoutStyleChanged() {
+        updateFontCustomEnabled();
+        saveLayoutStyle();
+        renderPreview();
+      }
+
       function renderPreview() {
         const text = el("layout-text").value || "";
         const preview = el("layout-preview");
-        const letterSpacing = el("layout-letter").value;
-        const lineHeight = el("layout-line").value;
-        preview.style.letterSpacing = letterSpacing + "em";
-        preview.style.lineHeight = lineHeight;
+        applyLayoutStyle(preview, getLayoutStyleFromInputs());
         if (!state.lintItems || state.lintItems.length === 0) {
           preview.textContent = text;
           return;
@@ -2739,6 +2932,7 @@
 
       document.addEventListener("DOMContentLoaded", () => {
         loadTokens();
+        loadLayoutStyle();
         el("save-tokens").addEventListener("click", () => {
           try {
             saveTokens();
@@ -2898,8 +3092,14 @@
             setStatus(err.message);
           }
         });
-        el("layout-letter").addEventListener("input", renderPreview);
-        el("layout-line").addEventListener("input", renderPreview);
+        el("layout-letter").addEventListener("input", onLayoutStyleChanged);
+        el("layout-line").addEventListener("input", onLayoutStyleChanged);
+        el("layout-font-size").addEventListener("input", onLayoutStyleChanged);
+        el("layout-padding-x").addEventListener("input", onLayoutStyleChanged);
+        el("layout-bg").addEventListener("input", onLayoutStyleChanged);
+        el("layout-font-preset").addEventListener("change", onLayoutStyleChanged);
+        el("layout-font-custom").addEventListener("input", onLayoutStyleChanged);
+        el("layout-style-reset").addEventListener("click", resetLayoutStyle);
         el("layout-text").addEventListener("input", renderPreview);
         el("proofread-submit").addEventListener("click", () => {
           submitProofread().catch((err) => setStatus(err.message));
