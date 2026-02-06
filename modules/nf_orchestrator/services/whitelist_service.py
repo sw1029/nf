@@ -14,18 +14,22 @@ class WhitelistServiceImpl:
     def add_item(self, project_id: str, claim_text: str, scope: str, note: str | None = None) -> dict:
         fingerprint = self._fingerprint(claim_text)
         with db.connect(self._db_path) as conn:
-            return whitelist_repo.create_whitelist_item(
+            item = whitelist_repo.create_whitelist_item(
                 conn,
                 project_id=project_id,
                 claim_fingerprint=fingerprint,
                 scope=scope,
                 note=note,
             )
+            whitelist_repo.recompute_verdict_whitelist_flags(conn, project_id, claim_fingerprint=fingerprint)
+            return item
 
     def delete_item(self, project_id: str, claim_text: str) -> bool:
         fingerprint = self._fingerprint(claim_text)
         with db.connect(self._db_path) as conn:
-            return whitelist_repo.delete_whitelist_item(conn, project_id, fingerprint)
+            deleted = whitelist_repo.delete_whitelist_item(conn, project_id, fingerprint)
+            whitelist_repo.recompute_verdict_whitelist_flags(conn, project_id, claim_fingerprint=fingerprint)
+            return deleted
 
     def is_whitelisted(self, project_id: str, claim_text: str) -> bool:
         fingerprint = self._fingerprint(claim_text)

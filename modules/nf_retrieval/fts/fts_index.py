@@ -11,28 +11,69 @@ from modules.nf_shared.protocol.dtos import Chunk, EvidenceMatchType, FactStatus
 
 def index_chunks(conn: sqlite3.Connection, *, snapshot_id: str, chunks: list[Chunk], text: str) -> None:
     conn.execute("DELETE FROM fts_docs WHERE snapshot_id = ?", (snapshot_id,))
+
+    try:
+        tag_rows = conn.execute(
+            """
+            SELECT span_start, span_end, tag_path
+            FROM tag_assignment
+            WHERE snapshot_id = ?
+            ORDER BY span_start ASC
+            """,
+            (snapshot_id,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        tag_rows = []
+    tag_spans: list[tuple[int, int, str]] = [
+        (int(row["span_start"]), int(row["span_end"]), str(row["tag_path"] or "")) for row in tag_rows
+    ]
+    tag_i = 0
     for chunk in chunks:
         content = text[chunk.span_start : chunk.span_end]
-        conn.execute(
-            """
-            INSERT INTO fts_docs (
-                content, chunk_id, doc_id, snapshot_id, section_path,
-                tag_path, episode_id, span_start, span_end
+        chunk_start = int(chunk.span_start)
+        chunk_end = int(chunk.span_end)
+        while tag_i < len(tag_spans) and tag_spans[tag_i][1] <= chunk_start:
+            tag_i += 1
+        overlap_scores: dict[str, int] = {}
+        tag_j = tag_i
+        while tag_j < len(tag_spans) and tag_spans[tag_j][0] < chunk_end:
+            tag_start, tag_end, tag_path = tag_spans[tag_j]
+            if chunk_start < tag_end and tag_start < chunk_end and tag_path:
+                overlap = min(chunk_end, tag_end) - max(chunk_start, tag_start)
+                prev = overlap_scores.get(tag_path, 0)
+                if overlap > prev:
+                    overlap_scores[tag_path] = overlap
+            tag_j += 1
+        tag_paths = [
+            tag_path
+            for tag_path, _score in sorted(
+                overlap_scores.items(),
+                key=lambda kv: (-kv[1], -len(kv[0]), kv[0]),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                content,
-                chunk.chunk_id,
-                chunk.doc_id,
-                chunk.snapshot_id,
-                chunk.section_path,
-                "",
-                chunk.episode_id,
-                chunk.span_start,
-                chunk.span_end,
-            ),
-        )
+        ]
+        if not tag_paths:
+            tag_paths = [""]
+        for tag_path in tag_paths:
+            conn.execute(
+                """
+                INSERT INTO fts_docs (
+                    content, chunk_id, doc_id, snapshot_id, section_path,
+                    tag_path, episode_id, span_start, span_end
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    content,
+                    chunk.chunk_id,
+                    chunk.doc_id,
+                    chunk.snapshot_id,
+                    chunk.section_path,
+                    tag_path,
+                    chunk.episode_id,
+                    chunk.span_start,
+                    chunk.span_end,
+                ),
+            )
     conn.commit()
 
 
@@ -45,6 +86,9 @@ def fts_search(conn: sqlite3.Connection, req: RetrievalRequest) -> list[Retrieva
     params: list[Any] = [query_text]
 
     where = "fts_docs MATCH ?"
+    if isinstance(filters, dict) and isinstance(filters.get("doc_id"), str):
+        where += " AND doc_id = ?"
+        params.append(filters["doc_id"])
     if filters.get("tag_path"):
         where += " AND tag_path = ?"
         params.append(filters["tag_path"])
@@ -56,6 +100,7 @@ def fts_search(conn: sqlite3.Connection, req: RetrievalRequest) -> list[Retrieva
         params.append(filters["episode"])
 
     limit = int(req.get("k") or 10)
+    fetch_limit = max(50, limit * 10)
     sql = f"""
         SELECT
             content, chunk_id, doc_id, snapshot_id, section_path, tag_path,
@@ -67,7 +112,7 @@ def fts_search(conn: sqlite3.Connection, req: RetrievalRequest) -> list[Retrieva
         ORDER BY score
         LIMIT ?
     """
-    params.append(limit)
+    params.append(fetch_limit)
 
     rows = conn.execute(sql, params).fetchall()
     entity_filter = filters.get("entity_id")
@@ -128,7 +173,7 @@ def fts_search(conn: sqlite3.Connection, req: RetrievalRequest) -> list[Retrieva
         spans = [(row["span_start"], row["span_end"]) for row in rows_inner]
         time_cache[key] = spans
         return spans
-    results: list[RetrievalResult] = []
+    best_rows_by_chunk_id: dict[str, sqlite3.Row] = {}
     for row in rows:
         if entity_filter or time_key_filter or timeline_idx_filter is not None:
             doc_id = row["doc_id"]
@@ -142,6 +187,32 @@ def fts_search(conn: sqlite3.Connection, req: RetrievalRequest) -> list[Retrieva
                 spans = load_time_spans(doc_id, time_key_filter, timeline_idx_filter)
                 if not span_overlaps(span_start, span_end, spans):
                     continue
+        chunk_id = row["chunk_id"]
+        if not isinstance(chunk_id, str):
+            continue
+        existing = best_rows_by_chunk_id.get(chunk_id)
+        if existing is None:
+            best_rows_by_chunk_id[chunk_id] = row
+            continue
+        try:
+            existing_score = float(existing["score"]) if existing["score"] is not None else 0.0
+        except (TypeError, ValueError):
+            existing_score = 0.0
+        try:
+            score = float(row["score"]) if row["score"] is not None else 0.0
+        except (TypeError, ValueError):
+            score = 0.0
+        existing_tag = existing["tag_path"] or ""
+        tag_path = row["tag_path"] or ""
+        if score < existing_score or (score == existing_score and len(tag_path) > len(existing_tag)):
+            best_rows_by_chunk_id[chunk_id] = row
+
+    unique_rows = list(best_rows_by_chunk_id.values())
+    unique_rows.sort(key=lambda r: float(r["score"]) if r["score"] is not None else 0.0)
+    unique_rows = unique_rows[:limit]
+
+    results: list[RetrievalResult] = []
+    for row in unique_rows:
         content = row["content"] or ""
         snippet = row["snippet"] or ""
         if not snippet:

@@ -5,7 +5,7 @@ import re
 import sys
 import time
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 
 try:
@@ -52,6 +52,7 @@ from modules.nf_shared.protocol.dtos import (
     Span,
     SuggestMode,
     TagKind,
+    TagAssignment,
     DocumentType,
     Verdict,
     VerdictEvidenceLink,
@@ -301,11 +302,68 @@ def _extract_entity_mentions(
     return mentions
 
 
-def _episode_key(doc) -> str:
+def _extract_episode_number(doc) -> int | None:
     if getattr(doc, "type", None) is DocumentType.EPISODE:
         numbers = re.findall(r"\\d+", doc.title or "")
         if numbers:
-            return f"episode:{numbers[0]}"
+            try:
+                return int(numbers[0])
+            except ValueError:
+                return None
+    return None
+
+
+def _resolve_episode_id(conn, project_id: str, doc) -> str | None:
+    episode_number = _extract_episode_number(doc)
+    if episode_number is None:
+        return None
+    episodes = document_repo.list_episodes(conn, project_id)
+    candidates = [ep for ep in episodes if ep.start_n <= episode_number <= ep.end_m]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda ep: (ep.end_m - ep.start_n, ep.created_at, ep.episode_id))
+    return candidates[0].episode_id
+
+
+def _compute_tag_paths_by_chunk_id(chunks: list, assignments: list[TagAssignment]) -> dict[str, list[str]]:
+    if not chunks or not assignments:
+        return {}
+    tag_spans = sorted(
+        [(int(a.span_start), int(a.span_end), str(a.tag_path or "")) for a in assignments],
+        key=lambda t: (t[0], t[1], t[2]),
+    )
+    tag_i = 0
+    mapping: dict[str, list[str]] = {}
+    for chunk in chunks:
+        chunk_start = int(getattr(chunk, "span_start", 0))
+        chunk_end = int(getattr(chunk, "span_end", 0))
+        while tag_i < len(tag_spans) and tag_spans[tag_i][1] <= chunk_start:
+            tag_i += 1
+        overlap_scores: dict[str, int] = {}
+        tag_j = tag_i
+        while tag_j < len(tag_spans) and tag_spans[tag_j][0] < chunk_end:
+            tag_start, tag_end, tag_path = tag_spans[tag_j]
+            if chunk_start < tag_end and tag_start < chunk_end and tag_path:
+                overlap = min(chunk_end, tag_end) - max(chunk_start, tag_start)
+                prev = overlap_scores.get(tag_path, 0)
+                if overlap > prev:
+                    overlap_scores[tag_path] = overlap
+            tag_j += 1
+        if overlap_scores:
+            mapping[chunk.chunk_id] = [
+                tag_path
+                for tag_path, _score in sorted(
+                    overlap_scores.items(),
+                    key=lambda kv: (-kv[1], -len(kv[0]), kv[0]),
+                )
+            ]
+    return mapping
+
+
+def _episode_key(doc) -> str:
+    episode_number = _extract_episode_number(doc)
+    if episode_number is not None:
+        return f"episode:{episode_number}"
     return f"doc:{doc.doc_id}"
 
 
@@ -714,6 +772,9 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                 snapshot_id=snapshot.snapshot_id,
                 text=text,
             )
+            episode_id = _resolve_episode_id(conn, doc.project_id, doc)
+            if episode_id is not None:
+                chunks = [replace(chunk, episode_id=episode_id) for chunk in chunks]
             chunk_repo.replace_chunks_for_snapshot(conn, snapshot.snapshot_id, chunks)
             index_chunks(conn, snapshot_id=snapshot.snapshot_id, chunks=chunks, text=text)
             indexed += len(chunks)
@@ -852,9 +913,44 @@ def _handle_retrieve_vec(ctx: WorkerContext) -> None:
 def _handle_suggest(ctx: WorkerContext) -> None:
     mode_raw = ctx.payload.get("mode")
     claim_text = ctx.payload.get("claim_text") or ""
+    include_citations = bool(ctx.payload.get("include_citations", False))
+    range_info = ctx.payload.get("range") or {}
+    if not isinstance(range_info, dict):
+        range_info = {}
     mode = SuggestMode(mode_raw) if isinstance(mode_raw, str) else SuggestMode.LOCAL_RULE
     gateway = select_model(purpose="suggest_local_rule")
-    bundle = {"claim_text": claim_text, "evidence": []}
+
+    k = ctx.payload.get("k") or 3
+    try:
+        k = int(k)
+    except (TypeError, ValueError):
+        k = 3
+    k = max(1, min(10, k))
+
+    filters: dict[str, Any] = {}
+    payload_filters = ctx.payload.get("filters")
+    if isinstance(payload_filters, dict):
+        filters.update(payload_filters)
+    doc_id_filter = range_info.get("doc_id")
+    if "doc_id" not in filters and isinstance(doc_id_filter, str) and doc_id_filter.strip():
+        filters["doc_id"] = doc_id_filter.strip()
+
+    req = {
+        "project_id": ctx.project_id,
+        "query": str(claim_text),
+        "filters": filters,
+        "k": k,
+    }
+    with db.connect(ctx._db_path) as conn:
+        results = fts_search(conn, req)
+    if not results and load_config().vector_index_mode.upper() != "DISABLED":
+        results = vector_search(req)
+    evidences: list[dict[str, Any]] = []
+    for result in results:
+        evidence_raw = result.get("evidence") or {}
+        if isinstance(evidence_raw, dict):
+            evidences.append(evidence_raw)
+    bundle = {"claim_text": claim_text, "evidence": evidences}
     if mode is SuggestMode.LOCAL_RULE:
         text = gateway.suggest_local_rule(bundle)
     elif mode is SuggestMode.API:
@@ -862,6 +958,19 @@ def _handle_suggest(ctx: WorkerContext) -> None:
     else:
         text = gateway.suggest_local_gen(bundle)
     suggestion_id = str(uuid.uuid4())
+
+    citations: list[dict[str, Any]] = []
+    if include_citations:
+        for evidence in evidences[:5]:
+            citations.append(
+                {
+                    "doc_id": evidence.get("doc_id", ""),
+                    "snapshot_id": evidence.get("snapshot_id", ""),
+                    "tag_path": evidence.get("tag_path", ""),
+                    "section_path": evidence.get("section_path", ""),
+                    "snippet_text": evidence.get("snippet_text", ""),
+                }
+            )
     ctx.emit(
         JobEvent(
             event_id="",
@@ -870,7 +979,7 @@ def _handle_suggest(ctx: WorkerContext) -> None:
             level=JobEventLevel.INFO,
             message="suggest complete",
             progress=1.0,
-            payload={"suggestion_id": suggestion_id, "text": text, "citations": []},
+            payload={"suggestion_id": suggestion_id, "text": text, "citations": citations},
         )
     )
 
@@ -981,19 +1090,84 @@ def _handle_proofread(ctx: WorkerContext) -> None:
         text = docstore.read_text(snapshot.path)
 
     lint_items: list[LintItem] = []
-    idx = text.find("  ")
-    while idx != -1:
-        lint_items.append(
+    max_items = 500
+
+    def add_item(item: LintItem) -> None:
+        if len(lint_items) >= max_items:
+            return
+        lint_items.append(item)
+
+    for match in re.finditer(r" {2,}", text):
+        add_item(
             LintItem(
-                span_start=idx,
-                span_end=idx + 2,
+                span_start=match.start(),
+                span_end=match.end(),
                 rule_id="double-space",
                 severity="WARN",
-                message="double space detected",
+                message="연속된 공백이 있습니다.",
                 suggestion=" ",
             )
         )
-        idx = text.find("  ", idx + 2)
+
+    for match in re.finditer(r"[\\t ]+(?=\\r?\\n)", text):
+        add_item(
+            LintItem(
+                span_start=match.start(),
+                span_end=match.end(),
+                rule_id="trailing-whitespace",
+                severity="INFO",
+                message="줄 끝 공백이 있습니다.",
+                suggestion="",
+            )
+        )
+
+    for match in re.finditer(r"\\n{3,}", text):
+        add_item(
+            LintItem(
+                span_start=match.start(),
+                span_end=match.end(),
+                rule_id="many-blank-lines",
+                severity="INFO",
+                message="빈 줄이 너무 많습니다.",
+                suggestion="\\n\\n",
+            )
+        )
+
+    for match in re.finditer(r"[\\t ]+([,.;:!?])", text):
+        add_item(
+            LintItem(
+                span_start=match.start(),
+                span_end=match.end(),
+                rule_id="space-before-punct",
+                severity="WARN",
+                message="구두점 앞 공백을 제거하세요.",
+                suggestion=match.group(1),
+            )
+        )
+
+    for match in re.finditer(r"([!?])\\1{1,}", text):
+        add_item(
+            LintItem(
+                span_start=match.start(),
+                span_end=match.end(),
+                rule_id="repeated-punct",
+                severity="INFO",
+                message="구두점이 반복되었습니다.",
+                suggestion=match.group(1),
+            )
+        )
+
+    for match in re.finditer(r"\\.{4,}", text):
+        add_item(
+            LintItem(
+                span_start=match.start(),
+                span_end=match.end(),
+                rule_id="ellipsis",
+                severity="INFO",
+                message="말줄임표는 '...' 형태를 권장합니다.",
+                suggestion="...",
+            )
+        )
 
     ctx.emit(
         JobEvent(
@@ -1035,7 +1209,10 @@ def _handle_index_vec(ctx: WorkerContext) -> None:
                     snapshot_id=snapshot.snapshot_id,
                     text=text,
                 )
-                chunk_repo.replace_chunks_for_snapshot(conn, snapshot.snapshot_id, chunks)
+            episode_id = _resolve_episode_id(conn, doc.project_id, doc)
+            if episode_id is not None and any(chunk.episode_id != episode_id for chunk in chunks):
+                chunks = [replace(chunk, episode_id=episode_id) for chunk in chunks]
+            chunk_repo.replace_chunks_for_snapshot(conn, snapshot.snapshot_id, chunks)
             if settings.max_ram_mb > 0:
                 usage_mb = _get_process_rss_mb()
                 estimated_mb = _estimate_index_mb(text, len(chunks))
@@ -1056,7 +1233,20 @@ def _handle_index_vec(ctx: WorkerContext) -> None:
                         )
                     )
                     continue
-            _, meta = build_shard(doc_id=doc.doc_id, snapshot_id=snapshot.snapshot_id, chunks=chunks, text=text)
+            assignments = schema_repo.list_tag_assignments(
+                conn,
+                doc.project_id,
+                doc_id=doc.doc_id,
+                snapshot_id=snapshot.snapshot_id,
+            )
+            tag_paths_by_chunk_id = _compute_tag_paths_by_chunk_id(chunks, assignments)
+            _, meta = build_shard(
+                doc_id=doc.doc_id,
+                snapshot_id=snapshot.snapshot_id,
+                chunks=chunks,
+                text=text,
+                tag_paths_by_chunk_id=tag_paths_by_chunk_id,
+            )
             meta["checksum"] = doc.checksum
             new_shards.append(meta)
     if new_shards:

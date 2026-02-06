@@ -79,6 +79,7 @@ def _build_openapi_spec() -> dict[str, Any]:
             "/query/retrieval": {"post": {"summary": "FTS-only retrieval"}},
             "/query/evidence/{eid}": {"get": {"summary": "Get evidence"}},
             "/query/verdicts": {"post": {"summary": "List verdicts"}},
+            "/query/verdicts/{vid}": {"get": {"summary": "Get verdict detail"}},
         },
     }
 
@@ -833,6 +834,22 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "evidence를 찾을 수 없습니다")
                 return
             self._send_json(HTTPStatus.OK, {"evidence": dump_json(evidence)})
+            return
+        if len(segments) == 3 and segments[1] == "verdicts":
+            if self.command != "GET":
+                self._send_app_error(
+                    HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드"
+                )
+                return
+            params = parse_qs(urlparse(self.path).query)
+            project_id = params.get("project_id", [None])[0]
+            if not isinstance(project_id, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "project_id가 필요합니다")
+            detail = self.server.query_service.get_verdict_detail(project_id, segments[2])
+            if detail is None:
+                self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "verdict를 찾을 수 없습니다")
+                return
+            self._send_json(HTTPStatus.OK, dump_json(detail))
             return
         if len(segments) == 2 and segments[1] == "verdicts":
             if self.command != "POST":

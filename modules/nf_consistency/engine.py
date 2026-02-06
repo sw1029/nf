@@ -201,7 +201,12 @@ class ConsistencyEngineImpl:
                 reliability = min(0.6, breakdown.evidence_count / 3) if evidences else 0.0
                 if verdict is Verdict.UNKNOWN:
                     reliability = 0.0
-                whitelist_applied = whitelist_repo.is_whitelisted(conn, project_id, _fingerprint(claim_text))
+                whitelist_applied = whitelist_repo.is_whitelisted(
+                    conn,
+                    project_id,
+                    _fingerprint(claim_text),
+                    scope=doc_id,
+                )
 
                 verdict_log = VerdictLog(
                     vid=str(uuid.uuid4()),

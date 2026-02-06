@@ -33,18 +33,24 @@ def build_shard(
     snapshot_id: str,
     chunks: list[Chunk],
     text: str,
+    tag_paths_by_chunk_id: dict[str, list[str]] | None = None,
 ) -> tuple[Path, dict]:
     path = shard_path(doc_id)
     entries = []
+    tag_paths_by_chunk_id = tag_paths_by_chunk_id or {}
     for chunk in chunks:
         chunk_text = text[chunk.span_start : chunk.span_end]
+        tag_paths = tag_paths_by_chunk_id.get(chunk.chunk_id) or []
+        primary_tag_path = tag_paths[0] if tag_paths else ""
         entries.append(
             {
                 "chunk_id": chunk.chunk_id,
                 "doc_id": chunk.doc_id,
                 "snapshot_id": snapshot_id,
                 "section_path": chunk.section_path,
-                "tag_path": "",
+                "episode_id": chunk.episode_id,
+                "tag_path": primary_tag_path,
+                "tag_paths": tag_paths,
                 "span_start": chunk.span_start,
                 "span_end": chunk.span_end,
                 "text": chunk_text,

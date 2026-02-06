@@ -50,14 +50,30 @@ def _select_shards(manifest: dict[str, Any], filters: dict[str, Any]) -> list[di
 
 def vector_search(req: RetrievalRequest) -> list[RetrievalResult]:
     manifest = load_manifest()
-    shards = _select_shards(manifest, req.get("filters") or {})
+    filters = req.get("filters") or {}
+    shards = _select_shards(manifest, filters if isinstance(filters, dict) else {})
     query = req.get("query", "")
     query_tokens = tokenize(query)
+    tag_path_filter = filters.get("tag_path") if isinstance(filters, dict) else None
+    section_filter = filters.get("section") if isinstance(filters, dict) else None
+    episode_filter = filters.get("episode") if isinstance(filters, dict) else None
 
     results: list[RetrievalResult] = []
     for shard in shards:
         entries = load_shard(shard.get("path", ""))
         for entry in entries:
+            if isinstance(tag_path_filter, str) and tag_path_filter:
+                primary = entry.get("tag_path") or ""
+                if primary != tag_path_filter:
+                    all_paths = entry.get("tag_paths")
+                    if not isinstance(all_paths, list) or tag_path_filter not in all_paths:
+                        continue
+            if isinstance(section_filter, str) and section_filter:
+                if entry.get("section_path") != section_filter:
+                    continue
+            if isinstance(episode_filter, str) and episode_filter:
+                if entry.get("episode_id") != episode_filter:
+                    continue
             score = overlap_score(query_tokens, entry.get("tokens", []))
             if score <= 0:
                 continue

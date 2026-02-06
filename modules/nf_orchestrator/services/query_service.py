@@ -48,3 +48,12 @@ class QueryServiceImpl:
         with db.connect(self._db_path) as conn:
             verdicts = evidence_repo.list_verdicts(conn, project_id, input_doc_id=input_doc_id)
             return [v for v in verdicts]
+
+    def get_verdict_detail(self, project_id: str, vid: str) -> dict[str, object] | None:
+        with db.connect(self._db_path) as conn:
+            verdict = evidence_repo.get_verdict(conn, vid)
+            if verdict is None or verdict.project_id != project_id:
+                return None
+            evidence_items = evidence_repo.list_verdict_evidence(conn, vid)
+            fingerprint = evidence_repo.get_claim_fingerprint(conn, vid)
+            return {"verdict": verdict, "evidence": evidence_items, "claim_fingerprint": fingerprint}

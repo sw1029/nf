@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import sqlite3
 from pathlib import Path
@@ -287,6 +288,17 @@ def _initialize(conn: sqlite3.Connection) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS ignore_item (
+            iid TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            claim_fingerprint TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            note TEXT,
+            created_at TEXT NOT NULL
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS fts_meta (
             doc_id TEXT PRIMARY KEY,
             checksum TEXT NOT NULL,
@@ -316,6 +328,8 @@ def _initialize(conn: sqlite3.Connection) -> None:
     _ensure_columns(conn, "jobs", "max_attempts", "max_attempts INTEGER NOT NULL DEFAULT 1")
     _ensure_columns(conn, "jobs", "error_code", "error_code TEXT")
     _ensure_columns(conn, "jobs", "error_message", "error_message TEXT")
+    _ensure_columns(conn, "verdict_log", "claim_fingerprint", "claim_fingerprint TEXT")
+    _backfill_verdict_log_claim_fingerprints(conn)
     conn.commit()
 
 
@@ -323,3 +337,25 @@ def _ensure_columns(conn: sqlite3.Connection, table: str, column: str, definitio
     existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in existing:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
+
+
+def _fingerprint(text: str) -> str:
+    digest = hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
+def _backfill_verdict_log_claim_fingerprints(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT vid, claim_text
+        FROM verdict_log
+        WHERE claim_fingerprint IS NULL OR claim_fingerprint = ''
+        """,
+    ).fetchall()
+    if not rows:
+        return
+    for row in rows:
+        conn.execute(
+            "UPDATE verdict_log SET claim_fingerprint = ? WHERE vid = ?",
+            (_fingerprint(row["claim_text"] or ""), row["vid"]),
+        )

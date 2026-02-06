@@ -108,11 +108,11 @@
 
 * ☑ 문서 저장(원문/raw + snapshot) 최소 구현
 * ☑ Chunk 생성(span) 최소 구현(FTS/Vector 공통 키 확보)
-* ☐ Episode chunk 구성(n~m 구간): chunk에 episode_id 할당 + 인덱스로 전파(episode 필터 동작 보장)
-* ☐ tag_path 전파: tag_assignment(span overlap) 기반으로 chunk/FTS/vector/evidence에 tag_path 채우기(인용 품질 확보)
+* ☑ Episode chunk 구성(n~m 구간): chunk에 episode_id 할당 + 인덱스로 전파(episode 필터 동작 보장)
+* ☑ tag_path 전파: tag_assignment(span overlap) 기반으로 chunk/FTS/vector/evidence에 tag_path 채우기(인용 품질 확보)
 * ☑ (추가 요구) 사용자 요청 시 시점/인물 chunk group 메타 생성(1차 제안) + Retrieval 필터(entity_id/time_key/timeline_idx) 최소 지원
-* ◐ `INDEX_FTS` job 구현 + 결과 이벤트 출력 (현재 snapshot 단위 replace; tag_path/episode 메타 전파는 미완)
-* ◐ Sync Retrieval(FTS-only) 구현: `/query/retrieval` POST (현 상태: tag_path/episode 필터가 실질적으로 동작하지 않음)
+* ☑ `INDEX_FTS` job 구현 + 결과 이벤트 출력 (snapshot 단위 replace; tag_path/episode 메타 전파 포함)
+* ☑ Sync Retrieval(FTS-only) 구현: `/query/retrieval` POST (tag_path/section/episode 필터 지원)
 * ☑ evidence 조회(`/query/evidence/{eid}`) 최소 구현
 
 관련 문서:
@@ -127,7 +127,7 @@
 
 * ☑ `/_debug` 임시 UI 제공(기본 off)
 * ☑ Jobs submit + SSE viewer(타임라인/프로그레스/JSON payload) 구현
-* ◐ Retrieval(FTS-only) 폼 + 결과 렌더 구현 (tag_path/episode 등 메타 미완으로 디버그 관찰 품질 제한)
+* ☑ Retrieval(FTS-only) 폼 + 결과 렌더 구현 (tag_path/episode 메타 포함)
 * ◐ Proofread/Layout 프리뷰: 자간/행간 + 스타일(배경/폰트/크기/여백) + localStorage 유지 (Proofread는 현재 스텁 수준)
 * ☑ 테스트 토글/fixture/리셋(강력 경고) 최소 구현
 
@@ -158,11 +158,11 @@
 
 * ◐ `CONSISTENCY` job 최소 구현:
   - Segment/Claim → Evidence(FTS-first) → Judge(L1/L2) → VerdictLog 저장
-* ◐ verdict/evidence 링크 저장 + 조회(`/query/verdicts` 등) 최소 구현 (현재 `/query/verdicts`는 verdict만 반환; 상세 join 미제공)
-* ◐ whitelist_item 저장/적용(재경고 억제) 최소 구현 (저장/표기는 되나 “재경고 억제” 로직/지문 저장/스코프 적용은 미완)
-* ☐ verdict 상세 조회: verdict_log ↔ verdict_evidence_link ↔ evidence를 묶어 evidence[]/role까지 반환
-* ☐ verdict_log에 claim_fingerprint(또는 segment_fingerprint) 저장 (whitelist/ignore 연계 및 재경고 억제)
-* ☐ whitelist scope(global/doc) 정책 적용 + ignore_item 저장소 도입(동일 지문 반복 억제)
+* ☑ verdict/evidence 링크 저장 + 조회(`/query/verdicts` list + `/query/verdicts/{vid}` detail) 최소 구현
+* ☑ whitelist_item 저장/적용(재경고 억제) 최소 구현 (지문 저장 + scope(global/doc) 적용 + verdict_log 플래그 재계산)
+* ☑ verdict 상세 조회: verdict_log ↔ verdict_evidence_link ↔ evidence를 묶어 evidence[]/role까지 반환
+* ☑ verdict_log에 claim_fingerprint(또는 segment_fingerprint) 저장 (whitelist/ignore 연계 및 재경고 억제)
+* ☑ whitelist scope(global/doc) 정책 적용 + ignore_item 저장소 도입(동일 지문 반복 억제)
 
 관련 문서:
 
@@ -173,10 +173,10 @@
 
 ### Phase 70 — Vector 인덱스/검색 + `RETRIEVE_VEC` 스트리밍(D5)
 
-* ◐ `INDEX_VEC` job: shard build + manifest 갱신(최소) (현재 shard 엔트리 meta(tag_path/episode_id) 전파 미완)
-* ◐ `RETRIEVE_VEC` job: 결과를 이벤트로 페이지/청크 스트리밍(D5) (현재 tag_path/episode 필터/인용 메타 품질 보장 미완)
+* ☑ `INDEX_VEC` job: shard build + manifest 갱신(최소) (shard 엔트리 meta(tag_path/episode_id) 전파 포함)
+* ☑ `RETRIEVE_VEC` job: 결과를 이벤트로 페이지/청크 스트리밍(D5) (tag_path/section/episode 필터 + 인용 메타 포함)
 * ☑ shard 로드/언로드 + 리소스 상한(최소) 도입
-* ☐ vector shard에 tag_path/episode_id 등 메타 포함(또는 post-filter 보강)하여 인용/필터 품질 확보
+* ☑ vector shard에 tag_path/episode_id 등 메타 포함(또는 post-filter 보강)하여 인용/필터 품질 확보
 
 관련 문서:
 
@@ -187,10 +187,10 @@
 
 ### Phase 80 — Suggest(LOCAL_RULE 우선) + Model Gateway 옵션(D4)
 
-* ◐ `SUGGEST` job: `LOCAL_RULE` 최소 구현(근거 묶기/요약/템플릿) (현재 citations/evidence 연동이 빈 값 위주)
+* ☑ `SUGGEST` job: `LOCAL_RULE` 최소 구현(근거 묶기/요약/템플릿) + citations/evidence 연동
 * ◐ `mode=API`는 opt-in으로만 실행 + 키/레이트리밋/회로차단 최소 (원격 호출은 스텁/차순위)
 * ☑ `LOCAL_GEN`은 “분기/인터페이스만”(차순위, 실구현 보류)
-* ☐ citations/evidence 연동: 문서ID/섹션/태그 경로(tag_path)까지 포함해 제안 결과 카드 렌더 가능하도록
+* ☑ citations/evidence 연동: 문서ID/섹션/태그 경로(tag_path)까지 포함해 제안 결과 카드 렌더 가능하도록
 
 관련 문서:
 
@@ -202,7 +202,7 @@
 ### Phase 90 — Export + Proofread(차순위 포함)
 
 * ☑ `EXPORT` job: txt/docx 내보내기 최소 구현
-* ◐ Proofread(rule-base) 최소 구현(1차는 실시간 표시가 기본; batch job은 차순위) (현재 double-space 수준; 규칙/강도 확장 필요)
+* ◐ Proofread(rule-base) 최소 구현(1차는 실시간 표시가 기본; batch job은 차순위) (double-space 외 기본 규칙 확장; 강도 조절은 차순위)
 
 관련 문서:
 
