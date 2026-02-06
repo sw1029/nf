@@ -55,7 +55,7 @@ modules/nf_schema/
 * ☑ 입력: `DocumentSnapshot`(텍스트)
 * ☑ 출력: `Chunk[]`(span 기반), 필요 시 `Section[]`
 * ☑ chunk는 FTS/벡터 공통 키(`chunk_id`)로 사용(`plan/contracts.md`)
-* ☐ Episode chunk 구성(n~m 구간): chunk에 episode_id 할당 + 인덱스로 전파(episode 필터 동작 보장)
+* ☑ Episode chunk 구성(n~m 구간): chunk에 episode_id 할당 + 인덱스로 전파(episode 필터 동작 보장)
 
 ## 3) 엔티티/동일성 (D2: 옵션2 우선)
 

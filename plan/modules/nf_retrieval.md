@@ -43,17 +43,17 @@ modules/nf_retrieval/
 
 ## 1) FTS (동기, 인용 우선)
 
-* ◐ SQLite FTS5 인덱스 생성/갱신
+* ☑ SQLite FTS5 인덱스 생성/갱신
   - 저장 필드: `chunk_id`, `doc_id`, `snapshot_id`, `section_path`, `tag_path`, `episode_id`, `span_start/span_end`
-  - (현재) `tag_path`/`episode_id` 전파가 미완이라 필터/인용 품질이 부족함
+  - `tag_path`/`episode_id` 전파(필터/인용 메타) 지원
 * ◐ `query_builder`: claim 텍스트 + 슬롯 기반(예: 나이/시간/장소) 질의 생성 (현재는 공백 정규화 수준)
 * ◐ `snippet`: Evidence 스니펫 생성(길이 제한) (현재는 텍스트 일부 발췌; tag_path/section_path 메타 전파는 별도)
 * ☑ API: `fts_search(request: RetrievalRequest) -> RetrievalResult[]`
 * ☐ fts_meta(체크섬 기반 증분 인덱싱)
-* ☐ tag_path 전파: tag_assignment(span overlap) 기반으로 retrieval evidence의 tag_path를 채우기(FTS/CONSISTENCY/SUGGEST 공통)
-* ◐ (추가 요구) filters 확장: `entity_id/time_key/timeline_idx`로 chunk group 필터링 지원
+* ☑ tag_path 전파: tag_assignment(span overlap) 기반으로 retrieval evidence의 tag_path를 채우기(FTS/CONSISTENCY/SUGGEST 공통)
+* ☑ (추가 요구) filters 확장: `entity_id/time_key/timeline_idx`로 chunk group 필터링 지원
   - 1차: `entity_mention_span/time_anchor`의 span overlap 기반 필터(사용자 요청 시 생성된 메타)
-  - 2차: `chunk ↔ entity/time` 역인덱스(옵션)로 최적화
+  - 2차(차순위): `chunk ↔ entity/time` 역인덱스(옵션)로 최적화
 
 ## 2) 벡터 (비동기 잡)
 
@@ -61,15 +61,15 @@ modules/nf_retrieval/
 * ◐ `vector_manifest.json` + `chunk_map_path`로 chunk_id ↔ 벡터 row 매핑 (현재는 manifest/shard만 존재)
 * ☑ API(워커용): `vector_search(request) -> RetrievalResult[]`
 * ☑ 잡 타입: `RETRIEVE_VEC`에서만 외부 노출(D5)
-* ◐ (추가 요구) filters.entity_id/time_key/timeline_idx 적용(워커 post-filter 또는 샤드 메타데이터 기반)
-* ☐ vector shard에 tag_path/episode_id 등 메타 포함(또는 post-filter 보강)하여 “근거 인용” 품질 보장
+* ☑ (추가 요구) filters.entity_id/time_key/timeline_idx 적용(워커 post-filter 경로)
+* ☑ vector shard에 tag_path/episode_id 등 메타 포함하여 “근거 인용” 품질 보장
 
 ## 3) RetrievalResult 계약
 
-* ◐ 최소 필드:
+* ☑ 최소 필드:
   - `evidence`: `doc_id/snapshot_id/chunk_id/section_path/tag_path/snippet/fts_score/match_type/confirmed`
   - `score`(fts_score 또는 벡터 점수), `source`(fts|vector)
-  - (현재) tag_path가 비어 있는 경로가 있어 “태그 경로 인용” 의도는 미반영
+  - tag_path는 태깅이 없으면 `""`일 수 있음
 
 ## 4) 테스트(pytest)
 

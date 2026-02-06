@@ -89,6 +89,9 @@ def fts_search(conn: sqlite3.Connection, req: RetrievalRequest) -> list[Retrieva
     if isinstance(filters, dict) and isinstance(filters.get("doc_id"), str):
         where += " AND doc_id = ?"
         params.append(filters["doc_id"])
+    if isinstance(filters, dict) and isinstance(filters.get("snapshot_id"), str):
+        where += " AND snapshot_id = ?"
+        params.append(filters["snapshot_id"])
     if filters.get("tag_path"):
         where += " AND tag_path = ?"
         params.append(filters["tag_path"])

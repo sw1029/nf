@@ -46,19 +46,19 @@ def _segment_text(text: str) -> list[tuple[int, int, str]]:
 
 def _extract_slots(segment: str) -> dict[str, object]:
     slots: dict[str, object] = {}
-    age_match = re.search(r"(\\d{1,3})\\s*살", segment)
+    age_match = re.search(r"(\d{1,3})\s*살", segment)
     if age_match:
         slots["age"] = int(age_match.group(1))
-    time_match = re.search(r"(\\d{1,2}:\\d{2}|\\d{4}년\\s*\\d{1,2}월\\s*\\d{1,2}일)", segment)
+    time_match = re.search(r"(\d{1,2}:\d{2}|\d{4}년\s*\d{1,2}월\s*\d{1,2}일)", segment)
     if time_match:
         slots["time"] = time_match.group(1)
-    place_match = re.search(r"(?:장소|위치)[:\\s]+([^\\n,.]+)", segment)
+    place_match = re.search(r"(?:장소|위치)[:\s]+([^\n,.]+)", segment)
     if place_match:
         slots["place"] = place_match.group(1).strip()
-    relation_match = re.search(r"(?:관계)[:\\s]+([^\\n,.]+)", segment)
+    relation_match = re.search(r"(?:관계)[:\s]+([^\n,.]+)", segment)
     if relation_match:
         slots["relation"] = relation_match.group(1).strip()
-    affiliation_match = re.search(r"(?:소속)[:\\s]+([^\\n,.]+)", segment)
+    affiliation_match = re.search(r"(?:소속)[:\s]+([^\n,.]+)", segment)
     if affiliation_match:
         slots["affiliation"] = affiliation_match.group(1).strip()
     if re.search(r"(사망|죽었|죽었다|사망했다|사망함)", segment):
@@ -73,9 +73,7 @@ def _extract_claims(text: str) -> list[tuple[int, int, str, dict[str, object]]]:
         slots = _extract_slots(segment)
         if slots:
             claims.append((span_start, span_end, segment, slots))
-    if claims:
-        return claims
-    return [(span_start, span_end, segment, {}) for span_start, span_end, segment in segments]
+    return claims
 
 
 def _bundle_evidence(evidences: list) -> list[dict[str, object]]:
@@ -149,7 +147,7 @@ class ConsistencyEngineImpl:
                 retrieval_req = {
                     "project_id": project_id,
                     "query": claim_text,
-                    "filters": {},
+                    "filters": {"doc_id": doc_id, "snapshot_id": snapshot_id},
                     "k": 3,
                 }
                 results = fts_search(conn, retrieval_req)
@@ -175,7 +173,7 @@ class ConsistencyEngineImpl:
                     evidence_repo.create_evidence(conn, evidence)
                     evidences.append(evidence)
 
-                verdict = Verdict.OK if evidences else Verdict.UNKNOWN
+                verdict = Verdict.UNKNOWN
                 candidates = find_entity_candidates(claim_text, alias_index)
                 ambiguous = len(candidates) > 1
                 filtered_facts = facts
@@ -183,7 +181,9 @@ class ConsistencyEngineImpl:
                     target = next(iter(candidates))
                     filtered_facts = [fact for fact in facts if fact.entity_id in (None, target)]
                 if evidences and filtered_facts:
-                    verdict = _judge_with_facts(claim_text, filtered_facts) or verdict
+                    judged = _judge_with_facts(claim_text, filtered_facts)
+                    if judged is not None:
+                        verdict = judged
                 if ambiguous:
                     verdict = Verdict.UNKNOWN
                 fts_strength = float(results[0]["score"]) if results else 0.0
@@ -234,7 +234,7 @@ class ConsistencyEngineImpl:
 
 
 def _judge_with_facts(claim_text: str, facts: list) -> Verdict | None:
-    numbers = re.findall(r"\\d+", claim_text)
+    numbers = re.findall(r"\d+", claim_text)
     for fact in facts:
         value = fact.value
         tag_tail = fact.tag_path.split("/")[-1]

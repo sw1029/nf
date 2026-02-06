@@ -92,7 +92,7 @@ modules/nf_orchestrator/
   - `/query/retrieval` POST (**FTS-only**; filters: tag_path/section/episode/entity_id/time_key/timeline_idx)
   - `/query/evidence/{eid}` GET
   - `/query/verdicts` POST
-  - ☐ (추가) verdict 상세 조회: verdict_log ↔ verdict_evidence_link ↔ evidence를 묶어 evidence[]/role까지 반환
+  - ☑ verdict 상세 조회: verdict_log ↔ verdict_evidence_link ↔ evidence를 묶어 evidence[]/role까지 반환
 * ☑ 잡(비동기)
   - `/jobs` POST
   - `/jobs/{jid}` GET

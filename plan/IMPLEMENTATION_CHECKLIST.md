@@ -13,6 +13,8 @@
 
 > 표기 규칙: ☐ TODO / ☑ Done / ◐ Partial(스텁/의도 미적용)
 
+> 참고: UI 구현은 보류한다. (제품 UI/디버그 UI의 스타일·UX 고도화는 본 작업 범위에서 제외)
+
 ---
 
 ## 0) 운영 규칙(통제)
@@ -96,6 +98,7 @@
 * ☑ `job_queue` 폴링/리스/하트비트/취소 플로우 구현
 * ☑ `job_event` 기록/스트리밍(Orchestrator SSE와 연결) 골격
 * ☑ “실행기 등록/디스패치” 구조 확립(타입별 handler)
+* ☑ Orchestrator+Worker 동시 기동 런처 제공: `run_local_stack.py`
 
 관련 문서:
 
@@ -156,7 +159,7 @@
 
 ### Phase 60 — 정합성(CONSISTENCY) + 로그/화이트리스트
 
-* ◐ `CONSISTENCY` job 최소 구현:
+* ☑ `CONSISTENCY` job 최소 구현:
   - Segment/Claim → Evidence(FTS-first) → Judge(L1/L2) → VerdictLog 저장
 * ☑ verdict/evidence 링크 저장 + 조회(`/query/verdicts` list + `/query/verdicts/{vid}` detail) 최소 구현
 * ☑ whitelist_item 저장/적용(재경고 억제) 최소 구현 (지문 저장 + scope(global/doc) 적용 + verdict_log 플래그 재계산)
@@ -202,7 +205,7 @@
 ### Phase 90 — Export + Proofread(차순위 포함)
 
 * ☑ `EXPORT` job: txt/docx 내보내기 최소 구현
-* ◐ Proofread(rule-base) 최소 구현(1차는 실시간 표시가 기본; batch job은 차순위) (double-space 외 기본 규칙 확장; 강도 조절은 차순위)
+* ☑ Proofread(rule-base) 최소 구현(1차는 실시간 표시가 기본; batch job은 차순위) (double-space 외 기본 규칙 확장; 강도 조절은 차순위)
 
 관련 문서:
 

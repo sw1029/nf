@@ -48,9 +48,9 @@
 * ☑ 동시작업 정책(전역 세마포어) 구현: heavy job 동시 1개 기본
 * ☑ 회로차단(circuit breaker)/레이트리밋 훅(최소 골격)
 * ☑ 저장소 계층(storage) + 마이그레이션 체계 구축
-* ☐ 정합성/제안 UX 지원을 위한 조회 확장:
-  - verdict 상세 조회(verdict_log ↔ verdict_evidence_link ↔ evidence 묶음 반환; SUPPORT/CONTRADICT 포함)
-  - whitelist/ignore 상태를 결과 조회에 반영(재경고 억제에 필요한 최소 정보 포함)
+* ◐ 정합성/제안 UX 지원을 위한 조회 확장:
+  - ☑ verdict 상세 조회(verdict_log ↔ verdict_evidence_link ↔ evidence 묶음 반환; SUPPORT/CONTRADICT 포함)
+  - ☐ whitelist/ignore 상태를 결과 조회에 반영(재경고 억제에 필요한 최소 정보 포함)
 
 ### 1.3 Workers (nf-workers)
 
@@ -67,7 +67,7 @@
   * ◐ PROOFREAD(문법/룰 기반 교정; 옵션) (현재 double-space 수준 스텁; 강도/규칙 확장 필요)
   * ☑ EXPORT(txt/docx)
 * ☑ 크래시 복구: lease_expires 처리로 “유실 작업 재큐잉” 보장
-* ◐ 실행/기동(개발/배포): Orchestrator와 Workers를 함께 구동하는 런처/스크립트 제공 (현재 `run_worker()` 함수만 존재)
+* ☑ 실행/기동(개발/배포): Orchestrator와 Workers를 함께 구동하는 런처/스크립트 제공 (`run_local_stack.py`)
 
 ---
 
@@ -81,7 +81,7 @@
 * ◐ schema_explicit_fact (High precision layer) (현 구현: `schema_facts(layer=explicit)`로 통합)
 * ◐ schema_implicit_fact (Unknown/Proposed layer) (현 구현: `schema_facts(layer=implicit)`로 통합)
 * ☑ whitelist_item
-* ☐ ignore_item(반복 경고/제안 억제: doc_id+span+kind+fingerprint 등) 또는 동등 정책 저장소
+* ☑ ignore_item(반복 경고/제안 억제: doc_id+span+kind+fingerprint 등) 저장소
 * ☑ evidence / verdict_log / verdict_evidence_link
 * ◐ job_queue / job_event (+ job_run 선택) (현 구현: `jobs`/`job_events` + jobs.attempts 등으로 대체)
 
@@ -93,7 +93,7 @@
 ### 2.3 Audit/Provenance 기본
 
 * ☑ verdict_log에 (claim_text, verdict, reliability, breakdown, whitelist 적용 여부, schema_ver, input_snapshot_id) 저장
-* ☐ verdict_log에 claim_fingerprint(또는 segment_fingerprint) 저장 (whitelist/ignore 연계 및 재경고 억제)
+* ☑ verdict_log에 claim_fingerprint 저장 (whitelist/ignore 연계 및 재경고 억제)
 * ☑ evidence에 (doc_id, snapshot_id, chunk_id, section_path, tag_path, snippet, fts_score, match_type, confirmed) 저장
 * ◐ 근거 연결(verdict_evidence_link)로 SUPPORT/CONTRADICT 역할 저장 (역할 컬럼은 있으나 현재 엔진은 SUPPORT 위주)
 
@@ -317,7 +317,7 @@
 
 * ☑ Evidence 최소 필드: doc_id, snapshot_id(optional), chunk_id(optional), section_path, tag_path, snippet_text, fts_score, match_type, confirmed
 * ◐ Verdict 최소 필드: claim_text, verdict(OK/VIOLATE/UNKNOWN), reliability_overall, breakdown_json, evidence[] (evidence[]는 링크 테이블 기반이며 API 노출은 미완)
-* ◐ Whitelist 적용 필드: whitelist_applied, claim_fingerprint (whitelist_applied는 저장, claim_fingerprint는 verdict_log에 미저장)
+* ☑ Whitelist 적용 필드: whitelist_applied, claim_fingerprint (whitelist_applied/claim_fingerprint 저장)
 * ◐ 저장 위치: Project DB(SQLite) + UI 카드 렌더링 (저장은 구현, 제품 UI 카드 렌더링은 미구현)
 
 ---

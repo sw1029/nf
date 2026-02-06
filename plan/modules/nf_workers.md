@@ -54,7 +54,7 @@ modules/nf_workers/
 * ☑ heartbeat로 lease 연장(`lease_expires_at`)
 * ☑ cancel flag(`cancel_requested`) 주기 체크
 * ☑ 크래시 복구: 리스 만료 잡은 QUEUED로 재전환
-* ☐ 실행/기동(개발/배포): 오케스트레이터와 함께 워커를 기동/종료하는 런처/스크립트 제공
+* ☑ 실행/기동(개발/배포): 오케스트레이터와 함께 워커를 기동/종료하는 런처/스크립트 제공 (`run_local_stack.py`)
 
 ## 2) Job 실행기 계약(타입별)
 

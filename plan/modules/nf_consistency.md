@@ -50,7 +50,7 @@ modules/nf_consistency/
 
 ## 2) Evidence Builder (근거 강제)
 
-* ◐ 기본: FTS로 evidence를 구성(정확 인용) (tag_path 전파/인용 품질은 미완)
+* ☑ 기본: FTS로 evidence를 구성(정확 인용) (tag_path 전파 지원; 태깅 없으면 빈 값 가능)
 * ☑ 잡 내부에서는 필요 시 벡터 확장 가능(무거운 잡 경로)
   - 단, “근거 부재를 모델로 뒤집지 못함” 정책 유지
 * ☑ Evidence는 `snapshot_id/chunk_id` 포함(가능하면)
@@ -75,9 +75,9 @@ modules/nf_consistency/
 
 ## 6) Whitelist
 
-* ◐ claim_fingerprint 계산 + whitelist_applied 기록(최소) (재경고 억제 로직/UX는 미구현)
-* ☐ whitelist scope(global/doc 단위) 정책 적용(정합성/제안에서 동일 지문 반복 억제)
-* ☐ verdict_log에 claim_fingerprint(또는 segment_fingerprint) 저장(whitelist/ignore 연계)
+* ☑ claim_fingerprint 계산 + whitelist_applied 기록(최소) (재경고 억제 로직/UX는 차순위)
+* ☑ whitelist scope(global/doc 단위) 정책 적용(정합성/제안에서 동일 지문 반복 억제)
+* ☑ verdict_log에 claim_fingerprint(whitelist/ignore 연계)
 * ◐ whitelist 적용 시 결과를 “오류→추가정보”로 표기할 수 있는 상태 필드 유지 (필드는 존재, UI 표기/억제는 미구현)
 
 ## 7) Verdict Logging
@@ -88,8 +88,8 @@ modules/nf_consistency/
 ## 8) 테스트(pytest)
 
 * ☑ `tests/test_nf_consistency_contracts.py`: ConsistencyRequest/ConsistencyEngine 계약 스모크
-* ☐ (차순위) L1 위배 감지 스모크(간단 schema + claim)
-* ☐ (차순위) 충돌/애매 시 unknown 강등 테스트
+* ☑ L1 위배 감지/OK/UNKNOWN 스모크(간단 schema + claim): `tests/test_nf_consistency_engine.py`
+* ☐ (차순위) 충돌/애매(동명이인/alias) 시 unknown 강등 테스트
 * ☐ (차순위) whitelist 적용 시 재경고 억제 테스트
 
 ---

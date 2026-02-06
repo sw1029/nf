@@ -54,6 +54,7 @@ def vector_search(req: RetrievalRequest) -> list[RetrievalResult]:
     shards = _select_shards(manifest, filters if isinstance(filters, dict) else {})
     query = req.get("query", "")
     query_tokens = tokenize(query)
+    snapshot_id_filter = filters.get("snapshot_id") if isinstance(filters, dict) else None
     tag_path_filter = filters.get("tag_path") if isinstance(filters, dict) else None
     section_filter = filters.get("section") if isinstance(filters, dict) else None
     episode_filter = filters.get("episode") if isinstance(filters, dict) else None
@@ -62,6 +63,9 @@ def vector_search(req: RetrievalRequest) -> list[RetrievalResult]:
     for shard in shards:
         entries = load_shard(shard.get("path", ""))
         for entry in entries:
+            if isinstance(snapshot_id_filter, str) and snapshot_id_filter:
+                if entry.get("snapshot_id") != snapshot_id_filter:
+                    continue
             if isinstance(tag_path_filter, str) and tag_path_filter:
                 primary = entry.get("tag_path") or ""
                 if primary != tag_path_filter:
