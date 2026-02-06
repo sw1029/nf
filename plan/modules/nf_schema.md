@@ -2,6 +2,8 @@
 
 nf-schema는 문서/태그/엔티티를 바탕으로 스키마 버전과 팩트(명시/암시)를 생성하고, 승인/거절 워크플로를 지원한다.
 
+> 표기 규칙: ☐ TODO / ☑ Done / ◐ Partial(스텁/의도 미적용)
+
 참조:
 
 - `plan/contracts.md`
@@ -44,7 +46,7 @@ modules/nf_schema/
 
 ## 1) 온톨로지/태그 시스템
 
-* ☑ `tag_path` 규격 고정(“설정/인물/주인공/나이”)
+* ◐ `tag_path` 규격 고정(“설정/인물/주인공/나이”) (현재는 기본 검증 위주; “표준 경로 사전/온톨로지 강제”는 미구현)
 * ☑ 기본 태그(def) + 사용자 정의 태그 지원
 * ☑ tag_def 제약(schema_type/범위/enum)을 저장/검증
 
@@ -53,6 +55,7 @@ modules/nf_schema/
 * ☑ 입력: `DocumentSnapshot`(텍스트)
 * ☑ 출력: `Chunk[]`(span 기반), 필요 시 `Section[]`
 * ☑ chunk는 FTS/벡터 공통 키(`chunk_id`)로 사용(`plan/contracts.md`)
+* ☐ Episode chunk 구성(n~m 구간): chunk에 episode_id 할당 + 인덱스로 전파(episode 필터 동작 보장)
 
 ## 3) 엔티티/동일성 (D2: 옵션2 우선)
 

@@ -2,6 +2,8 @@
 
 nf-workers는 오케스트레이터가 큐에 넣은 작업을 실행하고, 리스/하트비트/취소를 처리하며, job_event로 스트리밍한다.
 
+> 표기 규칙: ☐ TODO / ☑ Done / ◐ Partial(스텁/의도 미적용)
+
 참조:
 
 - `plan/contracts.md`
@@ -52,6 +54,7 @@ modules/nf_workers/
 * ☑ heartbeat로 lease 연장(`lease_expires_at`)
 * ☑ cancel flag(`cancel_requested`) 주기 체크
 * ☑ 크래시 복구: 리스 만료 잡은 QUEUED로 재전환
+* ☐ 실행/기동(개발/배포): 오케스트레이터와 함께 워커를 기동/종료하는 런처/스크립트 제공
 
 ## 2) Job 실행기 계약(타입별)
 
@@ -65,7 +68,7 @@ modules/nf_workers/
 ### 2.2 INDEX_FTS
 
 * ☑ 입력: `{scope, snapshot_id?}`
-* ☑ 동작: chunk 단위로 FTS 인덱스 갱신(증분)
+* ◐ 동작: chunk 단위로 FTS 인덱스 갱신(증분) (현재는 snapshot 단위 replace 형태; fts_meta 증분은 미구현)
 * ☑ (추가 요구) 시점/인물 chunk group 메타데이터 생성(사용자 요청 시)
   - 트리거: job `params.grouping` (예: `{entity_mentions:true, time_anchors:true, timeline_doc_id?}`)가 있을 때만 실행
   - 인물: `entity_mention_span`(문장 범위 span) 제안 → `AUTO+PROPOSED`로 저장
@@ -98,11 +101,11 @@ modules/nf_workers/
 * ☑ 1차: `mode=LOCAL_RULE` 구현(근거 묶기/요약/템플릿)
 * ☑ `mode=API`는 옵션(사용자 옵트인)으로만 실행
 * ☑ `mode=LOCAL_GEN`은 분기만(차순위)
-* ☑ 출력: `job_event(payload={suggestion_id, citations:[...]})`
+* ◐ 출력: `job_event(payload={suggestion_id, citations:[...]})` (현재 citations/evidence 연동이 빈 값 위주)
 
 ### 2.7 PROOFREAD (D1)
 
-* ☑ 1차는 “실시간 표시”가 기본이므로 배치 잡은 최소 구현 또는 스텁
+* ◐ 1차는 “실시간 표시”가 기본이므로 배치 잡은 최소 구현 또는 스텁 (현재 double-space 수준)
 * ☐ 차순위: 대용량 문서 범위 교정 결과를 이벤트로 스트리밍
 
 ### 2.8 EXPORT
@@ -112,7 +115,7 @@ modules/nf_workers/
 
 ## 3) 리소스 가드(최소)
 
-* ☑ 잡 단위 소프트 가드: 메모리/CPU 압력 시 PAUSE 또는 FAILSAFE
+* ◐ 잡 단위 소프트 가드: 메모리/CPU 압력 시 PAUSE 또는 FAILSAFE (현재는 메모리 압력 감지 위주)
 * ☑ 무거운 잡 동시 실행은 오케스트레이터 semaphore를 전제로 함
 
 ## 4) 테스트(pytest)

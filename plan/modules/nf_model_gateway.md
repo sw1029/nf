@@ -2,6 +2,8 @@
 
 nf-model-gateway는 모델 호출 경계를 제공한다: 로컬 소형 모델(ONNX), 원격 API, 그리고 차순위 로컬 생성 모델(로컬 생성기) 분기.
 
+> 표기 규칙: ☐ TODO / ☑ Done / ◐ Partial(스텁/의도 미적용)
+
 참조:
 
 - `plan/contracts.md`
@@ -44,19 +46,19 @@ modules/nf_model_gateway/
 
 ## 2) 로컬 소형 모델(ONNX) 인터페이스(없어도 동작)
 
-* ☑ NLI/분류기 호출 인터페이스만 고정
+* ◐ NLI/분류기 호출 인터페이스만 고정 (현재 스텁 점수)
   - `infer_nli(premise_evidence, hypothesis_claim) -> score`
-* ☑ 태그 품질 점수 인터페이스(옵션)
+* ◐ 태그 품질 점수 인터페이스(옵션) (현재 스텁 점수)
 
 ## 3) 원격 API 클라이언트(옵트인)
 
-* ☑ API 키/레이트리밋/회로차단 최소 골격
-* ☑ “SUGGEST/API” 요청에만 사용(기본 꺼짐)
+* ◐ API 키/레이트리밋/회로차단 최소 골격 (rate limit/circuit breaker는 있으나 실제 호출 클라이언트는 스텁)
+* ◐ “SUGGEST/API” 요청에만 사용(기본 꺼짐) (옵트인 게이트는 구현, provider 구현은 미완)
 
 ## 4) 로컬 생성기 분기(차순위; 1차는 분기만)
 
 * ☑ `suggest_local_gen(...)` 경로를 “선택 가능”하게만 노출
-* ☑ ModelStore 다운로드/버전관리와 연결 포인트만 마련(실 모델은 차순위)
+* ◐ ModelStore 다운로드/버전관리와 연결 포인트만 마련(실 모델은 차순위; 현재는 스텁)
 
 ## 5) 테스트(pytest)
 

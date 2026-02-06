@@ -3,6 +3,8 @@
 이 문서는 개발/디버깅 중 **각 기능의 작동 확인**을 빠르게 하기 위한 **임시 웹 UI** 계획이다.
 제품 UI(`nf-desktop`)와 별개이며, **루프백(127.0.0.1)에서만** 노출되는 것을 원칙으로 한다.
 
+> 표기 규칙: ☐ TODO / ☑ Done / ◐ Partial(스텁/의도 미적용)
+
 참조:
 
 - `plan/contracts.md` (HTTP API + 잡/SSE 계약)
@@ -77,9 +79,10 @@
 
 ### 2.4 Retrieval(정책 D5 준수)
 
-* ☑ Sync Retrieval(FTS-only):
+* ◐ Sync Retrieval(FTS-only):
   - `/query/retrieval` POST만 사용(FTS-only)
   - 입력 조절: `query`, `filters(tag_path/section/episode/entity_id/time_key/timeline_idx)`, `k`
+  - (현 상태) `tag_path`는 인덱싱 시 빈 값("") 위주이고 `episode_id`도 미부여(None)라, `tag_path/episode` 필터는 실질적으로 동작하지 않음
   - 결과 렌더: evidence 스니펫/경로/점수/confirmed 표시
 * ☑ Vector 확장(비동기):
   - “Vector 확장” 버튼 → `/jobs`에 `RETRIEVE_VEC` 제출
@@ -113,7 +116,7 @@
 * ☑ `/jobs`에 `SUGGEST` 제출 폼
   - mode: `LOCAL_RULE`(기본), `API`(옵트인), `LOCAL_GEN`(차순위 분기)
   - 입력 조절: range + citations 포함 여부(가능하면)
-* ☑ 결과: suggestion text + citation cards 렌더
+* ◐ 결과: suggestion text + citation cards 렌더 (현재 citations/evidence 연동이 빈 값 위주)
 
 ### 2.8 Proofread/Layout(정책 D1 준수)
 
@@ -123,8 +126,8 @@
   - (권장) 어두운 배경 선택 시 자동 대비(텍스트 색 자동 변경) 또는 테마 프리셋 제공
   - (권장) 설정값을 localStorage에 저장(리로드 후 유지)
   - 구현 상세: `plan/proofread_layout_style_controls.md`
-* ☑ Proofread(문법):
-  - rule-base lint 결과를 “실시간 표시” 형태로 관찰(underline/tooltip 유사 렌더)
+* ◐ Proofread(문법):
+  - rule-base lint 결과를 “실시간 표시” 형태로 관찰(underline/tooltip 유사 렌더) (현재 double-space 수준; 강도/규칙 확장 필요)
   - 모델 기반 문법 교정은 차순위(옵트인)로만 노출
 
 ### 2.9 Export
@@ -154,7 +157,7 @@
 * ☑ Data/fixture:
   - 샘플 프로젝트/문서/태그/스키마 seed 버튼(재현 가능한 고정 시드)
   - 초기화(reset) 버튼(테스트 DB/DocStore 삭제는 강력 경고 후 실행)
-* ☑ Worker behavior(부분 구현: max_* 변경은 재시작 필요):
+* ◐ Worker behavior(부분 구현: max_* 변경은 재시작 필요):
   - “heavy job 동시 1개” 정책 활성/비활성(관찰용)
   - max_loaded_shards/max_ram_mb 등 제한값을 UI에서 조절(테스트용)
 

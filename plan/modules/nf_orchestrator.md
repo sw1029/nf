@@ -2,6 +2,8 @@
 
 오케스트레이터는 로컬(루프백) API 서버로서, CRUD/쿼리/잡/스트리밍을 제공하고 정책을 강제한다.
 
+> 표기 규칙: ☐ TODO / ☑ Done / ◐ Partial(스텁/의도 미적용)
+
 참조:
 
 - `plan/contracts.md`
@@ -90,6 +92,7 @@ modules/nf_orchestrator/
   - `/query/retrieval` POST (**FTS-only**; filters: tag_path/section/episode/entity_id/time_key/timeline_idx)
   - `/query/evidence/{eid}` GET
   - `/query/verdicts` POST
+  - ☐ (추가) verdict 상세 조회: verdict_log ↔ verdict_evidence_link ↔ evidence를 묶어 evidence[]/role까지 반환
 * ☑ 잡(비동기)
   - `/jobs` POST
   - `/jobs/{jid}` GET
@@ -102,14 +105,14 @@ modules/nf_orchestrator/
   - `INGEST`, `INDEX_FTS`, `INDEX_VEC`, `CONSISTENCY`, `RETRIEVE_VEC`, `SUGGEST`, `PROOFREAD`, `EXPORT`
 * ☑ `payload_json` 스키마를 타입별로 고정(최소)
   - `INGEST`: `{doc_id, snapshot_id?}`
-  - `INDEX_FTS`: `{scope: doc_id|episode_range|global, snapshot_id?}`
+  - `INDEX_FTS`: `{scope: doc_id|global, snapshot_id?}` (episode_range/n~m은 별도 설계/지원 필요)
   - `INDEX_VEC`: `{scope, shard_policy}`
   - `CONSISTENCY`: `{input_doc_id, input_snapshot_id, range, schema_ver?}`
   - `RETRIEVE_VEC`: `{query, filters, k}` (filters: tag_path/section/episode/entity_id/time_key/timeline_idx)
-  - `SUGGEST`: `{range, mode: LOCAL_RULE|API|LOCAL_GEN, citations_required: true}`
+  - `SUGGEST`: `{range, mode: LOCAL_RULE|API|LOCAL_GEN}`
   - `PROOFREAD`: `{doc_id, snapshot_id, range?}` (차순위: 배치)
   - `EXPORT`: `{range, format, include_meta}`
-* ☐ (추가 요구) `params.grouping`(선택): 사용자 요청 시에만 시점/인물/타임라인 메타 생성
+* ☑ (추가 요구) `params.grouping`(선택): 사용자 요청 시에만 시점/인물/타임라인 메타 생성
   - 예: `INDEX_FTS` 제출 시 `params={grouping:{entity_mentions:true, time_anchors:true, timeline_doc_id?}}`
 
 ## 3) 스트리밍(SSE) 규격

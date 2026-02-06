@@ -2,6 +2,8 @@
 
 본 문서는 공통 타입/DTO/에러/설정/직렬화 규격을 정의한다.
 
+> 표기 규칙: ☐ TODO / ☑ Done / ◐ Partial(스텁/의도 미적용)
+
 참조:
 
 - `plan/contracts.md`

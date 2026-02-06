@@ -2,6 +2,8 @@
 
 nf-desktop은 사용자의 글 작성 흐름을 담당하며, 오케스트레이터와 IPC로 통신한다.
 
+> 표기 규칙: ☐ TODO / ☑ Done / ◐ Partial(스텁/의도 미적용)
+
 핵심 정책:
 
 - D1: 자간/줄간격은 **레이아웃 설정**, 문법(띄어쓰기/문장부호)은 **문법 교정**으로 분리, 실행은 **실시간 표시**
@@ -92,7 +94,7 @@ modules/nf_desktop/
 
 ## 3) 테스트(pytest)
 
-* ☐ `tests/test_nf_desktop_contracts.py`: OrchestratorClient/ProofreadRuleEngine 계약 스모크
+* ☑ `tests/test_nf_desktop_contracts.py`: OrchestratorClient/ProofreadRuleEngine 계약 스모크
 * ☐ (차순위) UI 로직(뷰모델) 단위 테스트(가능한 범위)
 * ☐ (차순위) 오케스트레이터 클라이언트 요청/응답 파싱 테스트
 

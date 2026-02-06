@@ -2,6 +2,8 @@
 
 nf-export는 문서/구간을 TXT/DOCX로 내보내고(필수), 옵션으로 메타데이터(태그/근거 요약)를 포함한다.
 
+> 표기 규칙: ☐ TODO / ☑ Done / ◐ Partial(스텁/의도 미적용)
+
 참조:
 
 - `plan/contracts.md`

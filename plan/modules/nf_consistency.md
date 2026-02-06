@@ -2,6 +2,8 @@
 
 nf-consistency는 원고 구간을 세그먼트로 나누고, 근거(Evidence)를 구성한 뒤, 계층형 판정으로 판정(Verdict)과 로그를 저장한다.
 
+> 표기 규칙: ☐ TODO / ☑ Done / ◐ Partial(스텁/의도 미적용)
+
 참조:
 
 - `plan/contracts.md`
@@ -42,21 +44,21 @@ modules/nf_consistency/
 
 ## 1) Segment/Claim 추출
 
-* ☑ 문장/절 세그먼트 분리
+* ◐ 문장/절 세그먼트 분리 (현재는 줄바꿈 기반; 문장부호/절 기반으로 개선 필요)
 * ☑ 하드 필드 힌트 기반 클레임 후보 추출(시간/나이/장소/관계 키워드)
 * ☑ 출력: `(segment_span, claim_text, slots)` 리스트
 
 ## 2) Evidence Builder (근거 강제)
 
-* ☑ 기본: FTS로 evidence를 구성(정확 인용)
+* ◐ 기본: FTS로 evidence를 구성(정확 인용) (tag_path 전파/인용 품질은 미완)
 * ☑ 잡 내부에서는 필요 시 벡터 확장 가능(무거운 잡 경로)
   - 단, “근거 부재를 모델로 뒤집지 못함” 정책 유지
 * ☑ Evidence는 `snapshot_id/chunk_id` 포함(가능하면)
 
 ## 3) Judge Layer 1 (명시만)
 
-* ☑ schema_explicit_fact(승인된 것)과 비교하여 위배 감지
-* ☑ 위배 시: `tag_path` + Evidence 스니펫을 반드시 포함
+* ◐ schema_explicit_fact(승인된 것)과 비교하여 위배 감지 (현재는 최소 규칙 기반 비교)
+* ◐ 위배 시: `tag_path` + Evidence 스니펫을 반드시 포함 (현재 Evidence 스니펫은 저장, tag_path는 전파 경로에 따라 비어 있을 수 있음)
 
 ## 4) Judge Layer 2 (휴리스틱, 보수적)
 
@@ -73,8 +75,10 @@ modules/nf_consistency/
 
 ## 6) Whitelist
 
-* ☑ claim_fingerprint 기반 재경고 억제
-* ☑ whitelist 적용 시 결과를 “오류→추가정보”로 표기할 수 있는 상태 필드 유지
+* ◐ claim_fingerprint 계산 + whitelist_applied 기록(최소) (재경고 억제 로직/UX는 미구현)
+* ☐ whitelist scope(global/doc 단위) 정책 적용(정합성/제안에서 동일 지문 반복 억제)
+* ☐ verdict_log에 claim_fingerprint(또는 segment_fingerprint) 저장(whitelist/ignore 연계)
+* ◐ whitelist 적용 시 결과를 “오류→추가정보”로 표기할 수 있는 상태 필드 유지 (필드는 존재, UI 표기/억제는 미구현)
 
 ## 7) Verdict Logging
 

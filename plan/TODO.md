@@ -48,6 +48,9 @@
 * ☑ 동시작업 정책(전역 세마포어) 구현: heavy job 동시 1개 기본
 * ☑ 회로차단(circuit breaker)/레이트리밋 훅(최소 골격)
 * ☑ 저장소 계층(storage) + 마이그레이션 체계 구축
+* ☐ 정합성/제안 UX 지원을 위한 조회 확장:
+  - verdict 상세 조회(verdict_log ↔ verdict_evidence_link ↔ evidence 묶음 반환; SUPPORT/CONTRADICT 포함)
+  - whitelist/ignore 상태를 결과 조회에 반영(재경고 억제에 필요한 최소 정보 포함)
 
 ### 1.3 Workers (nf-workers)
 
@@ -60,10 +63,11 @@
   * ☑ INDEX_VEC(벡터 샤드 구축/갱신)
   * ☑ CONSISTENCY(정합성 검사)
   * ☑ RETRIEVE_VEC(Vector 검색/확장; 비동기 스트리밍)
-  * ☑ SUGGEST(개선 제안; 로컬/원격)
-  * ☑ PROOFREAD(문법/룰 기반 교정; 옵션)
+  * ◐ SUGGEST(개선 제안; 로컬/원격) (현재 근거(evidence)/인용(citations) 연동이 빈 값 위주)
+  * ◐ PROOFREAD(문법/룰 기반 교정; 옵션) (현재 double-space 수준 스텁; 강도/규칙 확장 필요)
   * ☑ EXPORT(txt/docx)
 * ☑ 크래시 복구: lease_expires 처리로 “유실 작업 재큐잉” 보장
+* ◐ 실행/기동(개발/배포): Orchestrator와 Workers를 함께 구동하는 런처/스크립트 제공 (현재 `run_worker()` 함수만 존재)
 
 ---
 
@@ -77,6 +81,7 @@
 * ◐ schema_explicit_fact (High precision layer) (현 구현: `schema_facts(layer=explicit)`로 통합)
 * ◐ schema_implicit_fact (Unknown/Proposed layer) (현 구현: `schema_facts(layer=implicit)`로 통합)
 * ☑ whitelist_item
+* ☐ ignore_item(반복 경고/제안 억제: doc_id+span+kind+fingerprint 등) 또는 동등 정책 저장소
 * ☑ evidence / verdict_log / verdict_evidence_link
 * ◐ job_queue / job_event (+ job_run 선택) (현 구현: `jobs`/`job_events` + jobs.attempts 등으로 대체)
 
@@ -88,6 +93,7 @@
 ### 2.3 Audit/Provenance 기본
 
 * ☑ verdict_log에 (claim_text, verdict, reliability, breakdown, whitelist 적용 여부, schema_ver, input_snapshot_id) 저장
+* ☐ verdict_log에 claim_fingerprint(또는 segment_fingerprint) 저장 (whitelist/ignore 연계 및 재경고 억제)
 * ☑ evidence에 (doc_id, snapshot_id, chunk_id, section_path, tag_path, snippet, fts_score, match_type, confirmed) 저장
 * ◐ 근거 연결(verdict_evidence_link)로 SUPPORT/CONTRADICT 역할 저장 (역할 컬럼은 있으나 현재 엔진은 SUPPORT 위주)
 
@@ -120,6 +126,12 @@
 * ☑ conflict 감지: 충돌 시 unknown 강등 규칙
 * ☑ schema_versioning(버전 생성/저장/조회)
 
+### 3.5 Episode chunk 구성(n~m 구간; RAG/분석 목적)
+
+* ☐ episode(n~m) 정의와 doc/스냅샷 매핑 규칙 확정(예: EPISODE 문서 제목 번호, 수동 매핑 등)
+* ☐ chunk 생성/저장 시 episode_id 할당 + fts_docs/vector shard에 전파(episode 필터 동작 보장)
+* ☐ episode 기반 retrieval 필터/정합성/제안 흐름 스모크 테스트
+
 ---
 
 ## 4) 검색 계층 (nf-retrieval): FTS-first → Vector-expand
@@ -128,6 +140,7 @@
 
 * ◐ SQLite FTS5 인덱스 구축(chunk_id/문서/스냅샷/섹션/태그 경로 + span 저장) (tag_path 컬럼은 있으나 현재 인덱싱은 비어 있음)
 * ◐ snippet 생성기(문서ID/섹션/태그경로 포함, 길이 제한) (snippet/text/section은 OK, tag_path는 현재 비어 있음)
+* ☐ tag_path 전파: tag_assignment(span overlap) 기반으로 retrieval evidence의 tag_path를 채우기(FTS/CONSISTENCY/SUGGEST 공통)
 * ☐ fts_meta(체크섬 기반 증분 인덱싱) (테이블만 존재, 증분 로직 미구현)
 
 ### 4.2 Vector (샤딩 + 필요 시 로드/언로드)
@@ -136,12 +149,13 @@
 * ◐ Vector manifest + shard 파일 구조 확정(+ chunk_map_path 등 매핑 포함) (manifest/shard는 있으나 매핑 메타는 최소)
 * ◐ shard 빌드/로드/언로드 정책(기본: SHARDED) (빌드/로드는 구현, 언로드/정책 세분화는 미구현)
 * ◐ LRU 캐시 + max_loaded_shards / max_ram_mb 정책 적용 (max_loaded_shards/메모리 추정 기반 throttle은 구현, LRU 캐시는 미구현)
+* ☐ vector shard에 tag_path/episode_id 등 메타 포함(또는 post-filter 보강)하여 “근거 인용” 품질 보장
 
 ### 4.3 Hybrid Router
 
 * ◐ 기본 라우팅(job 내부): FTS 결과 부족 시에만 Vector 확장 (CONSISTENCY는 FTS-first 구현, RETRIEVE_VEC는 vector-first)
 * ☑ UI 검색: sync는 FTS-only, Vector 확장은 `RETRIEVE_VEC` job으로 전환 + 스트리밍
-* ◐ 필터: tag_path/section/episode/entity_id/time_key/timeline_idx 기반 샤드 선택(최소) (FTS는 지원하나 tag_path 인덱싱은 미완, Vector는 doc_id/최근 shard 중심)
+* ◐ 필터: tag_path/section/episode/entity_id/time_key/timeline_idx 기반 샤드 선택(최소) (FTS는 지원하나 tag_path 인덱싱은 미완, episode_id는 현재 chunk에 미할당, Vector는 doc_id/최근 shard 중심)
 
 ---
 
@@ -149,13 +163,13 @@
 
 ### 5.1 Segmentation/Claim 추출
 
-* ☑ 문장/절 segmentation
+* ◐ 문장/절 segmentation (현재 줄바꿈 기반; 문장부호/절 기반으로 개선 필요)
 * ☑ 하드 필드 힌트 기반 claim 후보 추출(시간/나이/장소/관계 키워드)
 
 ### 5.2 Evidence Builder
 
 * ☑ claim → FTS 질의 생성(필터 적용 가능하면 적용)
-* ☑ evidence 표준 구조로 묶기(doc_id/snapshot_id/chunk_id/section_path/tag_path/snippet/score)
+* ◐ evidence 표준 구조로 묶기(doc_id/snapshot_id/chunk_id/section_path/tag_path/snippet/score) (tag_path 전파 미완)
 
 ### 5.3 Judge Layer 1: Explicit only (High precision)
 
@@ -177,6 +191,7 @@
 
 * ◐ UI에서 “의도된 모순” 체크 → whitelist_item 저장 (API+debug UI로 추가 가능, 제품 UI 체크박스는 미구현)
 * ☐ 동일 claim fingerprint 재경고 억제
+* ☐ whitelist scope(global/doc 단위) 정책 적용(정합성/제안에서 동일 지문 반복 억제)
 * ◐ whitelist 적용 시 결과를 “오류→추가정보” 형태로 표기(상태 필드로) (whitelist_applied 플래그는 저장, 표기 UX는 미구현)
 
 ### 5.7 Reliability Score(단일 점수 + 분해 항목)
