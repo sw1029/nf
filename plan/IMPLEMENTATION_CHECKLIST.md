@@ -131,7 +131,8 @@
 * ☑ `/_debug` 임시 UI 제공(기본 off)
 * ☑ Jobs submit + SSE viewer(타임라인/프로그레스/JSON payload) 구현
 * ☑ Retrieval(FTS-only) 폼 + 결과 렌더 구현 (tag_path/episode 메타 포함)
-* ◐ Proofread/Layout 프리뷰: 자간/행간 + 스타일(배경/폰트/크기/여백) + localStorage 유지 (Proofread는 현재 스텁 수준)
+* ☑ Layout 프리뷰: 자간/행간 + 스타일(배경/폰트/크기/여백) + localStorage 유지
+* ◐ Proofread 프리뷰: PROOFREAD 잡 결과(lint_items)를 underline/tooltip 형태로 표시 (강도 조절/제품 UI 실시간 연동은 차순위)
 * ☑ 테스트 토글/fixture/리셋(강력 경고) 최소 구현
 
 관련 문서:
@@ -162,10 +163,10 @@
 * ☑ `CONSISTENCY` job 최소 구현:
   - Segment/Claim → Evidence(FTS-first) → Judge(L1/L2) → VerdictLog 저장
 * ☑ verdict/evidence 링크 저장 + 조회(`/query/verdicts` list + `/query/verdicts/{vid}` detail) 최소 구현
-* ☑ whitelist_item 저장/적용(재경고 억제) 최소 구현 (지문 저장 + scope(global/doc) 적용 + verdict_log 플래그 재계산)
+* ☑ whitelist_item 저장 + verdict_log.whitelist_applied 플래그 재계산(표기/억제 UX는 차순위) (지문 저장 + scope(global/doc) 적용)
 * ☑ verdict 상세 조회: verdict_log ↔ verdict_evidence_link ↔ evidence를 묶어 evidence[]/role까지 반환
 * ☑ verdict_log에 claim_fingerprint(또는 segment_fingerprint) 저장 (whitelist/ignore 연계 및 재경고 억제)
-* ☑ whitelist scope(global/doc) 정책 적용 + ignore_item 저장소 도입(동일 지문 반복 억제)
+* ☑ ignore_item 저장 + API + 엔진 연동(정합성/제안 재경고 억제; 제품 UI는 차순위)
 
 관련 문서:
 
@@ -229,3 +230,14 @@
 관련 문서:
 
 - `plan/modules/nf_desktop.md`
+
+---
+
+## 부록) 현 구현 메모 (2026-02-06)
+
+- Debug Web UI(Phase 40)는 `modules/nf_orchestrator/debug_ui.html` 기반으로 동작하며, Layout 스타일/ localStorage 저장은 구현 완료.
+- Sync Retrieval/필터(tag_path/episode)는 “태깅(span tag_assignment) / episode 정의+EPISODE 제목 번호”가 있어야 값이 채워져 유의미하게 동작함(샘플 fixture는 기본값이 빈 상태).
+- Vector 검색은 현재 token overlap 기반 스텁(실제 임베딩/FAISS 등은 차순위).
+- ignore_item은 API/엔진 연동까지 구현(정합성/제안 suppress). 제품 UI/UX는 차순위.
+- 원격 API(OpenAI/Gemini)는 현재 스텁(provider가 prompt를 그대로 반환)이며, 키 저장(OS keyring) 등은 차순위.
+- 제품 UI(nf-desktop) 및 UI helper 레이어는 미구현(Phase 95).

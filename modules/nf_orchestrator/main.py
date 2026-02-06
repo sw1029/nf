@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 from modules.nf_orchestrator.services.document_service import DocumentServiceImpl
 from modules.nf_orchestrator.services.entity_service import EntityServiceImpl
 from modules.nf_orchestrator.services.episode_service import EpisodeServiceImpl
+from modules.nf_orchestrator.services.ignore_service import IgnoreServiceImpl
 from modules.nf_orchestrator.services.job_service import JobServiceImpl
 from modules.nf_orchestrator.services.project_service import ProjectServiceImpl
 from modules.nf_orchestrator.services.query_service import QueryServiceImpl
@@ -72,6 +73,8 @@ def _build_openapi_spec() -> dict[str, Any]:
             "/projects/{project_id}/time-anchors/{anchor_id}": {"patch": {"summary": "Update time anchor status"}},
             "/projects/{project_id}/timeline-events": {"get": {"summary": "List timeline events"}},
             "/projects/{project_id}/timeline-events/{event_id}": {"patch": {"summary": "Update timeline event status"}},
+            "/projects/{project_id}/whitelist": {"post": {"summary": "Add whitelist item"}, "delete": {"summary": "Delete whitelist item"}},
+            "/projects/{project_id}/ignore": {"post": {"summary": "Add ignore item"}, "delete": {"summary": "Delete ignore item"}},
             "/jobs": {"post": {"summary": "Submit job"}},
             "/jobs/{job_id}": {"get": {"summary": "Get job"}},
             "/jobs/{job_id}/cancel": {"post": {"summary": "Cancel job"}},
@@ -96,6 +99,7 @@ class OrchestratorHTTPServer(ThreadingHTTPServer):
         self.timeline_service = TimelineServiceImpl()
         self.query_service = QueryServiceImpl()
         self.whitelist_service = WhitelistServiceImpl()
+        self.ignore_service = IgnoreServiceImpl()
         self.job_service = JobServiceImpl()
         self.settings = load_config()
         self.token = token
@@ -246,6 +250,9 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 return
             if resource == "whitelist":
                 self._handle_whitelist(project_id)
+                return
+            if resource == "ignore":
+                self._handle_ignore(project_id)
                 return
             if resource == "schema":
                 self._handle_schema(project_id, tail)
@@ -719,6 +726,52 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             return
         self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
 
+    def _handle_ignore(self, project_id: str) -> None:
+        if self.command == "POST":
+            payload = self._read_json()
+            claim_text = payload.get("claim_text")
+            scope = payload.get("scope")
+            kind = payload.get("kind")
+            note = payload.get("note")
+            if not isinstance(claim_text, str) or not claim_text.strip():
+                raise AppError(ErrorCode.VALIDATION_ERROR, "claim_text가 필요합니다")
+            if not isinstance(scope, str) or not scope.strip():
+                raise AppError(ErrorCode.VALIDATION_ERROR, "scope가 필요합니다")
+            if not isinstance(kind, str) or not kind.strip():
+                raise AppError(ErrorCode.VALIDATION_ERROR, "kind가 필요합니다")
+            item = self.server.ignore_service.add_item(
+                project_id,
+                claim_text,
+                scope.strip(),
+                kind.strip(),
+                note,
+            )
+            self._send_json(HTTPStatus.CREATED, {"ignore": item})
+            return
+        if self.command == "DELETE":
+            payload = self._read_json()
+            claim_text = payload.get("claim_text")
+            scope = payload.get("scope")
+            kind = payload.get("kind")
+            if not isinstance(claim_text, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "claim_text가 필요합니다")
+            if scope is not None and not isinstance(scope, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "scope는 문자열이어야 합니다")
+            if kind is not None and not isinstance(kind, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "kind는 문자열이어야 합니다")
+            deleted = self.server.ignore_service.delete_item(
+                project_id,
+                claim_text,
+                scope=scope.strip() if isinstance(scope, str) else None,
+                kind=kind.strip() if isinstance(kind, str) else None,
+            )
+            if not deleted:
+                self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "ignore를 찾을 수 없습니다")
+                return
+            self._send_json(HTTPStatus.OK, {"deleted": True})
+            return
+        self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
     def _handle_schema(self, project_id: str, tail: list[str]) -> None:
         if not tail:
             if self.command == "GET":
@@ -945,6 +998,15 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             require_str("doc_id")
         elif job_type == JobType.INDEX_FTS:
             require_str("scope")
+            snapshot_id = inputs.get("snapshot_id")
+            scope = inputs.get("scope")
+            if snapshot_id is not None and not isinstance(snapshot_id, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "snapshot_id는 문자열이어야 합니다")
+            if isinstance(snapshot_id, str) and snapshot_id.strip() and scope == "global":
+                raise AppError(
+                    ErrorCode.VALIDATION_ERROR,
+                    "snapshot_id는 scope=global과 함께 사용할 수 없습니다",
+                )
         elif job_type == JobType.INDEX_VEC:
             require_str("scope")
             require_dict("shard_policy")

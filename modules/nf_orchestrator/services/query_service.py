@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from modules.nf_orchestrator.storage import db
-from modules.nf_orchestrator.storage.repos import evidence_repo
+from modules.nf_orchestrator.storage.repos import evidence_repo, ignore_repo, whitelist_repo
 from modules.nf_retrieval.contracts import RetrievalRequest, RetrievalResult
 from modules.nf_retrieval.fts.fts_index import fts_search
 from modules.nf_shared.protocol.dtos import Evidence, EvidenceMatchType, VerdictLog
@@ -56,4 +57,16 @@ class QueryServiceImpl:
                 return None
             evidence_items = evidence_repo.list_verdict_evidence(conn, vid)
             fingerprint = evidence_repo.get_claim_fingerprint(conn, vid)
-            return {"verdict": verdict, "evidence": evidence_items, "claim_fingerprint": fingerprint}
+            if not fingerprint:
+                digest = hashlib.sha256(verdict.claim_text.strip().encode("utf-8")).hexdigest()
+                fingerprint = f"sha256:{digest}"
+            scope = verdict.input_doc_id
+            whitelisted = whitelist_repo.is_whitelisted(conn, project_id, fingerprint, scope=scope)
+            ignored = ignore_repo.is_ignored(conn, project_id, fingerprint, scope=scope, kind="CONSISTENCY")
+            return {
+                "verdict": verdict,
+                "evidence": evidence_items,
+                "claim_fingerprint": fingerprint,
+                "whitelisted": whitelisted,
+                "ignored": ignored,
+            }

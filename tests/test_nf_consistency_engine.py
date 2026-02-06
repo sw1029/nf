@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from pathlib import Path
 
@@ -7,7 +8,7 @@ import pytest
 
 from modules.nf_consistency.engine import ConsistencyEngineImpl
 from modules.nf_orchestrator.storage import db, docstore
-from modules.nf_orchestrator.storage.repos import document_repo, evidence_repo, schema_repo
+from modules.nf_orchestrator.storage.repos import document_repo, evidence_repo, ignore_repo, schema_repo
 from modules.nf_retrieval.fts.fts_index import index_chunks
 from modules.nf_schema.chunking import build_chunks
 from modules.nf_shared.protocol.dtos import (
@@ -207,3 +208,35 @@ def test_consistency_engine_violate_when_fact_mismatches(tmp_path: Path) -> None
     assert len(verdicts) == 1
     assert verdicts[0].verdict is Verdict.VIOLATE
 
+
+@pytest.mark.unit
+def test_consistency_engine_skips_ignored_claims(tmp_path: Path) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "나이 11살"
+
+    with db.connect(db_path) as conn:
+        _seed_document(conn, tmp_path=tmp_path, project_id=project_id, doc_id=doc_id, snapshot_id=snapshot_id, text=text)
+        ignore_repo.create_ignore_item(
+            conn,
+            project_id=project_id,
+            claim_fingerprint=f"sha256:{hashlib.sha256(text.strip().encode('utf-8')).hexdigest()}",
+            scope=doc_id,
+            kind="CONSISTENCY",
+            note="suppress",
+        )
+
+    engine = ConsistencyEngineImpl(db_path=db_path)
+    verdicts = engine.run(
+        {
+            "project_id": project_id,
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "schema_ver": "",
+        }
+    )
+
+    assert verdicts == []

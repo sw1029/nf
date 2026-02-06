@@ -41,6 +41,7 @@ modules/nf_orchestrator/
     schema.py
     entities.py
     whitelist.py
+    ignore.py
     query.py
     jobs.py
     export.py
@@ -52,6 +53,7 @@ modules/nf_orchestrator/
     entity_service.py
     schema_service.py
     whitelist_service.py
+    ignore_service.py
     query_service.py
     job_service.py
     export_service.py
@@ -67,6 +69,8 @@ modules/nf_orchestrator/
       schema_repo.py
       job_repo.py
       evidence_repo.py
+      whitelist_repo.py
+      ignore_repo.py
 ```
 
 ## 1) HTTP API 표면(계약 기준)
@@ -83,6 +87,7 @@ modules/nf_orchestrator/
   - ☑ `/projects/{project_id}/entities` GET/POST
   - ☑ `/projects/{project_id}/entities/{eid}/aliases` GET/POST/DELETE
   - ☑ `/projects/{project_id}/whitelist` POST/DELETE
+  - ☑ `/projects/{project_id}/ignore` POST/DELETE
 * ☑ 스키마 뷰 + 승인(D3)
   - `/projects/{project_id}/schema` GET (현재 승인된 스키마 뷰)
   - `/projects/{project_id}/schema/facts` GET (filters: status/source/layer)

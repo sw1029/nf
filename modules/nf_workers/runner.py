@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import sqlite3
 import sys
 import time
 import uuid
@@ -21,6 +23,8 @@ from modules.nf_orchestrator.storage.repos import (
     chunk_repo,
     document_repo,
     evidence_repo,
+    fts_meta_repo,
+    ignore_repo,
     job_repo,
     project_repo,
     schema_repo,
@@ -245,6 +249,61 @@ def _get_process_rss_mb() -> float:
 def _estimate_index_mb(text: str, chunk_count: int) -> float:
     text_mb = len(text.encode("utf-8")) / (1024 * 1024)
     return text_mb * 2.0 + chunk_count * 0.001
+
+
+def _tag_assignment_signature(conn: sqlite3.Connection, snapshot_id: str) -> str:
+    try:
+        rows = conn.execute(
+            """
+            SELECT span_start, span_end, tag_path
+            FROM tag_assignment
+            WHERE snapshot_id = ?
+            ORDER BY span_start ASC, span_end ASC, tag_path ASC
+            """,
+            (snapshot_id,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return ""
+    parts: list[str] = []
+    for row in rows:
+        span_start = int(row["span_start"])
+        span_end = int(row["span_end"])
+        tag_path = str(row["tag_path"] or "")
+        parts.append(f"{span_start}:{span_end}:{tag_path}")
+    raw = "\n".join(parts).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _fts_meta_checksum(
+    conn: sqlite3.Connection,
+    *,
+    doc_id: str,
+    snapshot_id: str,
+    snapshot_checksum: str,
+    episode_id: str | None,
+) -> str:
+    tag_sig = _tag_assignment_signature(conn, snapshot_id)
+    payload = (
+        f"doc_id={doc_id}|snapshot_id={snapshot_id}|snapshot_checksum={snapshot_checksum}"
+        f"|episode_id={episode_id or ''}|tag_sig={tag_sig}"
+    )
+    return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
+
+
+def _snapshot_has_chunks(conn: sqlite3.Connection, snapshot_id: str) -> bool:
+    try:
+        row = conn.execute("SELECT 1 FROM chunks WHERE snapshot_id = ? LIMIT 1", (snapshot_id,)).fetchone()
+    except sqlite3.OperationalError:
+        return False
+    return row is not None
+
+
+def _snapshot_has_fts_rows(conn: sqlite3.Connection, snapshot_id: str) -> bool:
+    try:
+        row = conn.execute("SELECT 1 FROM fts_docs WHERE snapshot_id = ? LIMIT 1", (snapshot_id,)).fetchone()
+    except sqlite3.OperationalError:
+        return False
+    return row is not None
 
 
 def _sentence_spans(text: str) -> list[tuple[int, int, str]]:
@@ -697,8 +756,14 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
     snapshot_id = ctx.payload.get("snapshot_id")
     if not isinstance(scope, str):
         raise RuntimeError("scope missing")
+    if snapshot_id is not None and not isinstance(snapshot_id, str):
+        raise RuntimeError("snapshot_id must be a string")
+    if isinstance(snapshot_id, str) and snapshot_id and scope == "global":
+        raise RuntimeError("snapshot_id는 scope=global과 함께 사용할 수 없습니다")
 
     indexed = 0
+    docs_indexed = 0
+    docs_skipped = 0
     mentions_created = 0
     anchors_created = 0
     timeline_events_created = 0
@@ -765,22 +830,48 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                 snapshot = document_repo.get_snapshot(conn, doc.head_snapshot_id)
             if snapshot is None:
                 continue
-            text = docstore.read_text(snapshot.path)
-            chunks = build_chunks(
-                project_id=doc.project_id,
+            episode_id = _resolve_episode_id(conn, doc.project_id, doc)
+            if snapshot_id and snapshot.doc_id != doc.doc_id:
+                raise RuntimeError("snapshot_id does not belong to the selected document scope")
+
+            meta_checksum = _fts_meta_checksum(
+                conn,
                 doc_id=doc.doc_id,
                 snapshot_id=snapshot.snapshot_id,
-                text=text,
+                snapshot_checksum=snapshot.checksum,
+                episode_id=episode_id,
             )
-            episode_id = _resolve_episode_id(conn, doc.project_id, doc)
-            if episode_id is not None:
-                chunks = [replace(chunk, episode_id=episode_id) for chunk in chunks]
-            chunk_repo.replace_chunks_for_snapshot(conn, snapshot.snapshot_id, chunks)
-            index_chunks(conn, snapshot_id=snapshot.snapshot_id, chunks=chunks, text=text)
-            indexed += len(chunks)
+            prev_checksum = fts_meta_repo.get_checksum(conn, doc.doc_id)
+            needs_index = (
+                prev_checksum != meta_checksum
+                or not _snapshot_has_chunks(conn, snapshot.snapshot_id)
+                or not _snapshot_has_fts_rows(conn, snapshot.snapshot_id)
+            )
+
+            text = None
+            if needs_index or grouping:
+                text = docstore.read_text(snapshot.path)
+
+            if needs_index:
+                chunks = build_chunks(
+                    project_id=doc.project_id,
+                    doc_id=doc.doc_id,
+                    snapshot_id=snapshot.snapshot_id,
+                    text=text or "",
+                )
+                if episode_id is not None:
+                    chunks = [replace(chunk, episode_id=episode_id) for chunk in chunks]
+                chunk_repo.replace_chunks_for_snapshot(conn, snapshot.snapshot_id, chunks)
+                index_chunks(conn, snapshot_id=snapshot.snapshot_id, chunks=chunks, text=text or "")
+                fts_meta_repo.upsert(conn, doc.doc_id, meta_checksum)
+                indexed += len(chunks)
+                docs_indexed += 1
+            else:
+                docs_skipped += 1
+
             if not grouping:
                 continue
-            spans = _sentence_spans(text)
+            spans = _sentence_spans(text or "")
             if group_entities and alias_index:
                 schema_repo.delete_entity_mention_spans(
                     conn,
@@ -838,6 +929,9 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
             progress=1.0,
             payload={
                 "chunks_indexed": indexed,
+                "docs_indexed": docs_indexed,
+                "docs_skipped": docs_skipped,
+                "incremental": True,
                 "entity_mentions_created": mentions_created,
                 "time_anchors_created": anchors_created,
                 "timeline_events_created": timeline_events_created,
@@ -919,6 +1013,33 @@ def _handle_suggest(ctx: WorkerContext) -> None:
         range_info = {}
     mode = SuggestMode(mode_raw) if isinstance(mode_raw, str) else SuggestMode.LOCAL_RULE
     gateway = select_model(purpose="suggest_local_rule")
+
+    doc_scope = None
+    doc_id_raw = range_info.get("doc_id")
+    if isinstance(doc_id_raw, str) and doc_id_raw.strip():
+        doc_scope = doc_id_raw.strip()
+    fingerprint = f"sha256:{hashlib.sha256(str(claim_text).strip().encode('utf-8')).hexdigest()}"
+    with db.connect(ctx._db_path) as conn:
+        if ignore_repo.is_ignored(conn, ctx.project_id, fingerprint, scope=doc_scope, kind="SUGGEST"):
+            suggestion_id = str(uuid.uuid4())
+            ctx.emit(
+                JobEvent(
+                    event_id="",
+                    job_id=ctx.job_id,
+                    ts="",
+                    level=JobEventLevel.INFO,
+                    message="suggest suppressed (ignored)",
+                    progress=1.0,
+                    payload={
+                        "suggestion_id": suggestion_id,
+                        "text": "",
+                        "citations": [],
+                        "suppressed": True,
+                        "reason": "ignored",
+                    },
+                )
+            )
+            return
 
     k = ctx.payload.get("k") or 3
     try:

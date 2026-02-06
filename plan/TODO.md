@@ -19,7 +19,7 @@
 * ☑ **정합성 출력 규격 고정**: Claim–Evidence–Verdict 구조 + unknown 허용
 * ☑ “근거 없는 모델 출력 금지(evidence_required)” 정책 고정
 * ☑ “암시/추정 자동 확정 금지(implicit_fact_auto_approve=off)” 정책 고정
-* ◐ **화이트리스트(의도된 모순/거짓말) 지원** 정책 고정(재경고 억제) (저장/표기는 구현, “재경고 억제” UX/로직은 미구현)
+* ◐ **화이트리스트(의도된 모순/거짓말) 지원** 정책 고정(재경고 억제) (저장/표기 + CONSISTENCY 엔진 재경고 억제 로직은 구현, 제품 UI/표기 UX는 미구현)
 * ☑ “미정/유저 승인 필요” 정책은 `plan/DECISIONS_PENDING.md`로 관리
 
 ---
@@ -50,7 +50,7 @@
 * ☑ 저장소 계층(storage) + 마이그레이션 체계 구축
 * ◐ 정합성/제안 UX 지원을 위한 조회 확장:
   - ☑ verdict 상세 조회(verdict_log ↔ verdict_evidence_link ↔ evidence 묶음 반환; SUPPORT/CONTRADICT 포함)
-  - ☐ whitelist/ignore 상태를 결과 조회에 반영(재경고 억제에 필요한 최소 정보 포함)
+  - ◐ whitelist/ignore 상태를 결과 조회에 반영(재경고 억제에 필요한 최소 정보 포함) (verdict detail에 `whitelisted/ignored` 포함; list는 차순위)
 
 ### 1.3 Workers (nf-workers)
 
@@ -63,8 +63,8 @@
   * ☑ INDEX_VEC(벡터 샤드 구축/갱신)
   * ☑ CONSISTENCY(정합성 검사)
   * ☑ RETRIEVE_VEC(Vector 검색/확장; 비동기 스트리밍)
-  * ◐ SUGGEST(개선 제안; 로컬/원격) (현재 근거(evidence)/인용(citations) 연동이 빈 값 위주)
-  * ◐ PROOFREAD(문법/룰 기반 교정; 옵션) (현재 double-space 수준 스텁; 강도/규칙 확장 필요)
+  * ◐ SUGGEST(개선 제안; 로컬/원격) (citations 구조는 구현; tag_path는 태깅 없으면 `""`일 수 있음 / 제안 텍스트는 최소 템플릿 수준)
+  * ◐ PROOFREAD(문법/룰 기반 교정; 옵션) (규칙 일부 구현: double-space/trailing-whitespace/many-blank-lines/space-before-punct/repeated-punct/ellipsis; 강도 조절은 차순위)
   * ☑ EXPORT(txt/docx)
 * ☑ 크래시 복구: lease_expires 처리로 “유실 작업 재큐잉” 보장
 * ☑ 실행/기동(개발/배포): Orchestrator와 Workers를 함께 구동하는 런처/스크립트 제공 (`run_local_stack.py`)
@@ -81,7 +81,7 @@
 * ◐ schema_explicit_fact (High precision layer) (현 구현: `schema_facts(layer=explicit)`로 통합)
 * ◐ schema_implicit_fact (Unknown/Proposed layer) (현 구현: `schema_facts(layer=implicit)`로 통합)
 * ☑ whitelist_item
-* ☑ ignore_item(반복 경고/제안 억제: doc_id+span+kind+fingerprint 등) 저장소
+* ☑ ignore_item(반복 경고/제안 억제: doc_id+span+kind+fingerprint 등) 저장소 + API + 엔진 연동(CONSISTENCY/SUGGEST suppress)
 * ☑ evidence / verdict_log / verdict_evidence_link
 * ◐ job_queue / job_event (+ job_run 선택) (현 구현: `jobs`/`job_events` + jobs.attempts 등으로 대체)
 
@@ -138,10 +138,10 @@
 
 ### 4.1 FTS (정확 인용)
 
-* ◐ SQLite FTS5 인덱스 구축(chunk_id/문서/스냅샷/섹션/태그 경로 + span 저장) (tag_path 컬럼은 있으나 현재 인덱싱은 비어 있음)
-* ◐ snippet 생성기(문서ID/섹션/태그경로 포함, 길이 제한) (snippet/text/section은 OK, tag_path는 현재 비어 있음)
-* ☐ tag_path 전파: tag_assignment(span overlap) 기반으로 retrieval evidence의 tag_path를 채우기(FTS/CONSISTENCY/SUGGEST 공통)
-* ☐ fts_meta(체크섬 기반 증분 인덱싱) (테이블만 존재, 증분 로직 미구현)
+* ◐ SQLite FTS5 인덱스 구축(chunk_id/문서/스냅샷/섹션/태그 경로 + span 저장) (tag_path는 tag_assignment가 없으면 `""`로 인덱싱됨)
+* ◐ snippet 생성기(문서ID/섹션/태그경로 포함, 길이 제한) (snippet/text/section은 OK, tag_path는 태깅 없으면 `""`일 수 있음)
+* ☑ tag_path 전파: tag_assignment(span overlap) 기반으로 chunk/FTS/vector/evidence에 tag_path 채우기(태깅 없으면 `""` 가능)
+* ☑ fts_meta(체크섬 기반 증분 인덱싱) (INDEX_FTS에서 doc/snapshot/tag_assignment/episode_id signature 기반 skip)
 
 ### 4.2 Vector (샤딩 + 필요 시 로드/언로드)
 
@@ -149,13 +149,13 @@
 * ◐ Vector manifest + shard 파일 구조 확정(+ chunk_map_path 등 매핑 포함) (manifest/shard는 있으나 매핑 메타는 최소)
 * ◐ shard 빌드/로드/언로드 정책(기본: SHARDED) (빌드/로드는 구현, 언로드/정책 세분화는 미구현)
 * ◐ LRU 캐시 + max_loaded_shards / max_ram_mb 정책 적용 (max_loaded_shards/메모리 추정 기반 throttle은 구현, LRU 캐시는 미구현)
-* ☐ vector shard에 tag_path/episode_id 등 메타 포함(또는 post-filter 보강)하여 “근거 인용” 품질 보장
+* ☑ vector shard에 tag_path/episode_id 메타 포함(필드/저장) (episode_id 품질은 “episode 매핑 규칙” 확정에 의존)
 
 ### 4.3 Hybrid Router
 
 * ◐ 기본 라우팅(job 내부): FTS 결과 부족 시에만 Vector 확장 (CONSISTENCY는 FTS-first 구현, RETRIEVE_VEC는 vector-first)
 * ☑ UI 검색: sync는 FTS-only, Vector 확장은 `RETRIEVE_VEC` job으로 전환 + 스트리밍
-* ◐ 필터: tag_path/section/episode/entity_id/time_key/timeline_idx 기반 샤드 선택(최소) (FTS는 지원하나 tag_path 인덱싱은 미완, episode_id는 현재 chunk에 미할당, Vector는 doc_id/최근 shard 중심)
+* ◐ 필터: tag_path/section/episode/entity_id/time_key/timeline_idx 기반 검색 범위 좁히기 (필터 로직은 구현; 단 tag_assignment/episode 정의가 없으면 tag_path/episode 값이 비어 효용이 낮음)
 
 ---
 
@@ -169,7 +169,7 @@
 ### 5.2 Evidence Builder
 
 * ☑ claim → FTS 질의 생성(필터 적용 가능하면 적용)
-* ◐ evidence 표준 구조로 묶기(doc_id/snapshot_id/chunk_id/section_path/tag_path/snippet/score) (tag_path 전파 미완)
+* ☑ evidence 표준 구조로 묶기(doc_id/snapshot_id/chunk_id/section_path/tag_path/snippet/score) (tag_path는 태깅 없으면 `""` 가능)
 
 ### 5.3 Judge Layer 1: Explicit only (High precision)
 
@@ -190,8 +190,8 @@
 ### 5.6 Whitelist(의도된 모순/거짓말)
 
 * ◐ UI에서 “의도된 모순” 체크 → whitelist_item 저장 (API+debug UI로 추가 가능, 제품 UI 체크박스는 미구현)
-* ☐ 동일 claim fingerprint 재경고 억제
-* ☐ whitelist scope(global/doc 단위) 정책 적용(정합성/제안에서 동일 지문 반복 억제)
+* ☑ 동일 claim fingerprint 재경고 억제 (CONSISTENCY에서 whitelist 적용 claim은 skip)
+* ☑ whitelist scope(global/doc) 판정 로직 적용 + verdict_log.whitelist_applied 플래그 재계산 (반복 억제 UX/로직은 별도)
 * ◐ whitelist 적용 시 결과를 “오류→추가정보” 형태로 표기(상태 필드로) (whitelist_applied 플래그는 저장, 표기 UX는 미구현)
 
 ### 5.7 Reliability Score(단일 점수 + 분해 항목)
@@ -316,7 +316,7 @@
 # 체크리스트 부록: “정합성 결과(Evidence/Verdict) 표준 스펙” 확정 항목
 
 * ☑ Evidence 최소 필드: doc_id, snapshot_id(optional), chunk_id(optional), section_path, tag_path, snippet_text, fts_score, match_type, confirmed
-* ◐ Verdict 최소 필드: claim_text, verdict(OK/VIOLATE/UNKNOWN), reliability_overall, breakdown_json, evidence[] (evidence[]는 링크 테이블 기반이며 API 노출은 미완)
+* ☑ Verdict 최소 필드: claim_text, verdict(OK/VIOLATE/UNKNOWN), reliability_overall, breakdown_json, evidence[] (상세 API `/query/verdicts/{vid}`에서 evidence[]/role 반환)
 * ☑ Whitelist 적용 필드: whitelist_applied, claim_fingerprint (whitelist_applied/claim_fingerprint 저장)
 * ◐ 저장 위치: Project DB(SQLite) + UI 카드 렌더링 (저장은 구현, 제품 UI 카드 렌더링은 미구현)
 

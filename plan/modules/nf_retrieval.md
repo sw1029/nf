@@ -49,7 +49,7 @@ modules/nf_retrieval/
 * ◐ `query_builder`: claim 텍스트 + 슬롯 기반(예: 나이/시간/장소) 질의 생성 (현재는 공백 정규화 수준)
 * ◐ `snippet`: Evidence 스니펫 생성(길이 제한) (현재는 텍스트 일부 발췌; tag_path/section_path 메타 전파는 별도)
 * ☑ API: `fts_search(request: RetrievalRequest) -> RetrievalResult[]`
-* ☐ fts_meta(체크섬 기반 증분 인덱싱)
+* ☑ fts_meta(체크섬 기반 증분 인덱싱)
 * ☑ tag_path 전파: tag_assignment(span overlap) 기반으로 retrieval evidence의 tag_path를 채우기(FTS/CONSISTENCY/SUGGEST 공통)
 * ☑ (추가 요구) filters 확장: `entity_id/time_key/timeline_idx`로 chunk group 필터링 지원
   - 1차: `entity_mention_span/time_anchor`의 span overlap 기반 필터(사용자 요청 시 생성된 메타)

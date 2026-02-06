@@ -23,6 +23,21 @@
 
 ---
 
+## 현 구현 상태 (2026-02-06)
+
+- 제품 UI helper(공용 클라이언트 레이어)는 **아직 미구현**이며, 현재는 `debug_ui.html`에서 엔드포인트 문자열로 직접 호출 중.
+- 인증/토큰(현재 서버 동작):
+  - 일반 API: `Authorization: Bearer <token>` 또는 `X-NF-Token: <token>` 또는 쿼리 `?token=...|nf_token=...` (`NF_ORCHESTRATOR_TOKEN`)
+  - 디버그 UI: `X-NF-Debug-Token` 또는 쿼리 `?debug_token=...` (`NF_DEBUG_WEB_UI_TOKEN`)
+- SSE 이어받기:
+  - `Last-Event-ID` 헤더 기반 + (대체) `?after=<seq>` 쿼리 기반을 지원
+- OpenAPI:
+  - 최소 스펙을 `/openapi.json`으로 제공(코드 생성의 출발점으로 활용 가능)
+- 프로세스 분리 주의:
+  - 오케스트레이터에서 환경변수/설정을 바꿔도 워커 프로세스에는 자동 전파되지 않음 → `max_loaded_shards/max_ram_mb` 등은 **워커 재시작 후 반영**
+
+---
+
 ## MoSCoW
 
 ### [M] Must (반드시)
@@ -95,4 +110,3 @@
 1) Must 최소 세트부터 구현(요청 래퍼 + Projects/Jobs + SSE)
 2) `debug_ui.html`의 호출 코드를 helper 방식으로 대체 가능한 단위부터 점진 이전
 3) Should 항목(스키마 검증/다운로드/Abort)을 제품 UI 요구사항에 맞춰 확장
-

@@ -7,7 +7,13 @@ from datetime import datetime, timezone
 
 from modules.nf_consistency.contracts import ConsistencyRequest
 from modules.nf_orchestrator.storage import db, docstore
-from modules.nf_orchestrator.storage.repos import document_repo, evidence_repo, schema_repo, whitelist_repo
+from modules.nf_orchestrator.storage.repos import (
+    document_repo,
+    evidence_repo,
+    ignore_repo,
+    schema_repo,
+    whitelist_repo,
+)
 from modules.nf_model_gateway.gateway import select_model
 from modules.nf_retrieval.fts.fts_index import fts_search
 from modules.nf_retrieval.vector.manifest import vector_search
@@ -144,6 +150,17 @@ class ConsistencyEngineImpl:
             claims = _extract_claims(text)
             verdicts: list[VerdictLog] = []
             for span_start, span_end, claim_text, _slots in claims:
+                fingerprint = _fingerprint(claim_text)
+                if ignore_repo.is_ignored(
+                    conn,
+                    project_id,
+                    fingerprint,
+                    scope=doc_id,
+                    kind="CONSISTENCY",
+                ):
+                    continue
+                if whitelist_repo.is_whitelisted(conn, project_id, fingerprint, scope=doc_id):
+                    continue
                 retrieval_req = {
                     "project_id": project_id,
                     "query": claim_text,
@@ -201,12 +218,7 @@ class ConsistencyEngineImpl:
                 reliability = min(0.6, breakdown.evidence_count / 3) if evidences else 0.0
                 if verdict is Verdict.UNKNOWN:
                     reliability = 0.0
-                whitelist_applied = whitelist_repo.is_whitelisted(
-                    conn,
-                    project_id,
-                    _fingerprint(claim_text),
-                    scope=doc_id,
-                )
+                whitelist_applied = whitelist_repo.is_whitelisted(conn, project_id, fingerprint, scope=doc_id)
 
                 verdict_log = VerdictLog(
                     vid=str(uuid.uuid4()),

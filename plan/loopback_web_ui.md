@@ -37,6 +37,14 @@
 
 ---
 
+## 0.1) 현 구현 메모 (2026-02-06)
+
+- 샘플 fixture는 `tag_def`만 seed하며 `tag_assignment`/episode 정의는 생성하지 않음 → Retrieval의 `tag_path/episode` 필터는 기본 상태에서 빈 값일 수 있음.
+- Proofread는 PROOFREAD 잡 실행 결과(lint_items)를 레이아웃 미리보기 패널에 적용하는 방식(타이핑 중 자동 lint는 제품 UI에서).
+- 원격 API(OpenAI/Gemini) provider는 현재 스텁이며, enable_remote_api는 “정책 게이트”로만 의미가 있음.
+
+---
+
 ## 1) 실행/노출 조건(루프백 고정)
 
 * ☑ 바인딩: `127.0.0.1` 전용(필수). `0.0.0.0` 바인딩 금지.
@@ -79,10 +87,12 @@
 
 ### 2.4 Retrieval(정책 D5 준수)
 
-* ◐ Sync Retrieval(FTS-only):
+* ☑ Sync Retrieval(FTS-only):
   - `/query/retrieval` POST만 사용(FTS-only)
   - 입력 조절: `query`, `filters(tag_path/section/episode/entity_id/time_key/timeline_idx)`, `k`
-  - (현 상태) `tag_path`는 인덱싱 시 빈 값("") 위주이고 `episode_id`도 미부여(None)라, `tag_path/episode` 필터는 실질적으로 동작하지 않음
+  - (주의) `tag_path/episode_id`는 “데이터가 있을 때”만 필터로 유의미함
+    - `tag_path`: `tag_assignment`가 없으면 `""`로 인덱싱됨
+    - `episode_id`: episode 정의 + EPISODE 문서 제목의 숫자 파싱이 있어야 할당됨(샘플 fixture는 기본적으로 비어 있음)
   - 결과 렌더: evidence 스니펫/경로/점수/confirmed 표시
 * ☑ Vector 확장(비동기):
   - “Vector 확장” 버튼 → `/jobs`에 `RETRIEVE_VEC` 제출
@@ -116,7 +126,7 @@
 * ☑ `/jobs`에 `SUGGEST` 제출 폼
   - mode: `LOCAL_RULE`(기본), `API`(옵트인), `LOCAL_GEN`(차순위 분기)
   - 입력 조절: range + citations 포함 여부(가능하면)
-* ◐ 결과: suggestion text + citation cards 렌더 (현재 citations/evidence 연동이 빈 값 위주)
+* ◐ 결과: suggestion text + citation cards 렌더 (include_citations=true일 때 citations 생성; tag_path는 태깅 없으면 `""` 가능 / 원격 API provider는 스텁)
 
 ### 2.8 Proofread/Layout(정책 D1 준수)
 
@@ -127,7 +137,7 @@
   - (권장) 설정값을 localStorage에 저장(리로드 후 유지)
   - 구현 상세: `plan/proofread_layout_style_controls.md`
 * ◐ Proofread(문법):
-  - rule-base lint 결과를 “실시간 표시” 형태로 관찰(underline/tooltip 유사 렌더) (현재 double-space 수준; 강도/규칙 확장 필요)
+  - rule-base lint 결과를 “미리보기 underline/tooltip” 형태로 관찰 (현재 규칙: double-space/trailing-whitespace/many-blank-lines/space-before-punct/repeated-punct/ellipsis; 강도 조절은 차순위)
   - 모델 기반 문법 교정은 차순위(옵트인)로만 노출
 
 ### 2.9 Export

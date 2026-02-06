@@ -75,8 +75,8 @@ modules/nf_consistency/
 
 ## 6) Whitelist
 
-* ☑ claim_fingerprint 계산 + whitelist_applied 기록(최소) (재경고 억제 로직/UX는 차순위)
-* ☑ whitelist scope(global/doc 단위) 정책 적용(정합성/제안에서 동일 지문 반복 억제)
+* ☑ claim_fingerprint 계산 + whitelist_applied 기록(최소) (재경고 억제 로직은 구현, 제품 UI/UX는 차순위)
+* ☑ whitelist scope(global/doc 단위) 정책 적용(정합성(CONSISTENCY)에서 동일 지문 재경고 억제: whitelist/ignore 시 skip)
 * ☑ verdict_log에 claim_fingerprint(whitelist/ignore 연계)
 * ◐ whitelist 적용 시 결과를 “오류→추가정보”로 표기할 수 있는 상태 필드 유지 (필드는 존재, UI 표기/억제는 미구현)
 

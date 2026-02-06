@@ -68,7 +68,7 @@ modules/nf_workers/
 ### 2.2 INDEX_FTS
 
 * ☑ 입력: `{scope, snapshot_id?}`
-* ◐ 동작: chunk 단위로 FTS 인덱스 갱신(증분) (현재는 snapshot 단위 replace 형태; fts_meta 증분은 미구현)
+* ◐ 동작: snapshot 단위 replace + fts_meta(signature) 기반 증분 skip (chunk-level 증분 갱신은 차순위)
 * ☑ (추가 요구) 시점/인물 chunk group 메타데이터 생성(사용자 요청 시)
   - 트리거: job `params.grouping` (예: `{entity_mentions:true, time_anchors:true, timeline_doc_id?}`)가 있을 때만 실행
   - 인물: `entity_mention_span`(문장 범위 span) 제안 → `AUTO+PROPOSED`로 저장
