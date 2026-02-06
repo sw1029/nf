@@ -32,6 +32,7 @@ class DocumentServiceImpl:
         title: str,
         doc_type: DocumentType,
         content: str,
+        metadata: dict[str, Any] | None = None,
     ) -> Document:
         doc_id = str(uuid.uuid4())
         snapshot_id = str(uuid.uuid4())
@@ -65,6 +66,7 @@ class DocumentServiceImpl:
                 head_snapshot_id=snapshot_id,
                 checksum=checksum,
                 version=version,
+                metadata=metadata,
             )
 
     def update_document(
@@ -74,6 +76,7 @@ class DocumentServiceImpl:
         title: str | None = None,
         doc_type: DocumentType | None = None,
         content: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Document | None:
         with db.connect(self._db_path) as conn:
             existing = document_repo.get_document(conn, doc_id)
@@ -120,6 +123,7 @@ class DocumentServiceImpl:
                 head_snapshot_id=next_snapshot_id,
                 checksum=next_checksum,
                 version=next_version,
+                metadata=metadata,
             )
 
     def delete_document(self, doc_id: str) -> bool:

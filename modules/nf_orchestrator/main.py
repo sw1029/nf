@@ -44,6 +44,7 @@ from modules.nf_shared.protocol.serialization import dump_json
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
 _DEBUG_UI_PATH = Path(__file__).with_name("debug_ui.html")
+_USER_UI_PATH = Path(__file__).with_name("user_ui.html")
 
 
 def _build_openapi_spec() -> dict[str, Any]:
@@ -147,6 +148,13 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             if not self._apply_debug_injections(path):
                 return
 
+            # Serve User UI at root or /ui
+            if path == "/" or path == "/ui":
+                if self.command == "GET":
+                    self._serve_user_ui()
+                    return
+                # Allow POST? No, usually UI is GET.
+            
             if self.command == "GET" and path == "/health":
                 self._send_json(HTTPStatus.OK, {"status": "ok"})
                 return
@@ -164,6 +172,10 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
 
             if segments[:1] == ["query"]:
                 self._handle_query(segments)
+                return
+
+            if segments[:1] == ["assets"]:
+                self._handle_assets(segments[1:])
                 return
 
             self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "찾을 수 없음")
@@ -327,19 +339,58 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 title = payload.get("title")
                 doc_type_raw = payload.get("type")
                 content = payload.get("content")
+                metadata = payload.get("metadata")
                 if not isinstance(title, str) or not title.strip():
                     raise AppError(ErrorCode.VALIDATION_ERROR, "title이 필요합니다")
                 if not isinstance(doc_type_raw, str):
                     raise AppError(ErrorCode.VALIDATION_ERROR, "type이 필요합니다")
                 if not isinstance(content, str):
                     raise AppError(ErrorCode.VALIDATION_ERROR, "content가 필요합니다")
+                if metadata is not None and not isinstance(metadata, dict):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "metadata는 객체여야 합니다")
                 try:
                     doc_type = DocumentType(doc_type_raw)
                 except ValueError as exc:
                     raise AppError(ErrorCode.VALIDATION_ERROR, f"지원하지 않는 문서 타입: {doc_type_raw}") from exc
-                doc = self.server.document_service.create_document(project_id, title.strip(), doc_type, content)
+                doc = self.server.document_service.create_document(
+                    project_id, title.strip(), doc_type, content, metadata=metadata
+                )
                 self._send_json(HTTPStatus.CREATED, {"document": dump_json(doc)})
                 return
+        
+        if tail[0] == "reorder" and self.command == "POST":
+            # Batch reorder: { "updates": [ { "doc_id": "...", "order": 1, "group": "..." }, ... ] }
+            payload = self._read_json()
+            updates = payload.get("updates")
+            if not isinstance(updates, list):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "updates는 리스트여야 합니다")
+            
+            # Simple loop for now. Transaction support would be better if Service allowed it.
+            results = []
+            for item in updates:
+                did = item.get("doc_id")
+                if not did: continue
+                # We expect partial metadata update.
+                # Since update_document replaces metadata, we fetch first? 
+                # Or we assume frontend sends full metadata or we merge here.
+                # Let's assume frontend sends strictly what needs to be Merged or Replaced?
+                # Actually, our repo UPDATE replaces metadata_json. 
+                # So to be safe, we should fetch existing, update fields, and save.
+                # However, for reorder, usually we just touch 'order' and 'group'.
+                existing = self.server.document_service.get_document(did)
+                if not existing: continue
+                
+                new_meta = dict(existing.metadata or {})
+                if "order" in item: new_meta["order"] = item["order"]
+                if "group" in item: new_meta["group"] = item["group"]
+                if "episode_no" in item: new_meta["episode_no"] = item["episode_no"]
+                
+                updated = self.server.document_service.update_document(did, metadata=new_meta)
+                if updated: results.append(updated)
+            
+            self._send_json(HTTPStatus.OK, {"updated_count": len(results)})
+            return
+
         if len(tail) == 1:
             doc_id = tail[0]
             if self.command == "GET":
@@ -347,13 +398,24 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 if doc is None:
                     self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "문서를 찾을 수 없습니다")
                     return
-                self._send_json(HTTPStatus.OK, {"document": dump_json(doc)})
+                
+                # Hydrate content from file
+                doc_dict = dump_json(doc)
+                try:
+                    content = docstore.read_text(doc.path)
+                    doc_dict["content"] = content
+                except Exception as e:
+                    print(f"Failed to read content for {doc_id}: {e}")
+                    doc_dict["content"] = ""
+                
+                self._send_json(HTTPStatus.OK, {"document": doc_dict})
                 return
             if self.command == "PATCH":
                 payload = self._read_json()
                 title = payload.get("title")
                 doc_type_raw = payload.get("type")
                 content = payload.get("content")
+                metadata = payload.get("metadata")
                 if title is not None and not isinstance(title, str):
                     raise AppError(ErrorCode.VALIDATION_ERROR, "title은 문자열이어야 합니다")
                 doc_type = None
@@ -366,11 +428,27 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                         raise AppError(ErrorCode.VALIDATION_ERROR, f"지원하지 않는 문서 타입: {doc_type_raw}") from exc
                 if content is not None and not isinstance(content, str):
                     raise AppError(ErrorCode.VALIDATION_ERROR, "content는 문자열이어야 합니다")
+                if metadata is not None and not isinstance(metadata, dict):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "metadata는 객체여야 합니다")
+                
+                # If metadata is provided, we probably want to merge it with existing unless it's a structural change
+                # But here we pass it directly to service. Service/Repo currently REPLACES metadata_json.
+                # We should merge here if the intention is a PATCH.
+                target_meta = None
+                if metadata is not None:
+                    existing = self.server.document_service.get_document(doc_id)
+                    if existing:
+                        target_meta = dict(existing.metadata or {})
+                        target_meta.update(metadata)
+                    else:
+                        target_meta = metadata
+
                 doc = self.server.document_service.update_document(
                     doc_id,
                     title=title.strip() if isinstance(title, str) else None,
                     doc_type=doc_type,
                     content=content,
+                    metadata=target_meta
                 )
                 if doc is None:
                     self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "문서를 찾을 수 없습니다")
@@ -790,6 +868,8 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 params = parse_qs(urlparse(self.path).query)
                 status_raw = params.get("status", [None])[0]
                 layer_raw = params.get("layer", [None])[0]
+
+
                 source_raw = params.get("source", [None])[0]
                 try:
                     status = FactStatus(status_raw) if status_raw else None
@@ -839,6 +919,48 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                     self._send_json(HTTPStatus.OK, {"fact": dump_json(fact)})
                     return
         self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _handle_assets(self, tail: list[str]) -> None:
+        if self.command != "GET":
+            self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+            return
+        
+        if not tail:
+             self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "파일을 찾을 수 없음")
+             return
+
+        filename = tail[0]
+        # Security check
+        if ".." in filename or "/" in filename or "\\" in filename:
+             self._send_app_error(HTTPStatus.FORBIDDEN, ErrorCode.VALIDATION_ERROR, "잘못된 파일명")
+             return
+             
+        assets_dir = Path(__file__).resolve().parent / "assets"
+        file_path = assets_dir / filename
+        
+        if not file_path.exists() or not file_path.is_file():
+             self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "파일을 찾을 수 없음")
+             return
+             
+        ctype = "application/octet-stream"
+        if filename.lower().endswith(".gif"):
+            ctype = "image/gif"
+        elif filename.lower().endswith(".png"):
+            ctype = "image/png"
+        elif filename.lower().endswith(".jpg") or filename.lower().endswith(".jpeg"):
+            ctype = "image/jpeg"
+        elif filename.lower().endswith(".svg"):
+            ctype = "image/svg+xml"
+            
+        try:
+            content = file_path.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+        except Exception:
+             self._send_app_error(HTTPStatus.INTERNAL_SERVER_ERROR, ErrorCode.INTERNAL_ERROR, "파일 읽기 실패")
 
     def _handle_query(self, segments: list[str]) -> None:
         if len(segments) == 2 and segments[1] == "retrieval":
@@ -1132,18 +1254,27 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             raise AppError(ErrorCode.VALIDATION_ERROR, "JSON 본문은 객체여야 합니다")
         return payload
 
-    def _serve_debug_ui(self) -> None:
-        try:
-            html = _DEBUG_UI_PATH.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "디버그 UI를 찾을 수 없습니다")
-            return
-        body = html.encode("utf-8")
+    def _send_html(self, html_content: str) -> None:
+        body = html_content.encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _serve_debug_ui(self) -> None:
+        if not _DEBUG_UI_PATH.exists():
+            self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "Debug UI file missing")
+            return
+        html = _DEBUG_UI_PATH.read_text(encoding="utf-8")
+        self._send_html(html)
+
+    def _serve_user_ui(self) -> None:
+        if not _USER_UI_PATH.exists():
+            self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "User UI file missing")
+            return
+        html = _USER_UI_PATH.read_text(encoding="utf-8")
+        self._send_html(html)
 
     def _debug_state_payload(self) -> dict[str, Any]:
         return dict(self.server.debug_state)

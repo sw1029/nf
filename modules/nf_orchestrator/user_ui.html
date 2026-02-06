@@ -1,0 +1,1766 @@
+<!doctype html>
+<html lang="ko">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NF 집필 도구</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Noto+Serif+KR:wght@300;400;600&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      --bg-app: #f8f9fa;
+      --bg-sidebar: #ffffff;
+      --bg-paper: #ffffff;
+      --text-primary: #2c3e50;
+      --text-secondary: #5f6c7b;
+      --accent-primary: #34495e;
+      --accent-secondary: #e67e22;
+      --border-color: #e2e8f0;
+      --shadow-soft: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+      --shadow-paper: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.025);
+
+      /* Editor Settings Defaults */
+      --editor-font-size: 1.1rem;
+      --editor-line-height: 1.8;
+      --editor-letter-spacing: 0px;
+      --editor-font-family: 'Noto Serif KR', serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      font-family: 'Noto Sans KR', sans-serif;
+      background-color: var(--bg-app);
+      color: var(--text-primary);
+      overflow: hidden;
+    }
+
+    /* Layout */
+    #app-container {
+      display: flex;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 300px;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      z-index: 10;
+      box-shadow: var(--shadow-soft);
+      transition: width 0.3s ease;
+    }
+
+    .sidebar.right {
+      border-right: none;
+      border-left: 1px solid var(--border-color);
+      width: 320px;
+    }
+
+    .sidebar-header {
+      padding: 20px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .sidebar-title {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--accent-primary);
+      margin: 0 0 10px 0;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .tab-btn {
+      flex: 1;
+      background: none;
+      border: none;
+      padding: 12px 0;
+      font-family: inherit;
+      font-weight: 500;
+      color: var(--text-secondary);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+
+    .tab-btn:hover {
+      color: var(--accent-primary);
+      background-color: #f1f5f9;
+    }
+
+    .tab-btn.active {
+      color: var(--accent-primary);
+      border-bottom-color: var(--accent-primary);
+      background-color: #fff;
+    }
+
+    /* Lists */
+    .list-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+    }
+
+    .list-item {
+      padding: 12px 15px;
+      margin-bottom: 5px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: background 0.1s;
+    }
+
+    .list-item:hover {
+      background: #f1f5f9;
+    }
+
+    .list-item.active {
+      background: #e2e8f0;
+      font-weight: 600;
+      color: var(--accent-primary);
+    }
+
+    .list-item .meta {
+      font-size: 0.75rem;
+      color: #94a3b8;
+    }
+
+    /* Main Content */
+    .main-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background-color: #f0f2f5;
+      position: relative;
+    }
+
+    .toolbar {
+      padding: 15px 30px;
+      background: white;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      height: 60px;
+    }
+
+    .doc-title-input {
+      font-size: 1.2rem;
+      font-weight: 600;
+      border: none;
+      outline: none;
+      width: 400px;
+      color: var(--text-primary);
+    }
+
+    .editor-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 40px 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .paper {
+      width: 100%;
+      max-width: 800px;
+      min-height: 1000px;
+      background: var(--bg-paper);
+      box-shadow: var(--shadow-paper);
+      padding: 60px 80px;
+      margin-bottom: 40px;
+      border-radius: 2px;
+      outline: none;
+
+      /* Dynamic Settings */
+      font-size: var(--editor-font-size);
+      line-height: var(--editor-line-height);
+      letter-spacing: var(--editor-letter-spacing);
+      font-family: var(--editor-font-family);
+    }
+
+    .paper[placeholder]:empty:before {
+      content: attr(placeholder);
+      color: #94a3b8;
+    }
+
+    /* Buttons */
+    .btn {
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: 500;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--accent-primary);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #2c3e50;
+    }
+
+    .btn-secondary {
+      background: white;
+      border-color: var(--border-color);
+      color: var(--text-secondary);
+    }
+
+    .btn-secondary:hover {
+      background: #f8f9fa;
+      border-color: #cbd5e1;
+    }
+
+    .btn-icon {
+      padding: 8px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--text-secondary);
+      border-radius: 4px;
+    }
+
+    .btn-icon:hover {
+      background: #e2e8f0;
+      color: var(--accent-primary);
+    }
+
+    /* Modals & Overlays */
+    .overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 100;
+      display: none;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .overlay.active {
+      display: flex;
+    }
+
+    .modal {
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      width: 400px;
+      max-width: 90%;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+      text-align: center;
+    }
+
+    /* Config Panel (Inline Popup) */
+    .config-panel {
+      position: absolute;
+      top: 60px;
+      right: 30px;
+      background: white;
+      border: 1px solid var(--border-color);
+      box-shadow: var(--shadow-paper);
+      padding: 20px;
+      border-radius: 8px;
+      width: 300px;
+      display: none;
+      z-index: 50;
+    }
+
+    .config-panel.active {
+      display: block;
+    }
+
+    .config-row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+
+    .config-label {
+      width: 80px;
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+
+    .config-input {
+      flex: 1;
+    }
+
+    /* Loading & Success */
+    .loading-spinner {
+      width: 50px;
+      height: 50px;
+    }
+
+    .success-icon {
+      width: 60px;
+      height: 60px;
+      margin-bottom: 15px;
+    }
+
+    /* Analysis Cards */
+    .analysis-card {
+      background: #fff;
+      border: 1px solid var(--border-color);
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 10px;
+      border-left: 4px solid var(--accent-secondary);
+    }
+
+    .analysis-card.info {
+      border-left-color: #3498db;
+    }
+
+    .analysis-card.error {
+      border-left-color: #e74c3c;
+    }
+
+    /* Episode Context Menu Button */
+    .menu-btn {
+      padding: 4px;
+      border-radius: 4px;
+      color: #94a3b8;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+
+    .menu-btn:hover {
+      background-color: #e2e8f0;
+      color: var(--accent-primary);
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- Loading Overlay -->
+  <div id="loading-overlay" class="overlay">
+    <div style="text-align: center; background: white; padding: 20px; border-radius: 12px;">
+      <img src="/assets/img.gif" class="loading-spinner" alt="Loading...">
+      <p id="loading-text" style="color: var(--text-secondary); margin-top: 10px;">처리 중입니다...</p>
+    </div>
+  </div>
+
+  <!-- Success Popup -->
+  <div id="success-popup" class="overlay">
+    <div class="modal">
+      <img src="/assets/check.png" class="success-icon" alt="Success">
+      <h3 id="success-title">완료되었습니다</h3>
+      <p id="success-message" style="color: var(--text-secondary); margin-bottom: 20px;"></p>
+      <button class="btn btn-primary" onclick="closeSuccessPopup()">확인</button>
+    </div>
+  </div>
+
+  <!-- Setup Modal (Project Select) -->
+  <div id="setup-modal" class="overlay active">
+    <div class="modal" style="text-align: left;">
+      <h2 style="margin-top:0">환영합니다</h2>
+      <p style="color: #666; margin-bottom: 20px;">작업할 프로젝트를 선택하거나 새로 만드세요.</p>
+
+      <label style="display:block; margin-bottom:5px; font-size:0.9rem;">기존 프로젝트 불러오기</label>
+      <select id="project-select"
+        style="width:100%; padding:10px; margin-bottom:20px; border-radius:6px; border:1px solid #ddd;"></select>
+
+      <div style="text-align: center; color: #aaa; margin-bottom: 20px;">- 또는 -</div>
+
+      <label style="display:block; margin-bottom:5px; font-size:0.9rem;">새 프로젝트 이름</label>
+      <input id="new-project-name"
+        style="width:100%; padding:10px; margin-bottom:20px; border-radius:6px; border:1px solid #ddd;"
+        placeholder="나만의 멋진 소설">
+
+      <div style="display: flex; gap: 10px;">
+        <button class="btn btn-primary" style="flex:1" onclick="handleCreateProject()">새 프로젝트 시작</button>
+        <button class="btn btn-secondary" style="flex:1" onclick="handleLoadProject()">불러오기</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="app-container">
+
+    <!-- Left Sidebar: Navigation -->
+    <aside class="sidebar" id="nav-sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title">NF Studio</div>
+        <div style="font-size:0.8rem; color:#888;" id="current-project-label">-</div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchNavTab('EPISODE')">본문</button>
+        <button class="tab-btn" onclick="switchNavTab('SETTING')">설정</button>
+        <button class="tab-btn" onclick="switchNavTab('PLOT')">구상</button>
+        <button class="tab-btn" onclick="switchNavTab('TIMELINE')">타임라인</button>
+      </div>
+
+      <div style="padding: 10px; display:flex; gap:5px;">
+        <button class="btn btn-primary" style="flex:1" onclick="createNewDoc()">+ 새 문서</button>
+        <button class="btn btn-secondary" style="flex:1" onclick="createNewChapter()">+ 새 챕터</button>
+      </div>
+
+      <div id="doc-list" class="list-container">
+        <!-- Rendered via JS -->
+      </div>
+
+      <div style="padding: 20px; border-top: 1px solid var(--border-color);">
+        <button class="btn btn-secondary" style="width:100%" onclick="exitProject()">프로젝트 나가기</button>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content" style="position:relative;">
+
+      <!-- Placeholder -->
+      <div id="empty-state"
+        style="position:absolute; top:0; left:0; width:100%; height:100%; background:white; z-index:10; display:flex; flex-direction:column; justify-content:center; align-items:center; color:#ccc;">
+        <div style="font-size:3rem; margin-bottom:20px;">📝</div>
+        <div style="font-size:1.2rem;">문서를 선택하거나 새로 만드세요</div>
+        <div style="margin-top:20px;">
+          <button class="btn btn-primary" onclick="createNewDoc()">새 문서 만들기</button>
+        </div>
+      </div>
+
+      <!-- Toolbar -->
+      <div class="toolbar">
+        <div style="display:flex; align-items:center;">
+          <span id="doc-type-badge"
+            style="background:#eee; padding:4px 8px; border-radius:4px; font-size:0.8rem; margin-right:10px; font-weight:600;">유형</span>
+          <input id="doc-title-input" class="doc-title-input" placeholder="제목을 입력하세요" oninput="handleInput()"
+            onclick="this.select()">
+        </div>
+
+        <div style="display:flex; gap:10px; align-items:center;">
+          <span id="save-status" style="font-size:0.8rem; color:#aaa; margin-right:10px;">저장됨</span>
+          <button class="btn btn-secondary" onclick="openExportModal()">내보내기</button>
+          <button class="btn btn-secondary" onclick="toggleConfigPanel()">화면 설정</button>
+          <button class="btn btn-icon" onclick="toggleRightSidebar()">☰</button>
+        </div>
+      </div>
+
+      <!-- Config Panel -->
+      <div id="config-panel" class="config-panel">
+        <h4 style="margin-top:0">에디터 설정</h4>
+        <div class="config-row">
+          <span class="config-label">글자 크기</span>
+          <input type="range" class="config-input" min="14" max="24" value="18"
+            oninput="updateEditorConfig('fontSize', this.value + 'px')">
+        </div>
+        <div class="config-row">
+          <span class="config-label">줄 간격</span>
+          <input type="range" class="config-input" min="1.2" max="2.5" step="0.1" value="1.8"
+            oninput="updateEditorConfig('lineHeight', this.value)">
+        </div>
+        <div class="config-row">
+          <span class="config-label">자간</span>
+          <input type="range" class="config-input" min="-1" max="2" step="0.1" value="0"
+            oninput="updateEditorConfig('letterSpacing', this.value + 'px')">
+        </div>
+        <div class="config-row">
+          <span class="config-label">폰트</span>
+          <select class="config-input" onchange="updateEditorConfig('fontFamily', this.value)">
+            <option value="'Noto Serif KR', serif">명조체 (Serif)</option>
+            <option value="'Noto Sans KR', sans-serif">고딕체 (Sans)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Editor -->
+      <div class="editor-container">
+        <div id="editor" class="paper" contenteditable="true" placeholder="여기에 내용을 작성하세요..." oninput="handleInput()">
+        </div>
+      </div>
+
+    </main>
+
+    <!-- Right Sidebar: Assistant -->
+    <aside class="sidebar right" id="assistant-sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title">작가 도우미</div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchAssistTab('CHECK')">오류 점검</button>
+        <button class="tab-btn" onclick="switchAssistTab('SEARCH')">기억 탐색</button>
+      </div>
+
+      <div style="padding: 15px; border-bottom: 1px solid #eee;">
+        <button id="assist-action-btn" class="btn btn-primary" style="width:100%" onclick="runAssistantAction()">지금
+          점검하기</button>
+      </div>
+
+      <div id="assistant-content" class="list-container">
+        <div style="text-align:center; color:#aaa; margin-top:50px;">
+          도우미가 대기 중입니다.
+        </div>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Export Modal -->
+  <div id="export-modal" class="overlay">
+    <div class="modal">
+      <h2>문서 내보내기</h2>
+      <div class="form-group">
+        <label>형식 선택</label>
+        <div class="radio-group" style="display:flex; gap:10px; margin-top:5px;">
+          <label style="cursor:pointer;"><input type="radio" name="export-fmt" value="txt" checked> 텍스트 (.txt)</label>
+          <label style="cursor:pointer;"><input type="radio" name="export-fmt" value="json"> 데이터 (.json)</label>
+        </div>
+      </div>
+      <div class="actions">
+        <button onclick="closeExportModal()">취소</button>
+        <button class="primary" onclick="handleExport()">내보내기</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- Auto Save & Hotkeys ---
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        saveDoc(true); // Immediate save
+      }
+    });
+
+    // Auto-save Interval
+    setInterval(() => {
+      if (state.currentDocId && state.isDirty) {
+        saveDoc(false); // Background save
+      }
+    }, 5000); // Check every 5 seconds
+
+    // --- State ---
+    let state = {
+      projectId: null,
+      projectName: '',
+      currentDocId: null,
+      currentDocType: 'EPISODE',
+      currentNavTab: 'EPISODE',
+      docs: {},
+      saveTimeout: null,
+      isDirty: false,
+      draggedDocId: null,
+      draggedGroup: null,
+      editorConfig: {
+        fontSize: '1.1rem',
+        lineHeight: '1.8',
+        letterSpacing: '0px',
+        fontFamily: "'Noto Serif KR', serif"
+      }
+    };
+
+    // ... (Config Management omitted, stays same) ...
+
+    // --- Editor Input Handler ---
+    function handleInput() {
+      state.isDirty = true;
+      document.getElementById('save-status').innerText = "저장되지 않음";
+      document.getElementById('save-status').style.color = "#e67e22";
+
+      // Debounce still useful for stopping typing updates
+      if (state.saveTimeout) clearTimeout(state.saveTimeout);
+      state.saveTimeout = setTimeout(() => saveDoc(false), 2000);
+    }
+
+    async function saveDoc(immediate = false) {
+      if (!state.currentDocId || !state.isDirty && !immediate) return;
+
+      const content = document.getElementById('editor').innerText;
+      const title = document.getElementById('doc-title-input').value; // Always get fresh title
+
+      // Visual Feedback
+      if (immediate) showLoading("저장 중...");
+      else document.getElementById('save-status').innerText = "저장 중...";
+
+      // Optimistic Update (Immediate UI Sync)
+      if (state.docs[state.currentDocId]) {
+        state.docs[state.currentDocId].title = title;
+        state.docs[state.currentDocId].updated_at = new Date().toISOString();
+
+        // Render based on current tab
+        if (state.currentNavTab === 'TIMELINE') {
+          renderTimeline();
+        } else {
+          renderDocList();
+        }
+      }
+
+      try {
+        await api(`/projects/${state.projectId}/documents/${state.currentDocId}`, 'PATCH', {
+          title, content
+        });
+
+        state.isDirty = false;
+        document.getElementById('save-status').innerText = "저장됨";
+        document.getElementById('save-status').style.color = "#aaa";
+        if (immediate) hideLoading();
+
+        // No need to render again unless we want to confirm from server
+      } catch (e) {
+        document.getElementById('save-status').innerText = "저장 실패";
+        document.getElementById('save-status').style.color = "red";
+        if (immediate) hideLoading();
+        console.error(e);
+      }
+    }
+
+    // --- Config Management ---
+    function updateEditorConfig(key, value) {
+      state.editorConfig[key] = value;
+      const root = document.querySelector(':root');
+
+      if (key === 'fontSize') root.style.setProperty('--editor-font-size', value);
+      if (key === 'lineHeight') root.style.setProperty('--editor-line-height', value);
+      if (key === 'letterSpacing') root.style.setProperty('--editor-letter-spacing', value);
+      if (key === 'fontFamily') root.style.setProperty('--editor-font-family', value);
+
+      localStorage.setItem('nf_editor_config', JSON.stringify(state.editorConfig));
+    }
+
+    function loadEditorConfig() {
+      const saved = localStorage.getItem('nf_editor_config');
+      if (saved) {
+        const config = JSON.parse(saved);
+        Object.keys(config).forEach(k => updateEditorConfig(k, config[k]));
+      }
+    }
+
+    // --- API Helper ---
+    async function api(path, method = 'GET', body = null) {
+      try {
+        const options = { method, headers: { 'Content-Type': 'application/json' } };
+        if (body) options.body = JSON.stringify(body);
+
+        const res = await fetch(path, options);
+        if (!res.ok) {
+          const errBody = await res.text();
+          console.error("API Error Body:", errBody);
+          throw new Error(res.statusText + " " + errBody);
+        }
+        return await res.json();
+      } catch (e) {
+        console.error("API Error", e);
+        throw e;
+      }
+    }
+
+    // --- Loading & Success UI ---
+    function showLoading(msg = "처리 중입니다...") {
+      document.getElementById('loading-text').innerText = msg;
+      document.getElementById('loading-overlay').classList.add('active');
+    }
+
+    function hideLoading() {
+      document.getElementById('loading-overlay').classList.remove('active');
+    }
+
+    function showSuccess(msg = "완료되었습니다") {
+      document.getElementById('success-message').innerText = msg;
+      document.getElementById('success-popup').classList.add('active');
+    }
+
+    function closeSuccessPopup() {
+      document.getElementById('success-popup').classList.remove('active');
+    }
+
+    function toggleConfigPanel() {
+      document.getElementById('config-panel').classList.toggle('active');
+    }
+
+    function toggleRightSidebar() {
+      const sb = document.getElementById('assistant-sidebar');
+      sb.style.display = sb.style.display === 'none' ? 'flex' : 'none';
+    }
+
+    // --- Project Management ---
+    async function init() {
+      loadEditorConfig();
+      try {
+        const data = await api('/projects');
+        const select = document.getElementById('project-select');
+
+        if (data.projects && Object.keys(data.projects).length > 0) {
+          select.innerHTML = '<option value="">선택하세요</option>';
+          Object.values(data.projects).forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.project_id;
+            opt.textContent = p.name;
+            select.appendChild(opt);
+          });
+        } else {
+          select.innerHTML = '<option value="">프로젝트가 없습니다</option>';
+        }
+      } catch (e) {
+        console.error("Init Error", e);
+      }
+    }
+
+    async function handleCreateProject() {
+      const name = document.getElementById('new-project-name').value;
+      if (!name) return alert("이름을 입력해주세요");
+
+      showLoading("프로젝트 생성 중...");
+      try {
+        const res = await api('/projects', 'POST', { name, settings: { mode: 'dev' } });
+        hideLoading();
+        loadProject(res.project.project_id, res.project.name);
+        document.getElementById('setup-modal').classList.remove('active');
+        // showSuccess("프로젝트가 생성되었습니다."); // Skip for faster UX
+      } catch (e) {
+        hideLoading();
+        console.error("Create Project Error", e);
+        alert("생성 실패: " + e.message);
+      }
+    }
+
+    async function handleLoadProject() {
+      const pid = document.getElementById('project-select').value;
+      if (!pid) return alert("선택해주세요");
+      const name = document.querySelector(`#project-select option[value="${pid}"]`).textContent;
+      loadProject(pid, name);
+      document.getElementById('setup-modal').classList.remove('active');
+    }
+
+    function loadProject(pid, name) {
+      state.projectId = pid;
+      state.projectName = name;
+      document.getElementById('current-project-label').textContent = name;
+      localStorage.setItem('last_project_id', pid);
+      localStorage.setItem('last_project_name', name);
+      refreshDocList();
+    }
+
+    function exitProject() {
+      localStorage.removeItem('last_project_id');
+      localStorage.removeItem('last_project_name');
+      location.reload();
+    }
+
+    // --- Doc Management ---
+    async function refreshDocList() {
+      const list = document.getElementById('doc-list');
+      list.innerHTML = '<div style="text-align:center; padding:20px; color:#aaa;">로딩 중...</div>';
+
+      try {
+        const res = await api(`/projects/${state.projectId}/documents`);
+        // Ensure state.docs is a Map (ID -> Doc)
+        const docsMap = {};
+        const list = Array.isArray(res.documents) ? res.documents :
+          (typeof res.documents === 'object' ? Object.values(res.documents) : []);
+
+        list.forEach(d => {
+          if (d && d.doc_id) docsMap[d.doc_id] = d;
+        });
+        state.docs = docsMap;
+        renderDocList();
+      } catch (e) {
+        list.innerHTML = '<div style="text-align:center; color:red;">로드 실패</div>';
+      }
+    }
+
+    function switchNavTab(type) {
+      state.currentNavTab = type;
+
+      // Update tab styling
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      event.target.classList.add('active');
+
+      if (type === 'TIMELINE') {
+        renderTimeline();
+      } else {
+        renderDocList();
+      }
+    }
+
+    async function renderTimeline() {
+      // Structure View (Git-like Vertical Graph)
+      // Uses state.docs to render chapters and episodes in linear order
+      const list = document.getElementById('doc-list');
+      list.innerHTML = '';
+
+      const docs = Object.values(state.docs).filter(d => d.type === 'EPISODE');
+
+      // Group by 'metadata.group'
+      const groups = {};
+      const noGroup = [];
+
+      docs.forEach(d => {
+        const gName = (d.metadata && d.metadata.group) || "";
+        if (!gName || gName === "미분류") {
+          noGroup.push(d);
+        } else {
+          if (!groups[gName]) groups[gName] = [];
+          groups[gName].push(d);
+        }
+      });
+
+      // Sort Groups (by order of first doc? or just alphanumeric?)
+      // We need a stable order. Let's sort keys for now. 
+      // Ideally we should have a 'Chapter' entity with order. 
+      // For now, heuristic: use the order of the first document in the group to sort groups.
+      const sortedGroupNames = Object.keys(groups).sort((a, b) => {
+        const docA = groups[a][0];
+        const docB = groups[b][0];
+        return (docA.metadata?.order || 0) - (docB.metadata?.order || 0);
+      });
+
+      let html = '<div class="structure-graph" style="padding: 20px 10px;">';
+
+      // Render Groups
+      sortedGroupNames.forEach((gName, gIdx) => {
+        const gDocs = groups[gName].sort((a, b) => (a.metadata?.order || 0) - (b.metadata?.order || 0));
+
+        // Group Node (Big Circle)
+        html += `
+            <div class="struct-node group-node" draggable="true" ondragstart="handleDragStart(event, null, '${gName}')" 
+                 oncontextmenu="openGroupCtxMenu(event, '${gName}')">
+                <div class="node-circle big"></div>
+                <div class="node-label"><strong>${gName}</strong></div>
+            </div>
+            <div class="struct-line"></div>
+          `;
+
+        // Episodes
+        gDocs.forEach((doc, dIdx) => {
+          const actsAsLast = (dIdx === gDocs.length - 1) && (gIdx === sortedGroupNames.length - 1) && (noGroup.length === 0);
+
+          html += `
+                <div class="struct-node doc-node" onclick="loadDoc('${doc.doc_id}')" draggable="true" 
+                     ondragstart="handleDragStart(event, '${doc.doc_id}')" ondrop="handleDropOnItem(event, '${doc.doc_id}', '${gName}')" ondragover="handleDragOver(event)">
+                    <div class="node-circle small ${state.currentDocId === doc.doc_id ? 'active' : ''}"></div>
+                    <div class="node-label">${doc.title}</div>
+                </div>
+                ${!actsAsLast ? '<div class="struct-line"></div>' : ''}
+              `;
+        });
+      });
+
+      // Unclassified
+      if (noGroup.length > 0) {
+        noGroup.sort((a, b) => (a.metadata?.order || 0) - (b.metadata?.order || 0));
+        html += `
+            <div class="struct-node group-node">
+                <div class="node-circle big"></div>
+                <div class="node-label" style="opacity:0.7">미분류</div>
+            </div>
+            <div class="struct-line"></div>
+          `;
+        noGroup.forEach((doc, dIdx) => {
+          const isLast = dIdx === noGroup.length - 1;
+          html += `
+                <div class="struct-node doc-node" onclick="loadDoc('${doc.doc_id}')" draggable="true"
+                     ondragstart="handleDragStart(event, '${doc.doc_id}')" ondrop="handleDropOnItem(event, '${doc.doc_id}', '')" ondragover="handleDragOver(event)">
+                    <div class="node-circle small ${state.currentDocId === doc.doc_id ? 'active' : ''}"></div>
+                    <div class="node-label">${doc.title}</div>
+                </div>
+                ${!isLast ? '<div class="struct-line"></div>' : ''}
+              `;
+        });
+      }
+
+      html += '</div>';
+
+      // Inject CSS for graph if not exists
+      if (!document.getElementById('graph-css')) {
+        const style = document.createElement('style');
+        style.id = 'graph-css';
+        style.innerHTML = `
+            .structure-graph { position: relative; }
+            .struct-node { display: flex; align-items: center; position: relative; z-index: 2; padding: 5px 0; cursor: pointer; }
+            .struct-node:hover .node-label { color: var(--primary-color); }
+            .node-circle { border: 2px solid #555; background: white; border-radius: 50%; z-index: 2; }
+            .node-circle.big { width: 16px; height: 16px; border-width: 3px; margin-left: 2px; }
+            .node-circle.small { width: 10px; height: 10px; margin-left: 5px; background: #eee; }
+            .node-circle.small.active { background: var(--primary-color); border-color: var(--primary-color); }
+            .node-label { margin-left: 15px; font-size: 0.9rem; }
+            .struct-line { width: 2px; background: #ddd; margin-left: 9px; height: 20px; z-index: 1; }
+          `;
+        document.head.appendChild(style);
+      }
+
+      list.innerHTML = html;
+    }
+
+    function renderDocList() {
+      // Logic split: If EPISODE tab, use Tree View. Others, use List View.
+      if (state.currentNavTab === 'EPISODE') {
+        renderDocTree();
+      } else {
+        renderFlatList();
+      }
+    }
+
+    function renderFlatList() {
+      const list = document.getElementById('doc-list');
+      list.innerHTML = '';
+      const typeFilter = state.currentNavTab;
+      const relevantDocs = Object.values(state.docs).filter(d => {
+        if (typeFilter === 'SETTING') return ['SETTING', 'CHAR'].includes(d.type);
+        if (typeFilter === 'PLOT') return ['PLOT', 'NOTE'].includes(d.type);
+        return false;
+      });
+
+      if (relevantDocs.length === 0) {
+        list.innerHTML = '<div style="text-align:center; padding:20px; color:#ccc;">아직 문서가 없습니다.</div>';
+        return;
+      }
+
+      relevantDocs.forEach(doc => {
+        const item = document.createElement('div');
+        item.className = 'list-item' + (state.currentDocId === doc.doc_id ? ' active' : '');
+        item.onclick = () => loadDoc(doc.doc_id);
+        item.innerHTML = `
+                <div>
+                   <div style="font-weight:600;">${doc.title}</div>
+                   <div class="meta">${new Date(doc.updated_at).toLocaleString()}</div>
+                </div>
+                <div style="font-size:0.8rem; background:#eee; padding:2px 6px; border-radius:4px;">${doc.type}</div>
+            `;
+        list.appendChild(item);
+      });
+    }
+
+    // --- Tree View Implementation ---
+    function renderDocTree() {
+      const list = document.getElementById('doc-list');
+      list.innerHTML = '';
+
+      const docs = Object.values(state.docs).filter(d => d.type === 'EPISODE');
+      if (docs.length === 0) {
+        list.innerHTML = '<div style="text-align:center; padding:20px; color:#ccc;">에피소드가 없습니다.</div>';
+        return;
+      }
+
+      // Grouping
+      const groups = { "미분류": [] };
+      docs.forEach(d => {
+        const gName = (d.metadata && d.metadata.group) ? d.metadata.group : "미분류";
+        if (!groups[gName]) groups[gName] = [];
+        groups[gName].push(d);
+      });
+
+      // Sorting: Groups then items within groups
+      const sortedGroupNames = Object.keys(groups).sort((a, b) => {
+        if (a === "미분류") return 1;
+        if (b === "미분류") return -1;
+        return a.localeCompare(b);
+      });
+
+      sortedGroupNames.forEach(gName => {
+        const groupDocs = groups[gName];
+        // Sort docs by metadata.order -> metadata.episode_no -> created_at
+        groupDocs.sort((a, b) => {
+          const ordA = (a.metadata && a.metadata.order) || 9999;
+          const ordB = (b.metadata && b.metadata.order) || 9999;
+          if (ordA !== ordB) return ordA - ordB;
+          return new Date(a.created_at) - new Date(b.created_at);
+        });
+
+        const details = document.createElement('details');
+        details.open = true; // Default open
+        details.style.marginBottom = "10px";
+
+        const summary = document.createElement('summary');
+        summary.style.cursor = "pointer";
+        summary.style.fontWeight = "bold";
+        summary.style.padding = "5px";
+        summary.style.color = "#34495e";
+        summary.innerText = gName;
+        // Context menu for Group
+        summary.oncontextmenu = (e) => openGroupCtxMenu(e, gName);
+
+        details.appendChild(summary);
+
+        const folderContent = document.createElement('div');
+        folderContent.style.paddingLeft = "15px";
+
+        groupDocs.forEach(doc => {
+          const item = document.createElement('div');
+          item.className = 'list-item' + (state.currentDocId === doc.doc_id ? ' active' : '');
+          item.style.padding = "8px 10px";
+
+          // Drag & Drop Attributes
+          item.draggable = true;
+          item.ondragstart = (e) => handleDragStart(e, doc.doc_id);
+          item.ondragover = (e) => handleDragOver(e);
+          item.ondrop = (e) => handleDropOnItem(e, doc.doc_id, gName);
+
+          // Label construction: "제1화 제목" or just "제목"
+          let label = doc.title;
+          if (doc.metadata && doc.metadata.episode_no) {
+            label = `<span style="color:#e67e22; font-weight:bold; margin-right:5px;">제${doc.metadata.episode_no}화</span> ${doc.title}`;
+          }
+
+          item.innerHTML = `
+              <div style="width:100%; display:flex; justify-content:space-between; align-items:center;">
+                  <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; pointer-events:none;">${label}</span>
+                  <div class="menu-btn" onclick="openDocCtxMenu(event, '${doc.doc_id}')">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="12" cy="12" r="1"></circle>
+                      <circle cx="12" cy="5" r="1"></circle>
+                      <circle cx="12" cy="19" r="1"></circle>
+                    </svg>
+                  </div>
+              </div>
+           `;
+          item.onclick = (e) => {
+            loadDoc(doc.doc_id); // openDocCtxMenu stops propagation, so this is safe
+          };
+          folderContent.appendChild(item);
+        });
+
+        // Drop zone for Group
+        details.ondragover = (e) => handleDragOver(e);
+        details.ondrop = (e) => handleDropOnGroup(e, gName);
+
+        details.appendChild(folderContent);
+        list.appendChild(details);
+      });
+    }
+
+    // --- Drag & Drop Handlers ---
+    let draggedDocId = null;
+
+    function handleDragStart(e, docId) {
+      draggedDocId = docId;
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", docId);
+      e.target.style.opacity = '0.4';
+    }
+
+    function handleDragOver(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+    }
+
+    async function handleDropOnGroup(e, targetGroupName) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!draggedDocId) return;
+
+      const doc = state.docs[draggedDocId];
+      const newGroup = targetGroupName;
+
+      const groupDocs = Object.values(state.docs).filter(d => {
+        const g = (d.metadata && d.metadata.group) ? d.metadata.group : "미분류";
+        return g === newGroup;
+      });
+      const maxOrder = groupDocs.reduce((max, d) => Math.max(max, (d.metadata?.order || 0)), 0);
+      const newOrder = maxOrder + 10;
+
+      await api(`/projects/${state.projectId}/documents/${draggedDocId}`, 'PATCH', {
+        metadata: { ...doc.metadata, group: newGroup, order: newOrder }
+      });
+
+      draggedDocId = null;
+      refreshDocList();
+    }
+
+    async function handleDropOnItem(e, targetDocId, targetGroup) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!draggedDocId || draggedDocId === targetDocId) return;
+
+      const sourceDoc = state.docs[draggedDocId];
+      const targetDoc = state.docs[targetDocId];
+      const targetOrder = (targetDoc.metadata && targetDoc.metadata.order) !== undefined ? targetDoc.metadata.order : 0;
+
+      const groupDocs = Object.values(state.docs).filter(d => {
+        const g = (d.metadata && d.metadata.group) ? d.metadata.group : "미분류";
+        return g === targetGroup;
+      }).sort((a, b) => (a.metadata?.order || 0) - (b.metadata?.order || 0));
+
+      const targetIdx = groupDocs.findIndex(d => d.doc_id === targetDocId);
+      let newOrder = 0;
+
+      if (targetIdx === 0) {
+        newOrder = targetOrder - 10;
+      } else {
+        const prevDoc = groupDocs[targetIdx - 1];
+        const prevOrder = (prevDoc.metadata?.order || 0);
+        newOrder = (prevOrder + targetOrder) / 2;
+      }
+
+      await api(`/projects/${state.projectId}/documents/${draggedDocId}`, 'PATCH', {
+        metadata: { ...sourceDoc.metadata, group: targetGroup, order: newOrder }
+      });
+
+      draggedDocId = null;
+      refreshDocList();
+    }
+
+    // --- Context Menu UI ---
+    function getCtxMenuEl() {
+      let el = document.getElementById('ctx-menu');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'ctx-menu';
+        el.style.position = 'fixed';
+        el.style.background = 'white';
+        el.style.border = '1px solid #ddd';
+        el.style.boxShadow = '0 2px 10px rgba(0,0,0,0.1)';
+        el.style.zIndex = '1000';
+        el.style.display = 'none';
+        el.style.borderRadius = '4px';
+        el.style.overflow = 'hidden';
+        el.style.minWidth = '150px';
+        document.body.appendChild(el);
+
+        // Close on outside click is handled by global click listener usually, but simple way here:
+        document.addEventListener('click', (e) => {
+          if (!el.contains(e.target)) el.style.display = 'none';
+        }, { capture: true });
+      }
+      return el;
+    }
+
+    function showCtxMenu(x, y, options) {
+      const menu = getCtxMenuEl();
+      menu.innerHTML = '';
+      menu.style.left = x + 'px';
+      menu.style.top = y + 'px';
+      menu.style.display = 'block';
+
+      options.forEach(opt => {
+        const item = document.createElement('div');
+        item.innerText = opt.label;
+        item.style.padding = '10px 15px';
+        item.style.cursor = 'pointer';
+        item.style.fontSize = '0.9rem';
+        item.style.color = opt.color || '#333';
+        item.onmouseover = () => item.style.background = '#f5f5f5';
+        item.onmouseout = () => item.style.background = 'white';
+        item.onclick = (e) => {
+          e.stopPropagation(); // prevent document click closing immediately if needed?
+          menu.style.display = 'none';
+          opt.action();
+        };
+        menu.appendChild(item);
+      });
+    }
+
+    // Updated Context Menu Logic
+    function openDocCtxMenu(e, docId) {
+      e.stopPropagation();
+      e.preventDefault();
+
+      const options = [
+        { label: "이름 변경 (Rename)", action: () => promptRenameDoc(docId) },
+        { label: "그룹 이동 (Move)", action: () => promptMoveGroup(docId) },
+        { label: "화수 설정 (Set No.)", action: () => promptEpisodeNo(docId) },
+        { label: "삭제 (Delete)", action: () => confirmDeleteDoc(docId), color: '#e74c3c' }
+      ];
+
+      showCtxMenu(e.clientX, e.clientY, options);
+    }
+
+    function promptRenameDoc(docId) {
+      const doc = state.docs[docId];
+      const newTitle = prompt("변경할 제목:", doc.title);
+      if (newTitle && newTitle !== doc.title) {
+        // Optimistic Update
+        state.docs[docId].title = newTitle;
+        if (state.currentNavTab === 'TIMELINE') renderTimeline();
+        else renderDocList();
+
+        // If current doc, update input
+        if (state.currentDocId === docId) {
+          document.getElementById('doc-title-input').value = newTitle;
+        }
+
+        api(`/projects/${state.projectId}/documents/${docId}`, 'PATCH', { title: newTitle })
+          .catch(e => {
+            alert("이름 변경 실패");
+            console.error(e);
+            // Rollback? Simplified for now.
+          });
+      }
+    }
+
+    function promptMoveGroup(docId) {
+      const doc = state.docs[docId];
+      const currentGroup = (doc.metadata && doc.metadata.group) || "";
+      const newGroup = prompt("이동할 그룹명 (비워두면 '미분류'):", currentGroup);
+      if (newGroup !== null) {
+        const meta = doc.metadata || {};
+        meta.group = newGroup;
+        api(`/projects/${state.projectId}/documents/${docId}`, 'PATCH', { metadata: meta })
+          .then(() => {
+            state.docs[docId].metadata = meta; // local update
+            refreshDocList();
+          });
+      }
+    }
+
+    function promptEpisodeNo(docId) {
+      const doc = state.docs[docId];
+      const currentNo = (doc.metadata && doc.metadata.episode_no) || "";
+      const num = prompt("화수 번호 (숫자만 입력):", currentNo);
+      if (num !== null) {
+        const intNum = parseInt(num, 10);
+        if (isNaN(intNum)) return alert("유효한 숫자가 아닙니다.");
+
+        const meta = doc.metadata || {};
+        meta.episode_no = intNum;
+        api(`/projects/${state.projectId}/documents/${docId}`, 'PATCH', { metadata: meta })
+          .then(() => {
+            state.docs[docId].metadata = meta;
+            refreshDocList()
+          });
+      }
+    }
+
+    function confirmDeleteDoc(docId) {
+      if (confirm("정말 이 문서를 삭제하시겠습니까?")) {
+        api(`/projects/${state.projectId}/documents/${docId}`, 'DELETE')
+          .then(() => {
+            delete state.docs[docId];
+            if (state.currentDocId === docId) {
+              state.currentDocId = null;
+              document.getElementById('editor').innerText = '';
+              document.getElementById('doc-title-input').value = '';
+            }
+            refreshDocList();
+          });
+      }
+    }
+    function openGroupCtxMenu(e, groupName) {
+      e.stopPropagation();
+      e.preventDefault();
+
+      const options = [
+        { label: "그룹 이름 변경 (Rename)", action: () => promptRenameGroup(groupName) },
+      ];
+
+      showCtxMenu(e.clientX, e.clientY, options);
+    }
+
+    async function promptRenameGroup(oldName) {
+      const newName = prompt("새 그룹 이름:", oldName);
+      if (newName && newName !== oldName) {
+        showLoading("그룹 이름 변경 중...");
+
+        const groupDocs = Object.values(state.docs).filter(d => {
+          const g = (d.metadata && d.metadata.group) ? d.metadata.group : "미분류";
+          return g === oldName;
+        });
+
+        const updates = groupDocs.map(d => ({
+          doc_id: d.doc_id,
+          group: newName,
+          order: d.metadata?.order,
+          episode_no: d.metadata?.episode_no
+        }));
+
+        try {
+          await api(`/projects/${state.projectId}/documents/reorder`, 'POST', { updates });
+          updates.forEach(u => {
+            if (state.docs[u.doc_id].metadata) {
+              state.docs[u.doc_id].metadata.group = newName;
+            }
+          });
+          refreshDocList();
+        } catch (err) {
+          alert("그룹 이름 변경 실패");
+          console.error(err);
+        } finally {
+          hideLoading();
+        }
+      }
+    }
+
+    async function createNewDoc() {
+      const title = "제목 없음";
+
+      // Type based on current tab
+      let type = state.currentNavTab;
+      if (type === 'SETTING') {
+        // Ask subtype? For now default to SETTING
+      }
+
+      showLoading("문서 생성 중...");
+      try {
+        const res = await api(`/projects/${state.projectId}/documents`, 'POST', {
+          title, type, content: ''
+        });
+        hideLoading();
+        await refreshDocList();
+        loadDoc(res.document.doc_id);
+      } catch (e) { hideLoading(); alert("실패"); }
+    }
+
+    async function loadDoc(did) {
+      // Safe Context Switch
+      if (state.currentDocId && state.isDirty) {
+        await saveDoc(true); // Wait for save to complete
+      }
+
+      state.currentDocId = did;
+      const doc = state.docs[did];
+
+      // UI Feedback
+      document.getElementById('empty-state').style.display = 'none';
+      if (document.getElementById('loading-overlay').classList.contains('active') === false) {
+        // Only show local loading if not blocked by something else
+        // showLoading("문서 로딩 중..."); // Might be too intrusive?
+        // Let's just use the editor placeholder or opacity?
+        document.getElementById('editor').style.opacity = '0.5';
+      }
+
+      try {
+        const res = await api(`/projects/${state.projectId}/documents/${did}`);
+        const fullDoc = res.document;
+
+        document.getElementById('doc-title-input').value = fullDoc.title || '';
+        document.getElementById('editor').innerText = fullDoc.content || '';
+        document.getElementById('editor').style.opacity = '1';
+
+        // Reset dirty state after load
+        state.isDirty = false;
+        document.getElementById('save-status').innerText = "저장됨";
+        document.getElementById('save-status').style.color = "#aaa";
+
+        document.getElementById('doc-type-badge').innerText = fullDoc.type || 'UNKNOWN';
+
+        state.currentDocType = fullDoc.type;
+
+        renderDocList();
+        // hideLoading();
+      } catch (e) {
+        console.error("Load Doc Error", e);
+        document.getElementById('editor').innerText = "로드 실패";
+        document.getElementById('editor').style.opacity = '1';
+      }
+    }
+
+
+
+    // --- Assistant ---
+    function switchAssistTab(mode) {
+      document.querySelectorAll('#assistant-sidebar .tab-btn').forEach(b => b.classList.remove('active'));
+      event.target.classList.add('active');
+
+      state.assistantMode = mode;
+
+      const btn = document.getElementById('assist-action-btn');
+      if (mode === 'CHECK') btn.innerText = "오류 점검하기";
+      if (mode === 'SEARCH') btn.innerText = "관련 내용 찾기";
+    }
+
+    // --- API Helper for Jobs ---
+    async function waitForJob(jobId, onProgress) {
+      let percentage = 10;
+      return new Promise((resolve, reject) => {
+        const check = async () => {
+          try {
+            const res = await api(`/jobs/${jobId}`);
+            const status = res.job.status;
+
+            if (status === 'COMPLETED') {
+              if (onProgress) onProgress(100);
+              resolve(res.job);
+              return;
+            }
+            if (status === 'FAILED' || status === 'CANCELLED') {
+              reject(new Error(res.job.error || "작업 실패"));
+              return;
+            }
+
+            // Fake progress increment
+            percentage = Math.min(90, percentage + 10);
+            if (onProgress) onProgress(percentage);
+
+            setTimeout(check, 1000);
+          } catch (e) {
+            reject(e);
+          }
+        };
+        check();
+      });
+    }
+
+    async function runAssistantAction() {
+      if (!state.currentDocId) return alert("문서를 먼저 여세요");
+
+      const mode = state.assistantMode || 'CHECK';
+      const contentPanel = document.getElementById('assistant-content');
+
+      if (mode === 'SEARCH') {
+        contentPanel.innerHTML = '<div style="text-align:center; padding:20px; color:#666;"><img src="/assets/img.gif" width="30"> 관련 내용 탐색 중...</div>';
+        try {
+          const editor = document.getElementById('editor');
+          const query = editor.innerText.substring(0, 500) || "내용 없음"; // Contextual search
+
+          // Try Sync Retrieval (FTS)
+          const res = await api('/query/retrieval', 'POST', {
+            project_id: state.projectId,
+            query: query,
+            k: 5
+          });
+
+          if (!res.results || res.results.length === 0) {
+            contentPanel.innerHTML = '<div style="padding:20px; text-align:center;">관련된 내용을 찾을 수 없습니다.</div>';
+            return;
+          }
+
+          let html = '<div style="padding:10px;"><strong>검색 결과</strong></div>';
+          res.results.forEach(r => {
+            html += `
+                    <div class="analysis-card info" style="cursor:pointer;" onclick="loadDoc('${r.doc_id}')">
+                        <div style="font-weight:600; font-size:0.9rem;">${r.doc_title || '문서'}</div> <!-- doc_title might be missing in FTS result, checking schema -->
+                        <div style="font-size:0.8rem; color:#666; margin-top:5px;">
+                            ${r.snippet || r.text.substring(0, 50) + '...'}
+                        </div>
+                        <div style="font-size:0.75rem; color:#999; margin-top:5px;">유사도: ${Math.round((r.score || 0) * 100)}%</div>
+                    </div>
+                `;
+          });
+          contentPanel.innerHTML = html;
+
+        } catch (e) {
+          console.error(e);
+          contentPanel.innerHTML = `<div style="text-align:center; padding:20px; color:red;">검색 실패<br>${e.message}</div>`;
+        }
+        return;
+      }
+
+      // CHECK Mode
+      contentPanel.innerHTML = '<div style="text-align:center; padding:20px;"><img src="/assets/img.gif" width="40" alt="loading"><br>AI가 분석 중입니다... <span id="check-progress">0%</span></div>';
+
+      try {
+        // 1. Submit Job
+        const res = await api('/jobs', 'POST', {
+          type: 'CONSISTENCY',
+          project_id: state.projectId,
+          inputs: {
+            input_doc_id: state.currentDocId,
+            input_snapshot_id: 'latest',
+            range: { start: 0, end: 10000 }
+          }
+        });
+
+        const jobId = res.job.job_id;
+
+        // 2. Poll for completion
+        await waitForJob(jobId, (pct) => {
+          const el = document.getElementById('check-progress');
+          if (el) el.innerText = `${pct}%`;
+        });
+
+        // 3. Fetch Verdicts
+        // Note: Currently calling POST /query/verdicts is the way to list verdicts for a doc
+        const vRes = await api('/query/verdicts', 'POST', {
+          project_id: state.projectId,
+          input_doc_id: state.currentDocId
+        });
+
+        renderVerdicts(vRes.verdicts || []);
+        showSuccess("점검이 완료되었습니다.");
+
+      } catch (e) {
+        console.error(e);
+        contentPanel.innerHTML = `<div style="color:red; padding:20px;">분석 실패: ${e.message}</div>`;
+      }
+    }
+
+    function renderVerdicts(verdicts) {
+      const contentPanel = document.getElementById('assistant-content');
+      if (!verdicts || verdicts.length === 0) {
+        contentPanel.innerHTML = '<div style="padding:20px; text-align:center;">발견된 문제 없음 (완벽합니다!)</div>';
+        return;
+      }
+
+      let html = '';
+      verdicts.forEach(v => {
+        const severityClass = v.severity > 0.7 ? 'error' : 'info';
+        const title = v.type === 'contradiction' ? '설정 충돌' : '사실 확인 필요';
+
+        html += `
+                <div class="analysis-card ${severityClass}" onclick="highlightText('${v.quote || ''}')">
+                    <strong>${title}</strong>
+                    <p style="font-size:0.9rem; margin:5px 0;">${v.claim || '내용 없음'}</p>
+                    <div style="font-size:0.8rem; color:#666;">
+                        ${v.evidence ? v.evidence.map(e => `• ${e.text ? e.text.substring(0, 50) + '...' : ''}`).join('<br>') : ''}
+                    </div>
+                </div>
+            `;
+      });
+
+      contentPanel.innerHTML = html;
+    }
+
+    function highlightText(quote) {
+      if (!quote) return;
+      console.log("Highlight:", quote);
+      // Bonus: Select text in editor
+      const editor = document.getElementById('editor');
+      const text = editor.innerText;
+      const idx = text.indexOf(quote);
+      if (idx >= 0) {
+        // Since contenteditable is messy with ranges, just alert for now or implement robust find later.
+        alert("문장에서 발견: " + quote.substring(0, 20) + "...");
+      }
+    }
+
+    // --- Export ---
+    function openExportModal() {
+      document.getElementById('export-modal').classList.add('active');
+    }
+    function closeExportModal() {
+      document.getElementById('export-modal').classList.remove('active');
+    }
+    async function handleExport() {
+      if (!state.currentDocId) return alert("문서를 열어주세요");
+      const format = document.querySelector('input[name="export-fmt"]:checked').value;
+
+      showLoading("파일 준비 중...");
+      try {
+        const res = await api('/jobs', 'POST', {
+          type: 'EXPORT',
+          project_id: state.projectId,
+          inputs: {
+            range: { doc_id: state.currentDocId }, // Export current doc only
+            format: format
+          }
+        });
+
+        // Wait for job completion
+        await waitForJob(res.job.job_id);
+
+        // Get Result (Assuming job result contains URL or content)
+        const jobRes = await api(`/jobs/${res.job.job_id}`);
+        if (jobRes.job.result && jobRes.job.result.url) {
+          window.open(jobRes.job.result.url, '_blank');
+        } else if (jobRes.job.result && jobRes.job.result.content) {
+          // Manual download if content is returned directly
+          const blob = new Blob([jobRes.job.result.content], { type: format === 'json' ? 'application/json' : 'text/plain' });
+          const link = document.createElement('a');
+          link.href = URL.createObjectURL(blob);
+          link.download = `export_${state.currentDocId}.${format}`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        } else {
+          alert("내보내기 완료 (다운로드 URL 없음)");
+        }
+
+        hideLoading();
+        closeExportModal();
+      } catch (e) {
+        hideLoading();
+        console.error(e);
+        alert("내보내기 실패: " + e.message);
+      }
+    }
+
+    async function createNewChapter() {
+      const chapterName = prompt("새 챕터(그룹) 이름을 입력하세요:");
+      if (!chapterName) return;
+
+      showLoading("챕터 생성 중...");
+      try {
+        // Create a placeholder doc for this chapter
+        const res = await api(`/projects/${state.projectId}/documents`, 'POST', {
+          title: `${chapterName} - 서막`,
+          type: 'EPISODE',
+          content: '',
+          metadata: { group: chapterName, order: 0, episode_no: 1 }
+        });
+        hideLoading();
+        await refreshDocList();
+        loadDoc(res.document.doc_id);
+      } catch (e) {
+        hideLoading();
+        alert("챕터 생성 실패");
+        console.error(e);
+      }
+    }
+
+    async function exitProject() {
+      if (state.currentDocId && state.isDirty) {
+        await saveDoc(true);
+      }
+
+      // Reset State
+      state.projectId = null;
+      state.projectName = '';
+      state.currentDocId = null;
+      state.docs = {};
+
+      // Clear UI
+      document.getElementById('doc-list').innerHTML = '';
+      document.getElementById('editor').innerText = '';
+      document.getElementById('doc-title-input').value = '';
+      document.getElementById('current-project-label').innerText = '-';
+      document.getElementById('empty-state').style.display = 'flex'; // Reset Placeholder
+
+      // Show Modal
+      document.getElementById('setup-modal').classList.add('active');
+
+      // Clear LocalStorage Navigation
+      localStorage.removeItem('last_project_id');
+      localStorage.removeItem('last_project_name');
+    }
+
+    // --- Drag & Drop Handlers ---
+    function handleDragStart(e, docId, groupName = null) {
+      if (groupName) {
+        state.draggedGroup = groupName;
+        state.draggedDocId = null;
+        e.dataTransfer.effectAllowed = 'move';
+      } else {
+        state.draggedDocId = docId;
+        state.draggedGroup = null;
+        e.dataTransfer.effectAllowed = 'move';
+      }
+    }
+
+    function handleDragOver(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    }
+
+    async function handleDropOnItem(e, targetDocId, targetGroupName) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (state.draggedGroup) return; // Ignore group drop on item for now
+
+      if (!state.draggedDocId || state.draggedDocId === targetDocId) return;
+
+      const sourceDoc = state.docs[state.draggedDocId];
+      const targetDoc = state.docs[targetDocId];
+
+      let targetGroup = targetGroupName;
+      if (!targetGroup) {
+        targetGroup = (targetDoc.metadata && targetDoc.metadata.group) || "미분류";
+      }
+
+      // Flexible Sorting: Check Drop Position (Before or After)
+      // e.offsetY relative to e.target (the list item)
+      // If offsetY > target.offsetHeight / 2 -> After
+
+      // Note: e.target might be a child of the list item. We need the list item's height.
+      const rect = e.currentTarget.getBoundingClientRect();
+      const offsetY = e.clientY - rect.top;
+      const isAfter = offsetY > (rect.height / 2);
+
+      // Get Group Docs sorted
+      const groupDocs = Object.values(state.docs).filter(d => {
+        const g = (d.metadata && d.metadata.group) || "미분류";
+        return g === targetGroup;
+      }).sort((a, b) => (a.metadata?.order || 0) - (b.metadata?.order || 0));
+
+      const targetIdx = groupDocs.findIndex(d => d.doc_id === targetDocId);
+      let newOrder = 0;
+      const targetOrder = groupDocs[targetIdx]?.metadata?.order || 0;
+
+      if (isAfter) {
+        // Insert After
+        const nextDoc = groupDocs[targetIdx + 1];
+        if (nextDoc) {
+          newOrder = (targetOrder + (nextDoc.metadata?.order || 0)) / 2;
+        } else {
+          newOrder = targetOrder + 10;
+        }
+      } else {
+        // Insert Before
+        if (targetIdx === 0) {
+          newOrder = targetOrder - 10;
+        } else {
+          const prevDoc = groupDocs[targetIdx - 1];
+          newOrder = ((prevDoc.metadata?.order || 0) + targetOrder) / 2;
+        }
+      }
+
+      // Optimistic Update? Too risky for order? 
+      // Let's stick to API then refresh for safety in ordering.
+      await api(`/projects/${state.projectId}/documents/${state.draggedDocId}`, 'PATCH', {
+        metadata: { ...sourceDoc.metadata, group: targetGroup, order: newOrder }
+      });
+
+      state.draggedDocId = null;
+      refreshDocList();
+    }
+
+    async function handleDropOnGroup(e, targetGroupName) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (state.draggedGroup) {
+        // Reordering Groups?
+        // If dragging Group A onto Group B...
+        // Not implemented yet.
+        return;
+      }
+
+      if (!state.draggedDocId) return;
+
+      const sourceDoc = state.docs[state.draggedDocId];
+      // Move to this group, append to end (order = max + 10)
+
+      const groupDocs = Object.values(state.docs).filter(d => {
+        const g = (d.metadata && d.metadata.group) || "미분류";
+        return g === targetGroupName;
+      });
+
+      const maxOrder = groupDocs.reduce((max, d) => Math.max(max, d.metadata?.order || 0), 0);
+      const newOrder = maxOrder + 10;
+
+      await api(`/projects/${state.projectId}/documents/${state.draggedDocId}`, 'PATCH', {
+        metadata: { ...sourceDoc.metadata, group: targetGroupName, order: newOrder }
+      });
+
+      state.draggedDocId = null;
+      refreshDocList();
+    }
+
+    // Init
+    init();
+
+    // Auto-load session
+    const lastPid = localStorage.getItem('last_project_id');
+    const lastName = localStorage.getItem('last_project_name');
+    if (lastPid && lastName) {
+      loadProject(lastPid, lastName);
+      document.getElementById('setup-modal').classList.remove('active');
+    }
+
+
+  </script>
+</body>
+
+</html>

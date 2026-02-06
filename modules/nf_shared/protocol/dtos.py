@@ -140,6 +140,7 @@ class Document:
     version: int
     created_at: AppTimestamp
     updated_at: AppTimestamp
+    metadata: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)

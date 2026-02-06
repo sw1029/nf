@@ -328,6 +328,7 @@ def _initialize(conn: sqlite3.Connection) -> None:
     _ensure_columns(conn, "jobs", "max_attempts", "max_attempts INTEGER NOT NULL DEFAULT 1")
     _ensure_columns(conn, "jobs", "error_code", "error_code TEXT")
     _ensure_columns(conn, "jobs", "error_message", "error_message TEXT")
+    _ensure_columns(conn, "documents", "metadata_json", "metadata_json TEXT")
     _ensure_columns(conn, "verdict_log", "claim_fingerprint", "claim_fingerprint TEXT")
     _backfill_verdict_log_claim_fingerprints(conn)
     conn.commit()

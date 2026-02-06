@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -12,6 +13,8 @@ def _now_ts() -> str:
 
 
 def _row_to_document(row: Any) -> Document:
+    meta_json = row["metadata_json"]
+    meta = json.loads(meta_json) if meta_json else {}
     return Document(
         doc_id=row["doc_id"],
         project_id=row["project_id"],
@@ -23,6 +26,7 @@ def _row_to_document(row: Any) -> Document:
         version=row["version"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        metadata=meta,
     )
 
 
@@ -60,15 +64,17 @@ def create_document(
     head_snapshot_id: str,
     checksum: str,
     version: int,
+    metadata: dict[str, Any] | None = None,
 ) -> Document:
     ts = _now_ts()
+    meta_json = json.dumps(metadata) if metadata else "{}"
     conn.execute(
         """
         INSERT INTO documents (
             doc_id, project_id, title, type, path, head_snapshot_id,
-            checksum, version, created_at, updated_at
+            checksum, version, created_at, updated_at, metadata_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             doc_id,
@@ -81,6 +87,7 @@ def create_document(
             version,
             ts,
             ts,
+            meta_json,
         ),
     )
     conn.commit()
@@ -95,10 +102,12 @@ def create_document(
         version=version,
         created_at=ts,
         updated_at=ts,
+        metadata=metadata or {},
     )
 
 
 def list_documents(conn, project_id: str) -> list[Document]:
+    # TODO: Might need custom sorting here or in service layer based on metadata
     rows = conn.execute(
         "SELECT * FROM documents WHERE project_id = ? ORDER BY created_at ASC",
         (project_id,),
@@ -123,6 +132,7 @@ def update_document(
     head_snapshot_id: str | None = None,
     checksum: str | None = None,
     version: int | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> Document | None:
     existing = conn.execute("SELECT * FROM documents WHERE doc_id = ?", (doc_id,)).fetchone()
     if existing is None:
@@ -134,10 +144,20 @@ def update_document(
     next_snapshot = head_snapshot_id if head_snapshot_id is not None else existing["head_snapshot_id"]
     next_checksum = checksum if checksum is not None else existing["checksum"]
     next_version = version if version is not None else existing["version"]
+    
+    next_meta_json = existing["metadata_json"]
+    if metadata is not None:
+        # Merge or replace? For now, we assume FULL replacement of metadata or merge logic in service
+        # But usually update_document might receive partial updates. Let's start with replacement for simplicity 
+        # or merge if we want to be safe. Since `metadata` arg is passed, we likely want to set it.
+        # But if the user passed specific keys, they should have constructed the dict in service.
+        # So we just dump what we got.
+        next_meta_json = json.dumps(metadata)
+
     conn.execute(
         """
         UPDATE documents
-        SET title = ?, type = ?, path = ?, head_snapshot_id = ?, checksum = ?, version = ?, updated_at = ?
+        SET title = ?, type = ?, path = ?, head_snapshot_id = ?, checksum = ?, version = ?, updated_at = ?, metadata_json = ?
         WHERE doc_id = ?
         """,
         (
@@ -148,10 +168,14 @@ def update_document(
             next_checksum,
             next_version,
             ts,
+            next_meta_json,
             doc_id,
         ),
     )
     conn.commit()
+    
+    next_meta = json.loads(next_meta_json) if next_meta_json else {}
+
     return Document(
         doc_id=existing["doc_id"],
         project_id=existing["project_id"],
@@ -163,6 +187,7 @@ def update_document(
         version=next_version,
         created_at=existing["created_at"],
         updated_at=ts,
+        metadata=next_meta,
     )
 
 
