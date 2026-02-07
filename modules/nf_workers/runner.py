@@ -944,6 +944,16 @@ def _handle_consistency(ctx: WorkerContext) -> None:
     engine = ConsistencyEngineImpl(db_path=ctx._db_path)
     req = dict(ctx.payload)
     req.setdefault("project_id", ctx.project_id)
+    
+    # Resolve 'latest' snapshot
+    if req.get("input_snapshot_id") == "latest":
+        doc_id = req.get("input_doc_id")
+        if isinstance(doc_id, str):
+            with db.connect(ctx._db_path) as conn:
+                doc = document_repo.get_document(conn, doc_id)
+                if doc:
+                    req["input_snapshot_id"] = doc.head_snapshot_id
+
     verdicts = engine.run(req)
     total = len(verdicts)
     violates = len([v for v in verdicts if v.verdict is Verdict.VIOLATE])

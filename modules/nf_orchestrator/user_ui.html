@@ -1389,12 +1389,12 @@
             const res = await api(`/jobs/${jobId}`);
             const status = res.job.status;
 
-            if (status === 'COMPLETED') {
+            if (status === 'SUCCEEDED') {
               if (onProgress) onProgress(100);
               resolve(res.job);
               return;
             }
-            if (status === 'FAILED' || status === 'CANCELLED') {
+            if (status === 'FAILED' || status === 'CANCELED') {
               reject(new Error(res.job.error || "작업 실패"));
               return;
             }

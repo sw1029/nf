@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import threading
 import time
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -1505,6 +1506,12 @@ def run_orchestrator(host: str = "127.0.0.1", port: int = 8080) -> None:
     """
     오케스트레이터 API 서버 실행(루프백 HTTP).
     """
+    # Start background worker
+    from modules.nf_workers.runner import run_worker
+    worker_thread = threading.Thread(target=lambda: run_worker(db_path=None), daemon=True)
+    worker_thread.start()
+    print("Background worker started.")
+
     token = os.environ.get("NF_ORCHESTRATOR_TOKEN")
     server = OrchestratorHTTPServer((host, port), OrchestratorHandler, token=token)
     server.serve_forever()
