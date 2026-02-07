@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -44,8 +45,20 @@ from modules.nf_shared.protocol.serialization import dump_json
 
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
-_DEBUG_UI_PATH = Path(__file__).with_name("debug_ui.html")
-_USER_UI_PATH = Path(__file__).with_name("user_ui.html")
+
+
+def _resolve_resource(filename: str) -> Path:
+    if getattr(sys, "frozen", False):
+        # PyInstaller: Access via _MEIPASS or standard path based on add-data
+        # We assume assets are added maintaining the structure
+        base_dir = Path(getattr(sys, "_MEIPASS", os.path.dirname(sys.executable)))
+        # Map modules/nf_orchestrator structure
+        return base_dir / "modules" / "nf_orchestrator" / filename
+    return Path(__file__).with_name(filename)
+
+
+_DEBUG_UI_PATH = _resolve_resource("debug_ui.html")
+_USER_UI_PATH = _resolve_resource("user_ui.html")
 
 
 def _build_openapi_spec() -> dict[str, Any]:
@@ -936,7 +949,13 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
              self._send_app_error(HTTPStatus.FORBIDDEN, ErrorCode.VALIDATION_ERROR, "잘못된 파일명")
              return
              
-        assets_dir = Path(__file__).resolve().parent / "assets"
+        # assets_dir adjustment
+        if getattr(sys, "frozen", False):
+             base_dir = Path(getattr(sys, "_MEIPASS", os.path.dirname(sys.executable)))
+             assets_dir = base_dir / "modules" / "nf_orchestrator" / "assets"
+        else:
+             assets_dir = Path(__file__).resolve().parent / "assets"
+
         file_path = assets_dir / filename
         
         if not file_path.exists() or not file_path.is_file():
