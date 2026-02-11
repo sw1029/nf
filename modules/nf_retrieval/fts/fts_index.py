@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
 from modules.nf_retrieval.contracts import RetrievalRequest, RetrievalResult
-from modules.nf_retrieval.fts.query_builder import build_query
+from modules.nf_retrieval.fts.query_builder import build_fallback_query, build_query
 from modules.nf_retrieval.fts.snippet import make_snippet
 from modules.nf_shared.protocol.dtos import Chunk, EvidenceMatchType, FactStatus
 
 
-def index_chunks(conn: sqlite3.Connection, *, snapshot_id: str, chunks: list[Chunk], text: str) -> None:
+def index_chunks(
+    conn: sqlite3.Connection,
+    *,
+    snapshot_id: str,
+    chunks: list[Chunk],
+    text: str,
+    commit: bool = True,
+) -> None:
     conn.execute("DELETE FROM fts_docs WHERE snapshot_id = ?", (snapshot_id,))
 
     try:
@@ -28,6 +36,7 @@ def index_chunks(conn: sqlite3.Connection, *, snapshot_id: str, chunks: list[Chu
         (int(row["span_start"]), int(row["span_end"]), str(row["tag_path"] or "")) for row in tag_rows
     ]
     tag_i = 0
+    inserted_rows = 0
     for chunk in chunks:
         content = text[chunk.span_start : chunk.span_end]
         chunk_start = int(chunk.span_start)
@@ -74,24 +83,96 @@ def index_chunks(conn: sqlite3.Connection, *, snapshot_id: str, chunks: list[Chu
                     chunk.span_end,
                 ),
             )
-    conn.commit()
+            inserted_rows += 1
+
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        conn.execute(
+            """
+            INSERT INTO fts_snapshot_meta (snapshot_id, row_count, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(snapshot_id) DO UPDATE SET
+                row_count = excluded.row_count,
+                updated_at = excluded.updated_at
+            """,
+            (snapshot_id, inserted_rows, ts),
+        )
+    except sqlite3.OperationalError:
+        pass
+    if commit:
+        conn.commit()
 
 
 def fts_search(conn: sqlite3.Connection, req: RetrievalRequest) -> list[RetrievalResult]:
-    query_text = build_query(req.get("query", ""))
+    raw_query = req.get("query", "")
+    raw_query_text = raw_query if isinstance(raw_query, str) else str(raw_query)
+    query_text = build_query(raw_query)
+    stats_raw = req.get("stats")
+    stats = stats_raw if isinstance(stats_raw, dict) else None
+    if stats is not None:
+        stats.setdefault("rows_scanned", 0)
+        stats.setdefault("chunks_processed", 0)
+        stats.setdefault("query_mode", "fts")
     if not query_text:
         return []
 
-    filters = req.get("filters") or {}
+    filters_raw = req.get("filters")
+    filters = filters_raw if isinstance(filters_raw, dict) else {}
+
+    def normalize_str_list(value: object, *, limit: int = 200) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        items: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            token = item.strip()
+            if not token:
+                continue
+            if token in seen:
+                continue
+            seen.add(token)
+            items.append(token)
+            if len(items) >= limit:
+                break
+        return items
+
     params: list[Any] = [query_text]
+    project_id = req.get("project_id")
+    from_clause = "fts_docs"
 
     where = "fts_docs MATCH ?"
-    if isinstance(filters, dict) and isinstance(filters.get("doc_id"), str):
+    project_scoped = False
+    if isinstance(project_id, str) and project_id:
+        try:
+            has_chunk = conn.execute(
+                "SELECT 1 FROM chunks WHERE project_id = ? LIMIT 1",
+                (project_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            has_chunk = None
+        project_scoped = has_chunk is not None
+    if project_scoped:
+        from_clause = "fts_docs JOIN chunks c ON c.chunk_id = fts_docs.chunk_id"
+        where += " AND c.project_id = ?"
+        params.append(project_id)
+    if isinstance(filters.get("doc_id"), str):
         where += " AND doc_id = ?"
         params.append(filters["doc_id"])
-    if isinstance(filters, dict) and isinstance(filters.get("snapshot_id"), str):
+    if isinstance(filters.get("snapshot_id"), str):
         where += " AND snapshot_id = ?"
         params.append(filters["snapshot_id"])
+    doc_ids = normalize_str_list(filters.get("doc_ids"))
+    if doc_ids:
+        placeholders = ",".join("?" for _ in doc_ids)
+        where += f" AND doc_id IN ({placeholders})"
+        params.extend(doc_ids)
+    snapshot_ids = normalize_str_list(filters.get("snapshot_ids"))
+    if snapshot_ids:
+        placeholders = ",".join("?" for _ in snapshot_ids)
+        where += f" AND snapshot_id IN ({placeholders})"
+        params.extend(snapshot_ids)
     if filters.get("tag_path"):
         where += " AND tag_path = ?"
         params.append(filters["tag_path"])
@@ -110,14 +191,28 @@ def fts_search(conn: sqlite3.Connection, req: RetrievalRequest) -> list[Retrieva
             span_start, span_end,
             bm25(fts_docs) AS score,
             snippet(fts_docs, 0, '[', ']', '...', 24) AS snippet
-        FROM fts_docs
+        FROM {from_clause}
         WHERE {where}
         ORDER BY score
         LIMIT ?
     """
     params.append(fetch_limit)
 
-    rows = conn.execute(sql, params).fetchall()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError:
+        fallback_query = build_fallback_query(raw_query_text)
+        if not fallback_query or fallback_query == query_text:
+            return []
+        fallback_params = [fallback_query, *params[1:]]
+        try:
+            rows = conn.execute(sql, fallback_params).fetchall()
+            if stats is not None:
+                stats["query_mode"] = "fts_fallback"
+        except sqlite3.OperationalError:
+            return []
+    if stats is not None:
+        stats["rows_scanned"] = int(stats.get("rows_scanned", 0)) + len(rows)
     entity_filter = filters.get("entity_id")
     time_key_filter = filters.get("time_key")
     timeline_idx_filter = filters.get("timeline_idx")
@@ -213,13 +308,15 @@ def fts_search(conn: sqlite3.Connection, req: RetrievalRequest) -> list[Retrieva
     unique_rows = list(best_rows_by_chunk_id.values())
     unique_rows.sort(key=lambda r: float(r["score"]) if r["score"] is not None else 0.0)
     unique_rows = unique_rows[:limit]
+    if stats is not None:
+        stats["chunks_processed"] = int(stats.get("chunks_processed", 0)) + len(unique_rows)
 
     results: list[RetrievalResult] = []
     for row in unique_rows:
         content = row["content"] or ""
         snippet = row["snippet"] or ""
         if not snippet:
-            snippet = make_snippet(content, query_text)
+            snippet = make_snippet(content, raw_query_text)
         score = float(row["score"]) if row["score"] is not None else 0.0
         results.append(
             {

@@ -157,6 +157,7 @@ def create_tag_def(
     kind: TagKind,
     schema_type: SchemaType,
     constraints: dict[str, Any] | None = None,
+    commit: bool = True,
 ) -> TagDef:
     tag_id = str(uuid.uuid4())
     constraints = constraints or {}
@@ -167,7 +168,8 @@ def create_tag_def(
         """,
         (tag_id, project_id, tag_path, kind.value, schema_type.value, json.dumps(constraints)),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return TagDef(
         tag_id=tag_id,
         project_id=project_id,
@@ -356,6 +358,7 @@ def create_schema_version(
     source_snapshot_id: str,
     notes: str | None = None,
     schema_ver: str | None = None,
+    commit: bool = True,
 ) -> SchemaVersion:
     schema_ver = schema_ver or str(uuid.uuid4())
     ts = _now_ts()
@@ -366,7 +369,8 @@ def create_schema_version(
         """,
         (schema_ver, project_id, ts, source_snapshot_id, notes),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return SchemaVersion(
         schema_ver=schema_ver,
         project_id=project_id,
@@ -394,7 +398,7 @@ def get_latest_schema_version(conn, project_id: str) -> SchemaVersion | None:
     return _row_to_schema_version(row)
 
 
-def create_schema_fact(conn, fact: SchemaFact) -> SchemaFact:
+def create_schema_fact(conn, fact: SchemaFact, *, commit: bool = True) -> SchemaFact:
     conn.execute(
         """
         INSERT INTO schema_facts (
@@ -417,7 +421,8 @@ def create_schema_fact(conn, fact: SchemaFact) -> SchemaFact:
             fact.status.value,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return fact
 
 
@@ -479,6 +484,7 @@ def create_entity_mention_span(
     span_end: int,
     status: FactStatus,
     created_by: FactSource,
+    commit: bool = True,
 ) -> EntityMentionSpan:
     mention_id = str(uuid.uuid4())
     ts = _now_ts()
@@ -503,7 +509,8 @@ def create_entity_mention_span(
             ts,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return EntityMentionSpan(
         mention_id=mention_id,
         project_id=project_id,
@@ -548,6 +555,7 @@ def delete_entity_mention_spans(
     project_id: str,
     doc_id: str | None = None,
     snapshot_id: str | None = None,
+    commit: bool = True,
 ) -> int:
     query = "DELETE FROM entity_mention_span WHERE project_id = ?"
     params: list[Any] = [project_id]
@@ -558,7 +566,8 @@ def delete_entity_mention_spans(
         query += " AND snapshot_id = ?"
         params.append(snapshot_id)
     cur = conn.execute(query, params)
-    conn.commit()
+    if commit:
+        conn.commit()
     return cur.rowcount
 
 
@@ -589,6 +598,7 @@ def create_time_anchor(
     timeline_idx: int | None,
     status: FactStatus,
     created_by: FactSource,
+    commit: bool = True,
 ) -> TimeAnchor:
     anchor_id = str(uuid.uuid4())
     ts = _now_ts()
@@ -615,7 +625,8 @@ def create_time_anchor(
             ts,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return TimeAnchor(
         anchor_id=anchor_id,
         project_id=project_id,
@@ -665,6 +676,7 @@ def delete_time_anchors(
     project_id: str,
     doc_id: str | None = None,
     snapshot_id: str | None = None,
+    commit: bool = True,
 ) -> int:
     query = "DELETE FROM time_anchor WHERE project_id = ?"
     params: list[Any] = [project_id]
@@ -675,7 +687,8 @@ def delete_time_anchors(
         query += " AND snapshot_id = ?"
         params.append(snapshot_id)
     cur = conn.execute(query, params)
-    conn.commit()
+    if commit:
+        conn.commit()
     return cur.rowcount
 
 
@@ -707,6 +720,7 @@ def create_timeline_event(
     span_end: int,
     status: FactStatus,
     created_by: FactSource,
+    commit: bool = True,
 ) -> TimelineEvent:
     timeline_event_id = str(uuid.uuid4())
     ts = _now_ts()
@@ -734,7 +748,8 @@ def create_timeline_event(
             ts,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return TimelineEvent(
         timeline_event_id=timeline_event_id,
         project_id=project_id,
@@ -776,6 +791,7 @@ def delete_timeline_events(
     *,
     project_id: str,
     source_doc_id: str | None = None,
+    commit: bool = True,
 ) -> int:
     query = "DELETE FROM timeline_event WHERE project_id = ?"
     params: list[Any] = [project_id]
@@ -783,7 +799,8 @@ def delete_timeline_events(
         query += " AND source_doc_id = ?"
         params.append(source_doc_id)
     cur = conn.execute(query, params)
-    conn.commit()
+    if commit:
+        conn.commit()
     return cur.rowcount
 
 

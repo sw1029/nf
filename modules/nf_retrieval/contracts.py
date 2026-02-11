@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from typing import Protocol, TypedDict
+from typing import Any, Protocol, TypedDict
 
 
-class RetrievalRequest(TypedDict):
+class RetrievalRequest(TypedDict, total=False):
     project_id: str
     query: str
     filters: dict
     k: int
+    stats: dict[str, Any]
 
 
 class RetrievalResult(TypedDict):

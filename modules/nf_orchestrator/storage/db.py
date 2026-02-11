@@ -18,6 +18,15 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("PRAGMA synchronous = NORMAL")
+    except sqlite3.OperationalError:
+        pass
     _initialize(conn)
     return conn
 
@@ -306,6 +315,21 @@ def _initialize(conn: sqlite3.Connection) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS ingest_meta (
+            doc_id TEXT PRIMARY KEY,
+            snapshot_id TEXT NOT NULL,
+            checksum TEXT NOT NULL,
+            last_ingested_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS fts_snapshot_meta (
+            snapshot_id TEXT PRIMARY KEY,
+            row_count INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
         CREATE VIRTUAL TABLE IF NOT EXISTS fts_docs USING fts5(
             content,
             chunk_id UNINDEXED,
@@ -330,8 +354,32 @@ def _initialize(conn: sqlite3.Connection) -> None:
     _ensure_columns(conn, "jobs", "error_message", "error_message TEXT")
     _ensure_columns(conn, "documents", "metadata_json", "metadata_json TEXT")
     _ensure_columns(conn, "verdict_log", "claim_fingerprint", "claim_fingerprint TEXT")
+    _ensure_indexes(conn)
     _backfill_verdict_log_claim_fingerprints(conn)
     conn.commit()
+
+
+def _ensure_indexes(conn: sqlite3.Connection) -> None:
+    index_statements: Iterable[str] = (
+        "CREATE INDEX IF NOT EXISTS idx_jobs_status_type_priority_created ON jobs(status, type, priority, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_job_events_job_seq ON job_events(job_id, seq)",
+        "CREATE INDEX IF NOT EXISTS idx_documents_project_type ON documents(project_id, type)",
+        "CREATE INDEX IF NOT EXISTS idx_doc_snapshots_doc_version ON doc_snapshots(doc_id, version)",
+        "CREATE INDEX IF NOT EXISTS idx_chunks_snapshot ON chunks(snapshot_id)",
+        "CREATE INDEX IF NOT EXISTS idx_chunks_doc_snapshot ON chunks(doc_id, snapshot_id)",
+        "CREATE INDEX IF NOT EXISTS idx_tag_assignment_snapshot_span ON tag_assignment(snapshot_id, span_start, span_end)",
+        "CREATE INDEX IF NOT EXISTS idx_schema_facts_project_schema_status ON schema_facts(project_id, schema_ver, status)",
+        "CREATE INDEX IF NOT EXISTS idx_schema_facts_project_schema_layer_status ON schema_facts(project_id, schema_ver, layer, status)",
+        "CREATE INDEX IF NOT EXISTS idx_evidence_project_doc_snapshot ON evidence(project_id, doc_id, snapshot_id)",
+        "CREATE INDEX IF NOT EXISTS idx_verdict_log_project_doc_created ON verdict_log(project_id, input_doc_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_verdict_evidence_vid ON verdict_evidence_link(vid)",
+        "CREATE INDEX IF NOT EXISTS idx_entity_mention_lookup ON entity_mention_span(project_id, doc_id, entity_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_time_anchor_lookup ON time_anchor(project_id, doc_id, time_key, timeline_idx, status)",
+        "CREATE INDEX IF NOT EXISTS idx_whitelist_lookup ON whitelist_item(project_id, claim_fingerprint, scope)",
+        "CREATE INDEX IF NOT EXISTS idx_ignore_lookup ON ignore_item(project_id, claim_fingerprint, scope, kind)",
+    )
+    for stmt in index_statements:
+        conn.execute(stmt)
 
 
 def _ensure_columns(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:

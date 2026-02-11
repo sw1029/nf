@@ -6,7 +6,7 @@ from modules.nf_retrieval import contracts
 @pytest.mark.unit
 def test_retrieval_request_typed_dict_fields() -> None:
     annotations = contracts.RetrievalRequest.__annotations__
-    assert set(annotations.keys()) == {"project_id", "query", "filters", "k"}
+    assert set(annotations.keys()) == {"project_id", "query", "filters", "k", "stats"}
 
 
 @pytest.mark.unit

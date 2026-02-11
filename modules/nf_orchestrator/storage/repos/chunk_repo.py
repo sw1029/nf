@@ -27,7 +27,7 @@ def _row_to_chunk(row: Any) -> Chunk:
     )
 
 
-def replace_chunks_for_snapshot(conn, snapshot_id: str, chunks: list[Chunk]) -> None:
+def replace_chunks_for_snapshot(conn, snapshot_id: str, chunks: list[Chunk], *, commit: bool = True) -> None:
     conn.execute("DELETE FROM chunks WHERE snapshot_id = ?", (snapshot_id,))
     for chunk in chunks:
         conn.execute(
@@ -52,7 +52,8 @@ def replace_chunks_for_snapshot(conn, snapshot_id: str, chunks: list[Chunk]) -> 
                 chunk.created_at,
             ),
         )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def new_chunk_id() -> str:

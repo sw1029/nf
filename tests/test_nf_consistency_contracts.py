@@ -12,6 +12,9 @@ def test_consistency_request_typed_dict_fields() -> None:
         "input_snapshot_id",
         "range",
         "schema_ver",
+        "preflight",
+        "schema_scope",
+        "stats",
     }
 
 

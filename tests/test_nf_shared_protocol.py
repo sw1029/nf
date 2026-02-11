@@ -34,6 +34,7 @@ def test_settings_defaults_match_policies() -> None:
     assert settings.sync_retrieval_mode == "FTS_ONLY"
     assert settings.enable_local_generator is False
     assert settings.explicit_fact_auto_approve is False
+    assert settings.max_heavy_jobs == 1
 
 
 @pytest.mark.unit
@@ -134,11 +135,13 @@ def test_load_config_reads_file_and_env_overrides(tmp_path: Path, monkeypatch: p
     config_path.write_text("enable_remote_api = true\nmax_loaded_shards = 5\n", encoding="utf-8")
 
     monkeypatch.setenv("NF_MAX_RAM_MB", "1024")
+    monkeypatch.setenv("NF_MAX_HEAVY_JOBS", "3")
 
     settings = load_config(config_path)
     assert settings.enable_remote_api is True
     assert settings.max_loaded_shards == 5
     assert settings.max_ram_mb == 1024
+    assert settings.max_heavy_jobs == 3
 
 
 @pytest.mark.unit

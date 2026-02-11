@@ -126,6 +126,7 @@ class OrchestratorHTTPServer(ThreadingHTTPServer):
             "sse_fragment_ms": 0,
             "max_loaded_shards": self.settings.max_loaded_shards,
             "max_ram_mb": self.settings.max_ram_mb,
+            "max_heavy_jobs": self.settings.max_heavy_jobs,
         }
 
 
@@ -1156,6 +1157,25 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             require_str("input_doc_id")
             require_str("input_snapshot_id")
             require_dict("range")
+            preflight = inputs.get("preflight")
+            if preflight is not None:
+                if not isinstance(preflight, dict):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "preflight must be an object")
+                ensure_ingest = preflight.get("ensure_ingest")
+                ensure_index_fts = preflight.get("ensure_index_fts")
+                schema_scope = preflight.get("schema_scope")
+                if ensure_ingest is not None and not isinstance(ensure_ingest, bool):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "preflight.ensure_ingest must be boolean")
+                if ensure_index_fts is not None and not isinstance(ensure_index_fts, bool):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "preflight.ensure_index_fts must be boolean")
+                if schema_scope is not None and schema_scope not in {"latest_approved", "explicit_only"}:
+                    raise AppError(
+                        ErrorCode.VALIDATION_ERROR,
+                        "preflight.schema_scope must be latest_approved or explicit_only",
+                    )
+            schema_scope = inputs.get("schema_scope")
+            if schema_scope is not None and schema_scope not in {"latest_approved", "explicit_only"}:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "schema_scope must be latest_approved or explicit_only")
         elif job_type == JobType.RETRIEVE_VEC:
             require_str("query")
             if "filters" in inputs and not isinstance(inputs.get("filters"), dict):
@@ -1203,7 +1223,8 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             return
         with db.connect() as conn:
             running = job_repo.count_running_jobs(conn, heavy_types)
-        if running >= 1:
+        max_heavy_jobs = max(1, int(self.server.settings.max_heavy_jobs))
+        if running >= max_heavy_jobs:
             raise AppError(ErrorCode.POLICY_VIOLATION, "heavy job 동시 실행이 제한됩니다")
 
     def _stream_job_events(self, job_id: str) -> None:
@@ -1312,6 +1333,7 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 "vector_index_mode": settings.vector_index_mode,
                 "max_loaded_shards": settings.max_loaded_shards,
                 "max_ram_mb": settings.max_ram_mb,
+                "max_heavy_jobs": settings.max_heavy_jobs,
                 "evidence_required_for_model_output": settings.evidence_required_for_model_output,
                 "implicit_fact_auto_approve": settings.implicit_fact_auto_approve,
                 "explicit_fact_auto_approve": settings.explicit_fact_auto_approve,
@@ -1409,6 +1431,17 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 raise AppError(ErrorCode.VALIDATION_ERROR, "max_ram_mb는 1 이상이어야 합니다")
             os.environ["NF_MAX_RAM_MB"] = str(max_ram)
             state["max_ram_mb"] = max_ram
+            reload_config = True
+        if "max_heavy_jobs" in payload:
+            raw = payload.get("max_heavy_jobs")
+            try:
+                max_heavy_jobs = int(raw)
+            except (TypeError, ValueError) as exc:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "max_heavy_jobs must be an integer") from exc
+            if max_heavy_jobs <= 0:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "max_heavy_jobs must be >= 1")
+            os.environ["NF_MAX_HEAVY_JOBS"] = str(max_heavy_jobs)
+            state["max_heavy_jobs"] = max_heavy_jobs
             reload_config = True
         if reload_config:
             self.server.settings = load_config()
@@ -1521,15 +1554,18 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
         return
 
 
-def run_orchestrator(host: str = "127.0.0.1", port: int = 8080) -> None:
+def run_orchestrator(host: str = "127.0.0.1", port: int = 8080, *, start_worker: bool = True) -> None:
     """
     오케스트레이터 API 서버 실행(루프백 HTTP).
     """
-    # Start background worker
-    from modules.nf_workers.runner import run_worker
-    worker_thread = threading.Thread(target=lambda: run_worker(db_path=None), daemon=True)
-    worker_thread.start()
-    print("Background worker started.")
+    if start_worker:
+        from modules.nf_workers.runner import run_worker
+
+        worker_thread = threading.Thread(target=lambda: run_worker(db_path=None), daemon=True)
+        worker_thread.start()
+        print("Background worker started.")
+    else:
+        print("Background worker disabled.")
 
     token = os.environ.get("NF_ORCHESTRATOR_TOKEN")
     server = OrchestratorHTTPServer((host, port), OrchestratorHandler, token=token)

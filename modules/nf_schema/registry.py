@@ -23,6 +23,18 @@ DEFAULT_TAG_DEFS = [
         "constraints": {},
     },
     {
+        "tag_path": "설정/인물/주인공/직업",
+        "kind": TagKind.EXPLICIT,
+        "schema_type": SchemaType.STR,
+        "constraints": {},
+    },
+    {
+        "tag_path": "설정/인물/주인공/재능",
+        "kind": TagKind.EXPLICIT,
+        "schema_type": SchemaType.STR,
+        "constraints": {},
+    },
+    {
         "tag_path": "설정/인물/주인공/관계",
         "kind": TagKind.EXPLICIT,
         "schema_type": SchemaType.REL,

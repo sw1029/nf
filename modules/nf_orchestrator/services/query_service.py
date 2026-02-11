@@ -37,8 +37,9 @@ class QueryServiceImpl:
                     match_type=EvidenceMatchType(evidence_raw.get("match_type", EvidenceMatchType.EXACT.value)),
                     confirmed=bool(evidence_raw.get("confirmed", False)),
                 )
-                evidence_repo.create_evidence(conn, evidence)
+                evidence_repo.create_evidence(conn, evidence, commit=False)
                 stored.append(evidence)
+            conn.commit()
         return stored
 
     def get_evidence(self, eid: str) -> Evidence | None:

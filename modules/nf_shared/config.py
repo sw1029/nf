@@ -20,6 +20,7 @@ class Settings:
 
     max_loaded_shards: int = 2
     max_ram_mb: int = 2048
+    max_heavy_jobs: int = 1
 
     evidence_required_for_model_output: bool = True
     implicit_fact_auto_approve: bool = False

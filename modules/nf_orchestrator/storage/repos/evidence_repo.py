@@ -70,7 +70,7 @@ def _row_to_verdict(row: Any) -> VerdictLog:
     )
 
 
-def create_evidence(conn, evidence: Evidence) -> Evidence:
+def create_evidence(conn, evidence: Evidence, *, commit: bool = True) -> Evidence:
     conn.execute(
         """
         INSERT INTO evidence (
@@ -96,7 +96,8 @@ def create_evidence(conn, evidence: Evidence) -> Evidence:
             evidence.created_at,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return evidence
 
 
@@ -160,7 +161,7 @@ def list_evidence(
     return [_row_to_evidence(row) for row in rows]
 
 
-def create_verdict_log(conn, verdict: VerdictLog) -> VerdictLog:
+def create_verdict_log(conn, verdict: VerdictLog, *, commit: bool = True) -> VerdictLog:
     claim_fingerprint = _fingerprint(verdict.claim_text)
     try:
         conn.execute(
@@ -229,11 +230,12 @@ def create_verdict_log(conn, verdict: VerdictLog) -> VerdictLog:
                 verdict.created_at,
             ),
         )
-    conn.commit()
+    if commit:
+        conn.commit()
     return verdict
 
 
-def create_verdict_links(conn, links: list[VerdictEvidenceLink]) -> None:
+def create_verdict_links(conn, links: list[VerdictEvidenceLink], *, commit: bool = True) -> None:
     for link in links:
         conn.execute(
             """
@@ -242,7 +244,8 @@ def create_verdict_links(conn, links: list[VerdictEvidenceLink]) -> None:
             """,
             (link.vid, link.eid, link.role.value),
         )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def list_verdicts(conn, project_id: str, *, input_doc_id: str | None = None) -> list[VerdictLog]:

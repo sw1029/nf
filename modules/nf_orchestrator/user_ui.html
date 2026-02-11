@@ -571,6 +571,7 @@
       currentNavTab: 'EPISODE',
       docs: {},
       saveTimeout: null,
+      postSavePipelineTimer: null,
       isDirty: false,
       draggedDocId: null,
       draggedGroup: null,
@@ -627,6 +628,7 @@
         document.getElementById('save-status').innerText = "저장됨";
         document.getElementById('save-status').style.color = "#aaa";
         if (immediate) hideLoading();
+        schedulePostSavePipeline(state.currentDocId);
 
         // No need to render again unless we want to confirm from server
       } catch (e) {
@@ -1412,6 +1414,49 @@
       });
     }
 
+    function schedulePostSavePipeline(docId) {
+      if (!docId || !state.projectId) return;
+      if (state.postSavePipelineTimer) clearTimeout(state.postSavePipelineTimer);
+      state.postSavePipelineTimer = setTimeout(() => {
+        runPostSavePipeline(docId);
+      }, 400);
+    }
+
+    async function runPostSavePipeline(docId) {
+      if (!state.projectId || !docId) return;
+      try {
+        const ingest = await api('/jobs', 'POST', {
+          type: 'INGEST',
+          project_id: state.projectId,
+          inputs: { doc_id: docId }
+        });
+        await waitForJob(ingest.job.job_id);
+        const indexFts = await api('/jobs', 'POST', {
+          type: 'INDEX_FTS',
+          project_id: state.projectId,
+          inputs: { scope: docId }
+        });
+        await waitForJob(indexFts.job.job_id);
+      } catch (e) {
+        console.error('post-save pipeline failed', e);
+      }
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function verdictLabel(verdict) {
+      if (verdict === 'VIOLATE') return '설정 충돌';
+      if (verdict === 'OK') return '정합성 양호';
+      return '사실 확인 필요';
+    }
+
     async function runAssistantAction() {
       if (!state.currentDocId) return alert("문서를 먼저 여세요");
 
@@ -1437,18 +1482,29 @@
           }
 
           let html = '<div style="padding:10px;"><strong>검색 결과</strong></div>';
-          res.results.forEach(r => {
+          res.results.forEach((r) => {
+            const evidence = (r && typeof r === 'object' && typeof r.evidence === 'object') ? r.evidence : {};
+            const docId = evidence.doc_id || r.doc_id || '';
+            const snippet = evidence.snippet_text || r.snippet || '(스니펫 없음)';
+            const title = (docId && state.docs[docId] && state.docs[docId].title) ? state.docs[docId].title : (docId || '문서');
+            const score = Number(r.score || 0);
             html += `
-                    <div class="analysis-card info" style="cursor:pointer;" onclick="loadDoc('${r.doc_id}')">
-                        <div style="font-weight:600; font-size:0.9rem;">${r.doc_title || '문서'}</div> <!-- doc_title might be missing in FTS result, checking schema -->
+                    <div class="analysis-card info" style="cursor:pointer;" data-doc-id="${escapeHtml(docId)}">
+                        <div style="font-weight:600; font-size:0.9rem;">${escapeHtml(title)}</div>
                         <div style="font-size:0.8rem; color:#666; margin-top:5px;">
-                            ${r.snippet || r.text.substring(0, 50) + '...'}
+                            ${escapeHtml(snippet)}
                         </div>
-                        <div style="font-size:0.75rem; color:#999; margin-top:5px;">유사도: ${Math.round((r.score || 0) * 100)}%</div>
+                        <div style="font-size:0.75rem; color:#999; margin-top:5px;">점수: ${Number.isFinite(score) ? score.toFixed(3) : '-'}</div>
                     </div>
                 `;
           });
           contentPanel.innerHTML = html;
+          contentPanel.querySelectorAll('[data-doc-id]').forEach((node) => {
+            node.addEventListener('click', () => {
+              const docId = node.getAttribute('data-doc-id') || '';
+              if (docId) loadDoc(docId);
+            });
+          });
 
         } catch (e) {
           console.error(e);
@@ -1468,7 +1524,16 @@
           inputs: {
             input_doc_id: state.currentDocId,
             input_snapshot_id: 'latest',
-            range: { start: 0, end: 10000 }
+            range: {
+              start: 0,
+              end: Math.max(1, (document.getElementById('editor').innerText || '').length)
+            },
+            preflight: {
+              ensure_ingest: true,
+              ensure_index_fts: true,
+              schema_scope: 'explicit_only'
+            },
+            schema_scope: 'explicit_only'
           }
         });
 
@@ -1504,22 +1569,84 @@
       }
 
       let html = '';
-      verdicts.forEach(v => {
-        const severityClass = v.severity > 0.7 ? 'error' : 'info';
-        const title = v.type === 'contradiction' ? '설정 충돌' : '사실 확인 필요';
+      verdicts.forEach((v, idx) => {
+        const verdict = String(v.verdict || 'UNKNOWN');
+        const severityClass = verdict === 'VIOLATE' ? 'error' : 'info';
+        const title = verdictLabel(verdict);
+        const claimText = (typeof v.claim_text === 'string' && v.claim_text.trim()) ? v.claim_text : '내용 없음';
+        const reliability = Number(v.reliability_overall || 0);
+        const segmentSpan = (v && typeof v.segment_span === 'object') ? v.segment_span : {};
+        const spanStart = Number.isInteger(segmentSpan.start) ? segmentSpan.start : null;
+        const spanEnd = Number.isInteger(segmentSpan.end) ? segmentSpan.end : null;
+        const spanLabel = (spanStart !== null && spanEnd !== null) ? `${spanStart} ~ ${spanEnd}` : '-';
+        const detailId = `verdict-detail-${idx}`;
+        const vid = typeof v.vid === 'string' ? v.vid : '';
 
         html += `
-                <div class="analysis-card ${severityClass}" onclick="highlightText('${v.quote || ''}')">
-                    <strong>${title}</strong>
-                    <p style="font-size:0.9rem; margin:5px 0;">${v.claim || '내용 없음'}</p>
-                    <div style="font-size:0.8rem; color:#666;">
-                        ${v.evidence ? v.evidence.map(e => `• ${e.text ? e.text.substring(0, 50) + '...' : ''}`).join('<br>') : ''}
+                <div class="analysis-card ${severityClass}">
+                    <strong>${escapeHtml(title)}</strong>
+                    <p style="font-size:0.9rem; margin:5px 0;">${escapeHtml(claimText)}</p>
+                    <div style="font-size:0.78rem; color:#666; margin-bottom:8px;">
+                      판정: ${escapeHtml(verdict)} | 신뢰도: ${Number.isFinite(reliability) ? reliability.toFixed(2) : '-'} | 구간: ${escapeHtml(spanLabel)}
                     </div>
+                    <div style="display:flex; gap:8px; margin-bottom:8px;">
+                      <button class="btn btn-secondary jump-claim" data-claim="${escapeHtml(claimText)}">본문에서 찾기</button>
+                      <button class="btn btn-secondary load-verdict-detail" data-vid="${escapeHtml(vid)}" data-target="${escapeHtml(detailId)}" ${vid ? '' : 'disabled'}>근거 보기</button>
+                    </div>
+                    <div id="${escapeHtml(detailId)}" style="font-size:0.8rem; color:#555;"></div>
                 </div>
             `;
       });
 
       contentPanel.innerHTML = html;
+      contentPanel.querySelectorAll('.jump-claim').forEach((node) => {
+        node.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const quote = node.getAttribute('data-claim') || '';
+          highlightText(quote);
+        });
+      });
+      contentPanel.querySelectorAll('.load-verdict-detail').forEach((node) => {
+        node.addEventListener('click', async (event) => {
+          event.stopPropagation();
+          const vid = node.getAttribute('data-vid') || '';
+          const targetId = node.getAttribute('data-target') || '';
+          await loadVerdictDetail(vid, targetId);
+        });
+      });
+    }
+
+    async function loadVerdictDetail(vid, targetId) {
+      const target = document.getElementById(targetId);
+      if (!target || !vid || !state.projectId) return;
+      target.innerHTML = '<span style="color:#888;">근거 불러오는 중...</span>';
+      try {
+        const res = await api(`/query/verdicts/${encodeURIComponent(vid)}?project_id=${encodeURIComponent(state.projectId)}`);
+        const evidenceItems = Array.isArray(res.evidence) ? res.evidence : [];
+        if (evidenceItems.length === 0) {
+          target.innerHTML = '<span style="color:#888;">연결된 근거가 없습니다.</span>';
+          return;
+        }
+        let html = '';
+        evidenceItems.forEach((item) => {
+          const ev = (item && typeof item.evidence === 'object') ? item.evidence : {};
+          const role = String(item.role || '-');
+          const docId = String(ev.doc_id || '-');
+          const tagPath = String(ev.tag_path || '-');
+          const snippet = String(ev.snippet_text || '(스니펫 없음)');
+          html += `
+            <div style="margin-bottom:6px; padding:6px 8px; background:#f8fafc; border-radius:6px;">
+              <div style="font-weight:600;">${escapeHtml(role)}</div>
+              <div>doc: ${escapeHtml(docId)}</div>
+              <div>tag: ${escapeHtml(tagPath)}</div>
+              <div style="color:#666;">${escapeHtml(snippet)}</div>
+            </div>
+          `;
+        });
+        target.innerHTML = html;
+      } catch (e) {
+        target.innerHTML = `<span style="color:red;">근거 조회 실패: ${escapeHtml(e.message || String(e))}</span>`;
+      }
     }
 
     function highlightText(quote) {

@@ -19,7 +19,7 @@ def get_checksum(conn: sqlite3.Connection, doc_id: str) -> str | None:
     return checksum if isinstance(checksum, str) and checksum else None
 
 
-def upsert(conn: sqlite3.Connection, doc_id: str, checksum: str) -> None:
+def upsert(conn: sqlite3.Connection, doc_id: str, checksum: str, *, commit: bool = True) -> None:
     ts = _now_ts()
     conn.execute(
         """
@@ -29,5 +29,5 @@ def upsert(conn: sqlite3.Connection, doc_id: str, checksum: str) -> None:
         """,
         (doc_id, checksum, ts),
     )
-    conn.commit()
-
+    if commit:
+        conn.commit()

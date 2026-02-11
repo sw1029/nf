@@ -24,6 +24,7 @@ from modules.nf_orchestrator.storage.repos import (
     document_repo,
     evidence_repo,
     fts_meta_repo,
+    ingest_meta_repo,
     ignore_repo,
     job_repo,
     project_repo,
@@ -36,6 +37,7 @@ from modules.nf_schema.chunking import build_chunks
 from modules.nf_schema.conflict import resolve_conflicts
 from modules.nf_schema.extraction import extract_explicit_candidates
 from modules.nf_schema.identity import build_alias_index, resolve_entity_id
+from modules.nf_schema.registry import default_tag_defs
 from modules.nf_schema.units import normalize_value
 from modules.nf_schema.policy import enforce_fact_status_policy
 from modules.nf_schema.validators import validate_fact_value
@@ -115,13 +117,14 @@ def run_worker(
     processed = 0
     heavy_types = [JobType.INDEX_VEC, JobType.CONSISTENCY, JobType.RETRIEVE_VEC]
     settings = load_config()
+    max_heavy_jobs = max(1, int(settings.max_heavy_jobs))
 
     while True:
         if _memory_pressure(settings.max_ram_mb):
             time.sleep(poll_interval)
             continue
         with db.connect(db_path) as conn:
-            allow_heavy = job_repo.count_running_jobs(conn, heavy_types) == 0
+            allow_heavy = job_repo.count_running_jobs(conn, heavy_types) < max_heavy_jobs
             deny = None if allow_heavy else heavy_types
             leased = job_repo.lease_next_job(
                 conn,
@@ -251,6 +254,47 @@ def _estimate_index_mb(text: str, chunk_count: int) -> float:
     return text_mb * 2.0 + chunk_count * 0.001
 
 
+def _elapsed_ms(start_perf: float) -> int:
+    return max(0, int((time.perf_counter() - start_perf) * 1000))
+
+
+def _standard_metrics_payload(
+    *,
+    start_perf: float,
+    claims_processed: int = 0,
+    chunks_processed: int = 0,
+    rows_scanned: int = 0,
+    shards_loaded: int = 0,
+) -> dict[str, float | int]:
+    return {
+        "elapsed_ms": _elapsed_ms(start_perf),
+        "rss_mb_peak": round(_get_process_rss_mb(), 2),
+        "claims_processed": int(claims_processed),
+        "chunks_processed": int(chunks_processed),
+        "rows_scanned": int(rows_scanned),
+        "shards_loaded": int(shards_loaded),
+    }
+
+
+def _parse_consistency_preflight(payload: dict[str, Any]) -> dict[str, Any]:
+    raw = payload.get("preflight")
+    preflight = raw if isinstance(raw, dict) else {}
+    ensure_ingest = preflight.get("ensure_ingest")
+    ensure_index_fts = preflight.get("ensure_index_fts")
+    schema_scope = preflight.get("schema_scope")
+    if not isinstance(ensure_ingest, bool):
+        ensure_ingest = True
+    if not isinstance(ensure_index_fts, bool):
+        ensure_index_fts = True
+    if not isinstance(schema_scope, str) or schema_scope not in {"latest_approved", "explicit_only"}:
+        schema_scope = "latest_approved"
+    return {
+        "ensure_ingest": ensure_ingest,
+        "ensure_index_fts": ensure_index_fts,
+        "schema_scope": schema_scope,
+    }
+
+
 def _tag_assignment_signature(conn: sqlite3.Connection, snapshot_id: str) -> str:
     try:
         rows = conn.execute(
@@ -274,6 +318,43 @@ def _tag_assignment_signature(conn: sqlite3.Connection, snapshot_id: str) -> str
     return hashlib.sha256(raw).hexdigest()
 
 
+def _tag_def_signature(tag_defs: list) -> str:
+    if not tag_defs:
+        return ""
+    parts: list[str] = []
+    for item in sorted(tag_defs, key=lambda t: t.tag_path):
+        constraints = json.dumps(item.constraints, ensure_ascii=False, sort_keys=True)
+        parts.append(
+            f"{item.tag_path}|{item.kind.value}|{item.schema_type.value}|{constraints}"
+        )
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _alias_signature(aliases: list) -> str:
+    if not aliases:
+        return ""
+    parts: list[str] = []
+    for item in sorted(aliases, key=lambda a: (a.entity_id, a.alias_text)):
+        parts.append(f"{item.entity_id}|{item.alias_text}|{item.created_by.value}")
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _ingest_meta_checksum(
+    *,
+    doc_id: str,
+    snapshot_id: str,
+    snapshot_checksum: str,
+    assignment_sig: str,
+    tag_defs_sig: str,
+    alias_sig: str,
+) -> str:
+    payload = (
+        f"doc_id={doc_id}|snapshot_id={snapshot_id}|snapshot_checksum={snapshot_checksum}"
+        f"|assignment_sig={assignment_sig}|tag_defs_sig={tag_defs_sig}|alias_sig={alias_sig}"
+    )
+    return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
+
+
 def _fts_meta_checksum(
     conn: sqlite3.Connection,
     *,
@@ -281,11 +362,12 @@ def _fts_meta_checksum(
     snapshot_id: str,
     snapshot_checksum: str,
     episode_id: str | None,
+    tag_sig: str | None = None,
 ) -> str:
-    tag_sig = _tag_assignment_signature(conn, snapshot_id)
+    resolved_tag_sig = tag_sig if isinstance(tag_sig, str) else _tag_assignment_signature(conn, snapshot_id)
     payload = (
         f"doc_id={doc_id}|snapshot_id={snapshot_id}|snapshot_checksum={snapshot_checksum}"
-        f"|episode_id={episode_id or ''}|tag_sig={tag_sig}"
+        f"|episode_id={episode_id or ''}|tag_sig={resolved_tag_sig}"
     )
     return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
 
@@ -300,10 +382,70 @@ def _snapshot_has_chunks(conn: sqlite3.Connection, snapshot_id: str) -> bool:
 
 def _snapshot_has_fts_rows(conn: sqlite3.Connection, snapshot_id: str) -> bool:
     try:
-        row = conn.execute("SELECT 1 FROM fts_docs WHERE snapshot_id = ? LIMIT 1", (snapshot_id,)).fetchone()
+        row = conn.execute(
+            "SELECT row_count FROM fts_snapshot_meta WHERE snapshot_id = ?",
+            (snapshot_id,),
+        ).fetchone()
     except sqlite3.OperationalError:
         return False
-    return row is not None
+    if row is None:
+        return False
+    try:
+        return int(row["row_count"]) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _collect_aliases(conn: sqlite3.Connection, project_id: str) -> list:
+    entities = schema_repo.list_entities(conn, project_id)
+    aliases = []
+    for entity in entities:
+        aliases.extend(schema_repo.list_entity_aliases(conn, project_id, entity.entity_id))
+    return aliases
+
+
+def _ensure_tag_defs(conn: sqlite3.Connection, project_id: str) -> list:
+    tag_defs = schema_repo.list_tag_defs(conn, project_id)
+    if tag_defs:
+        return tag_defs
+    for item in default_tag_defs():
+        schema_repo.create_tag_def(
+            conn,
+            project_id=project_id,
+            tag_path=item["tag_path"],
+            kind=item["kind"],
+            schema_type=item["schema_type"],
+            constraints=item.get("constraints") or {},
+            commit=False,
+        )
+    return schema_repo.list_tag_defs(conn, project_id)
+
+
+def _ingest_checksum_for_doc(
+    conn: sqlite3.Connection,
+    *,
+    doc_id: str,
+    snapshot_id: str,
+    snapshot_checksum: str,
+    tag_defs_sig: str,
+    alias_sig: str,
+    assignment_sig_cache: dict[str, str] | None = None,
+) -> str:
+    assignment_sig: str
+    if assignment_sig_cache is not None and snapshot_id in assignment_sig_cache:
+        assignment_sig = assignment_sig_cache[snapshot_id]
+    else:
+        assignment_sig = _tag_assignment_signature(conn, snapshot_id)
+        if assignment_sig_cache is not None:
+            assignment_sig_cache[snapshot_id] = assignment_sig
+    return _ingest_meta_checksum(
+        doc_id=doc_id,
+        snapshot_id=snapshot_id,
+        snapshot_checksum=snapshot_checksum,
+        assignment_sig=assignment_sig,
+        tag_defs_sig=tag_defs_sig,
+        alias_sig=alias_sig,
+    )
 
 
 def _sentence_spans(text: str) -> list[tuple[int, int, str]]:
@@ -372,12 +514,12 @@ def _extract_episode_number(doc) -> int | None:
     return None
 
 
-def _resolve_episode_id(conn, project_id: str, doc) -> str | None:
+def _resolve_episode_id(conn, project_id: str, doc, *, episodes: list | None = None) -> str | None:
     episode_number = _extract_episode_number(doc)
     if episode_number is None:
         return None
-    episodes = document_repo.list_episodes(conn, project_id)
-    candidates = [ep for ep in episodes if ep.start_n <= episode_number <= ep.end_m]
+    project_episodes = episodes if episodes is not None else document_repo.list_episodes(conn, project_id)
+    candidates = [ep for ep in project_episodes if ep.start_n <= episode_number <= ep.end_m]
     if not candidates:
         return None
     candidates.sort(key=lambda ep: (ep.end_m - ep.start_n, ep.created_at, ep.episode_id))
@@ -569,10 +711,16 @@ def _run_job(job_type: JobType, ctx: WorkerContext) -> None:
 
 
 def _handle_ingest(ctx: WorkerContext) -> None:
+    start_perf = time.perf_counter()
     doc_id = ctx.payload.get("doc_id")
     snapshot_id = ctx.payload.get("snapshot_id")
     if not isinstance(doc_id, str):
         raise RuntimeError("doc_id missing")
+
+    schema_ver = ""
+    proposed = 0
+    approved = 0
+    skipped = False
 
     with db.connect(ctx._db_path) as conn:
         doc = document_repo.get_document(conn, doc_id)
@@ -584,159 +732,188 @@ def _handle_ingest(ctx: WorkerContext) -> None:
             snapshot = document_repo.get_snapshot(conn, doc.head_snapshot_id)
         if snapshot is None:
             raise RuntimeError("snapshot not found")
-        text = docstore.read_text(snapshot.path)
-        tag_defs = schema_repo.list_tag_defs(conn, doc.project_id)
-        tag_def_map = {tag.tag_path: tag for tag in tag_defs}
+        tag_defs = _ensure_tag_defs(conn, doc.project_id)
+        tag_defs_sig = _tag_def_signature(tag_defs)
         entities = schema_repo.list_entities(conn, doc.project_id)
         aliases = []
         for entity in entities:
             aliases.extend(schema_repo.list_entity_aliases(conn, doc.project_id, entity.entity_id))
-        alias_index = build_alias_index(entities, aliases)
-        assignments = schema_repo.list_tag_assignments(
+        alias_sig = _alias_signature(aliases)
+        ingest_checksum = _ingest_checksum_for_doc(
             conn,
-            doc.project_id,
-            doc_id=doc_id,
+            doc_id=doc.doc_id,
             snapshot_id=snapshot.snapshot_id,
+            snapshot_checksum=snapshot.checksum,
+            tag_defs_sig=tag_defs_sig,
+            alias_sig=alias_sig,
         )
-        schema_ver = schema_repo.create_schema_version(
-            conn,
-            project_id=doc.project_id,
-            source_snapshot_id=snapshot.snapshot_id,
-        ).schema_ver
-
-        facts: list[SchemaFact] = []
-        seen_tag_paths: set[str] = set()
-        for assignment in assignments:
-            if ctx.check_cancelled():
-                raise CancelledError("cancel requested")
-            snippet = text[assignment.span_start : assignment.span_end]
-            tag_def = tag_def_map.get(assignment.tag_path)
-            if tag_def is not None:
-                value = normalize_value(tag_def.schema_type, assignment.user_value)
-                try:
-                    validate_fact_value(tag_def.schema_type, value, tag_def.constraints)
-                except ValueError:
-                    continue
-            else:
-                value = assignment.user_value
-            evidence = evidence_repo.new_evidence(
-                project_id=doc.project_id,
+        previous_state = ingest_meta_repo.get_state(conn, doc.doc_id)
+        if previous_state == (snapshot.snapshot_id, ingest_checksum):
+            latest_schema = schema_repo.get_latest_schema_version(conn, doc.project_id)
+            schema_ver = latest_schema.schema_ver if latest_schema is not None else ""
+            skipped = True
+        else:
+            tag_def_map = {tag.tag_path: tag for tag in tag_defs}
+            alias_index = build_alias_index(entities, aliases)
+            assignments = schema_repo.list_tag_assignments(
+                conn,
+                doc.project_id,
                 doc_id=doc_id,
                 snapshot_id=snapshot.snapshot_id,
-                chunk_id=None,
-                section_path="",
-                tag_path=assignment.tag_path,
-                snippet_text=snippet,
-                span_start=assignment.span_start,
-                span_end=assignment.span_end,
-                fts_score=0.0,
-                match_type=EvidenceMatchType.EXACT,
-                confirmed=assignment.created_by is FactSource.USER,
             )
-            evidence_repo.create_evidence(conn, evidence)
-            status = FactStatus.APPROVED if assignment.created_by is FactSource.USER else FactStatus.PROPOSED
-            fact = SchemaFact(
-                fact_id=str(uuid.uuid4()),
-                project_id=doc.project_id,
-                schema_ver=schema_ver,
-                layer=SchemaLayer.EXPLICIT,
-                entity_id=resolve_entity_id(assignment.tag_path, alias_index),
-                tag_path=assignment.tag_path,
-                value=value,
-                evidence_eid=evidence.eid,
-                confidence=0.9 if assignment.created_by is FactSource.USER else 0.6,
-                source=assignment.created_by,
-                status=status,
-            )
-            fact = enforce_fact_status_policy(fact)
-            facts.append(fact)
-            seen_tag_paths.add(fact.tag_path)
-        for extracted in extract_explicit_candidates(text, tag_defs):
-            tag_path = extracted.tag_def.tag_path
-            if tag_path in seen_tag_paths:
-                continue
-            value = normalize_value(extracted.tag_def.schema_type, extracted.value)
+            text = docstore.read_text(snapshot.path)
+            facts: list[SchemaFact] = []
+            seen_tag_paths: set[str] = set()
             try:
-                validate_fact_value(extracted.tag_def.schema_type, value, extracted.tag_def.constraints)
-            except ValueError:
-                continue
-            evidence = evidence_repo.new_evidence(
-                project_id=doc.project_id,
-                doc_id=doc_id,
-                snapshot_id=snapshot.snapshot_id,
-                chunk_id=None,
-                section_path="",
-                tag_path=tag_path,
-                snippet_text=extracted.snippet_text,
-                span_start=extracted.span_start,
-                span_end=extracted.span_end,
-                fts_score=0.0,
-                match_type=EvidenceMatchType.EXACT,
-                confirmed=False,
-            )
-            evidence_repo.create_evidence(conn, evidence)
-            fact = SchemaFact(
-                fact_id=str(uuid.uuid4()),
-                project_id=doc.project_id,
-                schema_ver=schema_ver,
-                layer=SchemaLayer.EXPLICIT,
-                entity_id=resolve_entity_id(tag_path, alias_index),
-                tag_path=tag_path,
-                value=value,
-                evidence_eid=evidence.eid,
-                confidence=extracted.confidence,
-                source=FactSource.AUTO,
-                status=FactStatus.PROPOSED,
-            )
-            fact = enforce_fact_status_policy(fact)
-            facts.append(fact)
-            seen_tag_paths.add(fact.tag_path)
+                schema_ver = schema_repo.create_schema_version(
+                    conn,
+                    project_id=doc.project_id,
+                    source_snapshot_id=snapshot.snapshot_id,
+                    commit=False,
+                ).schema_ver
 
-        for tag_def in tag_defs:
-            if tag_def.kind is not TagKind.IMPLICIT:
-                continue
-            if tag_def.tag_path in seen_tag_paths:
-                continue
-            evidence = evidence_repo.new_evidence(
-                project_id=doc.project_id,
-                doc_id=doc_id,
-                snapshot_id=snapshot.snapshot_id,
-                chunk_id=None,
-                section_path="",
-                tag_path=tag_def.tag_path,
-                snippet_text="",
-                span_start=0,
-                span_end=0,
-                fts_score=0.0,
-                match_type=EvidenceMatchType.FUZZY,
-                confirmed=False,
-            )
-            evidence_repo.create_evidence(conn, evidence)
-            fact = SchemaFact(
-                fact_id=str(uuid.uuid4()),
-                project_id=doc.project_id,
-                schema_ver=schema_ver,
-                layer=SchemaLayer.IMPLICIT,
-                entity_id=resolve_entity_id(tag_def.tag_path, alias_index),
-                tag_path=tag_def.tag_path,
-                value="unknown",
-                evidence_eid=evidence.eid,
-                confidence=0.1,
-                source=FactSource.AUTO,
-                status=FactStatus.PROPOSED,
-            )
-            facts.append(fact)
-            seen_tag_paths.add(fact.tag_path)
+                for assignment in assignments:
+                    if ctx.check_cancelled():
+                        raise CancelledError("cancel requested")
+                    snippet = text[assignment.span_start : assignment.span_end]
+                    tag_def = tag_def_map.get(assignment.tag_path)
+                    if tag_def is not None:
+                        value = normalize_value(tag_def.schema_type, assignment.user_value)
+                        try:
+                            validate_fact_value(tag_def.schema_type, value, tag_def.constraints)
+                        except ValueError:
+                            continue
+                    else:
+                        value = assignment.user_value
+                    evidence = evidence_repo.new_evidence(
+                        project_id=doc.project_id,
+                        doc_id=doc_id,
+                        snapshot_id=snapshot.snapshot_id,
+                        chunk_id=None,
+                        section_path="",
+                        tag_path=assignment.tag_path,
+                        snippet_text=snippet,
+                        span_start=assignment.span_start,
+                        span_end=assignment.span_end,
+                        fts_score=0.0,
+                        match_type=EvidenceMatchType.EXACT,
+                        confirmed=assignment.created_by is FactSource.USER,
+                    )
+                    evidence_repo.create_evidence(conn, evidence, commit=False)
+                    status = FactStatus.APPROVED if assignment.created_by is FactSource.USER else FactStatus.PROPOSED
+                    fact = SchemaFact(
+                        fact_id=str(uuid.uuid4()),
+                        project_id=doc.project_id,
+                        schema_ver=schema_ver,
+                        layer=SchemaLayer.EXPLICIT,
+                        entity_id=resolve_entity_id(assignment.tag_path, alias_index),
+                        tag_path=assignment.tag_path,
+                        value=value,
+                        evidence_eid=evidence.eid,
+                        confidence=0.9 if assignment.created_by is FactSource.USER else 0.6,
+                        source=assignment.created_by,
+                        status=status,
+                    )
+                    fact = enforce_fact_status_policy(fact)
+                    facts.append(fact)
+                    seen_tag_paths.add(fact.tag_path)
 
-        facts = resolve_conflicts(facts, tag_defs)
-        proposed = 0
-        approved = 0
-        for fact in facts:
-            schema_repo.create_schema_fact(conn, fact)
-            if fact.status is FactStatus.PROPOSED:
-                proposed += 1
-            if fact.status is FactStatus.APPROVED:
-                approved += 1
+                for extracted in extract_explicit_candidates(text, tag_defs):
+                    tag_path = extracted.tag_def.tag_path
+                    if tag_path in seen_tag_paths:
+                        continue
+                    value = normalize_value(extracted.tag_def.schema_type, extracted.value)
+                    try:
+                        validate_fact_value(extracted.tag_def.schema_type, value, extracted.tag_def.constraints)
+                    except ValueError:
+                        continue
+                    evidence = evidence_repo.new_evidence(
+                        project_id=doc.project_id,
+                        doc_id=doc_id,
+                        snapshot_id=snapshot.snapshot_id,
+                        chunk_id=None,
+                        section_path="",
+                        tag_path=tag_path,
+                        snippet_text=extracted.snippet_text,
+                        span_start=extracted.span_start,
+                        span_end=extracted.span_end,
+                        fts_score=0.0,
+                        match_type=EvidenceMatchType.EXACT,
+                        confirmed=False,
+                    )
+                    evidence_repo.create_evidence(conn, evidence, commit=False)
+                    fact = SchemaFact(
+                        fact_id=str(uuid.uuid4()),
+                        project_id=doc.project_id,
+                        schema_ver=schema_ver,
+                        layer=SchemaLayer.EXPLICIT,
+                        entity_id=resolve_entity_id(tag_path, alias_index),
+                        tag_path=tag_path,
+                        value=value,
+                        evidence_eid=evidence.eid,
+                        confidence=extracted.confidence,
+                        source=FactSource.AUTO,
+                        status=FactStatus.PROPOSED,
+                    )
+                    fact = enforce_fact_status_policy(fact)
+                    facts.append(fact)
+                    seen_tag_paths.add(fact.tag_path)
+
+                for tag_def in tag_defs:
+                    if tag_def.kind is not TagKind.IMPLICIT:
+                        continue
+                    if tag_def.tag_path in seen_tag_paths:
+                        continue
+                    evidence = evidence_repo.new_evidence(
+                        project_id=doc.project_id,
+                        doc_id=doc_id,
+                        snapshot_id=snapshot.snapshot_id,
+                        chunk_id=None,
+                        section_path="",
+                        tag_path=tag_def.tag_path,
+                        snippet_text="",
+                        span_start=0,
+                        span_end=0,
+                        fts_score=0.0,
+                        match_type=EvidenceMatchType.FUZZY,
+                        confirmed=False,
+                    )
+                    evidence_repo.create_evidence(conn, evidence, commit=False)
+                    fact = SchemaFact(
+                        fact_id=str(uuid.uuid4()),
+                        project_id=doc.project_id,
+                        schema_ver=schema_ver,
+                        layer=SchemaLayer.IMPLICIT,
+                        entity_id=resolve_entity_id(tag_def.tag_path, alias_index),
+                        tag_path=tag_def.tag_path,
+                        value="unknown",
+                        evidence_eid=evidence.eid,
+                        confidence=0.1,
+                        source=FactSource.AUTO,
+                        status=FactStatus.PROPOSED,
+                    )
+                    facts.append(fact)
+                    seen_tag_paths.add(fact.tag_path)
+
+                facts = resolve_conflicts(facts, tag_defs)
+                for fact in facts:
+                    schema_repo.create_schema_fact(conn, fact, commit=False)
+                    if fact.status is FactStatus.PROPOSED:
+                        proposed += 1
+                    if fact.status is FactStatus.APPROVED:
+                        approved += 1
+
+                ingest_meta_repo.upsert(
+                    conn,
+                    doc_id=doc.doc_id,
+                    snapshot_id=snapshot.snapshot_id,
+                    checksum=ingest_checksum,
+                    commit=False,
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
 
     ctx.emit(
         JobEvent(
@@ -746,12 +923,23 @@ def _handle_ingest(ctx: WorkerContext) -> None:
             level=JobEventLevel.INFO,
             message="ingest complete",
             progress=1.0,
-            payload={"schema_ver": schema_ver, "proposed_fact_count": proposed, "approved_fact_count": approved},
+            payload={
+                "schema_ver": schema_ver,
+                "proposed_fact_count": proposed,
+                "approved_fact_count": approved,
+                "incremental": True,
+                "docs_skipped": 1 if skipped else 0,
+                **_standard_metrics_payload(
+                    start_perf=start_perf,
+                    claims_processed=proposed + approved,
+                ),
+            },
         )
     )
 
 
 def _handle_index_fts(ctx: WorkerContext) -> None:
+    start_perf = time.perf_counter()
     scope = ctx.payload.get("scope")
     snapshot_id = ctx.payload.get("snapshot_id")
     if not isinstance(scope, str):
@@ -774,6 +962,7 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
     group_time = bool(grouping.get("time_anchors")) if grouping else False
     timeline_doc_id = grouping.get("timeline_doc_id") if grouping else None
     with db.connect(ctx._db_path) as conn:
+        project_episodes = document_repo.list_episodes(conn, ctx.project_id)
         timeline_events: list[dict[str, Any]] = []
         if timeline_doc_id is None and grouping:
             project = project_repo.get_project(conn, ctx.project_id)
@@ -790,6 +979,7 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                         conn,
                         project_id=ctx.project_id,
                         source_doc_id=timeline_doc_id,
+                        commit=False,
                     )
                     for event in timeline_events:
                         schema_repo.create_timeline_event(
@@ -804,8 +994,10 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                             span_end=int(event["span_end"]),
                             status=FactStatus.PROPOSED,
                             created_by=FactSource.AUTO,
+                            commit=False,
                         )
                         timeline_events_created += 1
+                    conn.commit()
 
         alias_index: dict[str, set[str]] = {}
         if group_entities:
@@ -830,7 +1022,7 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                 snapshot = document_repo.get_snapshot(conn, doc.head_snapshot_id)
             if snapshot is None:
                 continue
-            episode_id = _resolve_episode_id(conn, doc.project_id, doc)
+            episode_id = _resolve_episode_id(conn, doc.project_id, doc, episodes=project_episodes)
             if snapshot_id and snapshot.doc_id != doc.doc_id:
                 raise RuntimeError("snapshot_id does not belong to the selected document scope")
 
@@ -861,15 +1053,16 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                 )
                 if episode_id is not None:
                     chunks = [replace(chunk, episode_id=episode_id) for chunk in chunks]
-                chunk_repo.replace_chunks_for_snapshot(conn, snapshot.snapshot_id, chunks)
-                index_chunks(conn, snapshot_id=snapshot.snapshot_id, chunks=chunks, text=text or "")
-                fts_meta_repo.upsert(conn, doc.doc_id, meta_checksum)
+                chunk_repo.replace_chunks_for_snapshot(conn, snapshot.snapshot_id, chunks, commit=False)
+                index_chunks(conn, snapshot_id=snapshot.snapshot_id, chunks=chunks, text=text or "", commit=False)
+                fts_meta_repo.upsert(conn, doc.doc_id, meta_checksum, commit=False)
                 indexed += len(chunks)
                 docs_indexed += 1
             else:
                 docs_skipped += 1
 
             if not grouping:
+                conn.commit()
                 continue
             spans = _sentence_spans(text or "")
             if group_entities and alias_index:
@@ -878,6 +1071,7 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                     project_id=ctx.project_id,
                     doc_id=doc.doc_id,
                     snapshot_id=snapshot.snapshot_id,
+                    commit=False,
                 )
                 for entity_id, span_start, span_end in _extract_entity_mentions(spans, alias_index):
                     schema_repo.create_entity_mention_span(
@@ -890,6 +1084,7 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                         span_end=span_end,
                         status=FactStatus.PROPOSED,
                         created_by=FactSource.AUTO,
+                        commit=False,
                     )
                     mentions_created += 1
             if group_time:
@@ -898,6 +1093,7 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                     project_id=ctx.project_id,
                     doc_id=doc.doc_id,
                     snapshot_id=snapshot.snapshot_id,
+                    commit=False,
                 )
                 episode_key = _episode_key(doc)
                 for idx, (span_start, span_end, segment) in enumerate(spans, start=1):
@@ -916,8 +1112,10 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                             timeline_idx=timeline_idx,
                             status=FactStatus.PROPOSED,
                             created_by=FactSource.AUTO,
+                            commit=False,
                         )
                         anchors_created += 1
+            conn.commit()
 
     ctx.emit(
         JobEvent(
@@ -935,17 +1133,148 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                 "entity_mentions_created": mentions_created,
                 "time_anchors_created": anchors_created,
                 "timeline_events_created": timeline_events_created,
+                **_standard_metrics_payload(
+                    start_perf=start_perf,
+                    chunks_processed=indexed,
+                ),
             },
         )
     )
 
 
+def _run_consistency_preflight(ctx: WorkerContext, *, doc_id: str, snapshot_id: str, preflight: dict[str, Any]) -> None:
+    ensure_ingest = bool(preflight.get("ensure_ingest"))
+    ensure_index_fts = bool(preflight.get("ensure_index_fts"))
+    if not ensure_ingest and not ensure_index_fts:
+        return
+
+    ingest_targets: list[tuple[str, str]] = []
+    index_targets: list[str] = []
+
+    with db.connect(ctx._db_path) as conn:
+        docs = document_repo.list_documents(conn, ctx.project_id)
+        if not docs:
+            fallback_doc = document_repo.get_document(conn, doc_id)
+            docs = [fallback_doc] if fallback_doc is not None else []
+        episodes = document_repo.list_episodes(conn, ctx.project_id)
+        assignment_sig_cache: dict[str, str] = {}
+
+        tag_defs_sig = ""
+        alias_sig = ""
+        if ensure_ingest:
+            tag_defs = schema_repo.list_tag_defs(conn, ctx.project_id)
+            tag_defs_sig = _tag_def_signature(tag_defs)
+            alias_sig = _alias_signature(_collect_aliases(conn, ctx.project_id))
+
+        for item in docs:
+            if item is None:
+                continue
+            target_snapshot_id = snapshot_id if item.doc_id == doc_id else item.head_snapshot_id
+            snapshot = document_repo.get_snapshot(conn, target_snapshot_id)
+            if snapshot is None:
+                continue
+
+            if ensure_ingest:
+                ingest_checksum = _ingest_checksum_for_doc(
+                    conn,
+                    doc_id=item.doc_id,
+                    snapshot_id=snapshot.snapshot_id,
+                    snapshot_checksum=snapshot.checksum,
+                    tag_defs_sig=tag_defs_sig,
+                    alias_sig=alias_sig,
+                    assignment_sig_cache=assignment_sig_cache,
+                )
+                previous_state = ingest_meta_repo.get_state(conn, item.doc_id)
+                if previous_state != (snapshot.snapshot_id, ingest_checksum):
+                    ingest_targets.append((item.doc_id, snapshot.snapshot_id))
+
+            if ensure_index_fts:
+                tag_sig = assignment_sig_cache.get(snapshot.snapshot_id)
+                if tag_sig is None:
+                    tag_sig = _tag_assignment_signature(conn, snapshot.snapshot_id)
+                    assignment_sig_cache[snapshot.snapshot_id] = tag_sig
+                episode_id = _resolve_episode_id(conn, item.project_id, item, episodes=episodes)
+                meta_checksum = _fts_meta_checksum(
+                    conn,
+                    doc_id=item.doc_id,
+                    snapshot_id=snapshot.snapshot_id,
+                    snapshot_checksum=snapshot.checksum,
+                    episode_id=episode_id,
+                    tag_sig=tag_sig,
+                )
+                prev_checksum = fts_meta_repo.get_checksum(conn, item.doc_id)
+                needs_index = (
+                    prev_checksum != meta_checksum
+                    or not _snapshot_has_chunks(conn, snapshot.snapshot_id)
+                    or not _snapshot_has_fts_rows(conn, snapshot.snapshot_id)
+                )
+                if needs_index:
+                    index_targets.append(item.doc_id)
+
+    if ensure_index_fts and ingest_targets:
+        existing = set(index_targets)
+        for target_doc_id, _ in ingest_targets:
+            if target_doc_id not in existing:
+                existing.add(target_doc_id)
+                index_targets.append(target_doc_id)
+
+    if ensure_ingest:
+        ctx.emit(
+            JobEvent(
+                event_id="",
+                job_id=ctx.job_id,
+                ts="",
+                level=JobEventLevel.INFO,
+                message="consistency preflight ingest",
+                progress=None,
+                payload={"target_count": len(ingest_targets), "incremental": True},
+            )
+        )
+        for target_doc_id, target_snapshot_id in ingest_targets:
+            _handle_ingest(
+                WorkerContext(
+                    job_id=ctx.job_id,
+                    project_id=ctx.project_id,
+                    payload={"doc_id": target_doc_id, "snapshot_id": target_snapshot_id},
+                    params=ctx.params,
+                    db_path=ctx._db_path,
+                    lease_seconds=ctx._lease_seconds,
+                )
+            )
+
+    if ensure_index_fts:
+        ctx.emit(
+            JobEvent(
+                event_id="",
+                job_id=ctx.job_id,
+                ts="",
+                level=JobEventLevel.INFO,
+                message="consistency preflight index_fts",
+                progress=None,
+                payload={"target_count": len(index_targets), "incremental": True},
+            )
+        )
+        for target_doc_id in index_targets:
+            _handle_index_fts(
+                WorkerContext(
+                    job_id=ctx.job_id,
+                    project_id=ctx.project_id,
+                    payload={"scope": target_doc_id},
+                    params=ctx.params,
+                    db_path=ctx._db_path,
+                    lease_seconds=ctx._lease_seconds,
+                )
+            )
+
+
 def _handle_consistency(ctx: WorkerContext) -> None:
+    start_perf = time.perf_counter()
     engine = ConsistencyEngineImpl(db_path=ctx._db_path)
     req = dict(ctx.payload)
     req.setdefault("project_id", ctx.project_id)
-    
-    # Resolve 'latest' snapshot
+    preflight = _parse_consistency_preflight(req)
+
+    # Resolve 'latest' snapshot.
     if req.get("input_snapshot_id") == "latest":
         doc_id = req.get("input_doc_id")
         if isinstance(doc_id, str):
@@ -954,6 +1283,17 @@ def _handle_consistency(ctx: WorkerContext) -> None:
                 if doc:
                     req["input_snapshot_id"] = doc.head_snapshot_id
 
+    doc_id = req.get("input_doc_id")
+    snapshot_id = req.get("input_snapshot_id")
+    if not isinstance(doc_id, str) or not isinstance(snapshot_id, str):
+        raise RuntimeError("input_doc_id/input_snapshot_id missing")
+
+    _run_consistency_preflight(ctx, doc_id=doc_id, snapshot_id=snapshot_id, preflight=preflight)
+
+    req["preflight"] = preflight
+    req.setdefault("schema_scope", preflight["schema_scope"])
+    req_stats: dict[str, Any] = {}
+    req["stats"] = req_stats
     verdicts = engine.run(req)
     total = len(verdicts)
     violates = len([v for v in verdicts if v.verdict is Verdict.VIOLATE])
@@ -970,22 +1310,32 @@ def _handle_consistency(ctx: WorkerContext) -> None:
                 "vid_count": total,
                 "violate_count": violates,
                 "unknown_count": unknowns,
+                **_standard_metrics_payload(
+                    start_perf=start_perf,
+                    claims_processed=int(req_stats.get("claims_processed", total)),
+                    chunks_processed=int(req_stats.get("chunks_processed", 0)),
+                    rows_scanned=int(req_stats.get("rows_scanned", 0)),
+                    shards_loaded=int(req_stats.get("shards_loaded", 0)),
+                ),
             },
         )
     )
 
 
 def _handle_retrieve_vec(ctx: WorkerContext) -> None:
+    start_perf = time.perf_counter()
     query = ctx.payload.get("query")
     filters = ctx.payload.get("filters") or {}
     k = int(ctx.payload.get("k") or 10)
     if not isinstance(query, str):
         raise RuntimeError("query missing")
+    req_stats: dict[str, Any] = {}
     req = {
         "project_id": ctx.project_id,
         "query": query,
         "filters": filters,
         "k": k,
+        "stats": req_stats,
     }
     results = vector_search(req)
     if results and isinstance(filters, dict):
@@ -1012,6 +1362,25 @@ def _handle_retrieve_vec(ctx: WorkerContext) -> None:
         )
         if ctx.check_cancelled():
             raise CancelledError("cancel requested")
+    ctx.emit(
+        JobEvent(
+            event_id="",
+            job_id=ctx.job_id,
+            ts="",
+            level=JobEventLevel.INFO,
+            message="retrieve_vec complete",
+            progress=1.0,
+            payload={
+                "result_count": len(results),
+                **_standard_metrics_payload(
+                    start_perf=start_perf,
+                    chunks_processed=int(req_stats.get("chunks_processed", len(results))),
+                    rows_scanned=int(req_stats.get("rows_scanned", 0)),
+                    shards_loaded=int(req_stats.get("shards_loaded", 0)),
+                ),
+            },
+        )
+    )
 
 
 def _handle_suggest(ctx: WorkerContext) -> None:
@@ -1314,10 +1683,12 @@ def _handle_proofread(ctx: WorkerContext) -> None:
 
 
 def _handle_index_vec(ctx: WorkerContext) -> None:
+    start_perf = time.perf_counter()
     scope = ctx.payload.get("scope")
     if not isinstance(scope, str):
         raise RuntimeError("scope missing")
     new_shards = []
+    chunks_processed = 0
     settings = load_config()
     with db.connect(ctx._db_path) as conn:
         if scope == "global":
@@ -1380,6 +1751,7 @@ def _handle_index_vec(ctx: WorkerContext) -> None:
             )
             meta["checksum"] = doc.checksum
             new_shards.append(meta)
+            chunks_processed += len(chunks)
     if new_shards:
         update_manifest(new_shards)
     ctx.emit(
@@ -1390,6 +1762,12 @@ def _handle_index_vec(ctx: WorkerContext) -> None:
             level=JobEventLevel.INFO,
             message="vector index complete",
             progress=1.0,
-            payload={"shards_built": len(new_shards)},
+            payload={
+                "shards_built": len(new_shards),
+                **_standard_metrics_payload(
+                    start_perf=start_perf,
+                    chunks_processed=chunks_processed,
+                ),
+            },
         )
     )

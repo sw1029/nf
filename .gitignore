@@ -3,3 +3,14 @@ __pycache__
 .vscode
 data
 nf_orchestrator.sqlite3
+verify
+test_files
+*.log
+*.sqlite3
+*.pyc
+.DS_Store
+.env
+*.ps1
+*.cmd
+*.sqlite3-shm
+*.sqlite3-wal
