@@ -88,3 +88,45 @@
   - time anchor는 가능하면 `timeline_idx`를 참조하되, 불명확/충돌 시 미지정(null) 또는 UNKNOWN 처리
 - 2차(차순위) 계획
   - 사용자 승인/조정 이후 2차 제안(재매핑/정교화) 및 chunk 역인덱스 생성(검색 최적화)
+
+---
+
+## D7) GraphRAG 활성화 정책
+
+- 근거: `plan/user_request.md`, `plan/architecture_2.md`, `plan/modules/nf_retrieval.md`
+- 1차(우선) 결정
+  - GraphRAG는 **기본 off**(`params.graph.enabled=false`)
+  - 적용 경로는 **비동기 검색(`RETRIEVE_VEC`) 내부 rerank 옵션**으로 한정
+  - fallback은 필수: graph 데이터/매칭이 없으면 기존 vector 결과를 그대로 반환
+  - sync retrieval(FTS-only) 계약은 유지
+- 2차(차순위) 계획
+  - graph on/off A/B 성능·정합성 게이트 상시화(200/800 데이터셋)
+  - graph edge source 확대는 승인된 전역정보 범위 내에서만 additive 적용
+
+---
+
+## D8) heavy job 제한 위치(Submit vs Lease)
+
+- 근거: `plan/architecture_2.md`, `plan/modules/nf_orchestrator.md`, `plan/modules/nf_workers.md`
+- 1차(우선) 결정
+  - heavy 제한은 submit 거절보다 **lease/실행 단계 제한**을 우선
+  - submit 단계는 가능한 한 수용하고, 큐에서 공정하게 대기/조절
+  - 벤치(`run_soak.py`)에서는 `adaptive_throttle`로 stream→heavy 진입을 사전 조절
+- 2차(차순위) 계획
+  - 잡 타입별 토큰 버킷/우선순위 혼합으로 queue lag p95 안정화
+  - 정책 거절은 명시 설정에서만 허용(운영 기본값은 비활성)
+
+---
+
+## D9) Extraction generalization strategy (rule + user mapping + local/remote model)
+
+- 근거: `plan/user_request.md`, `plan/architecture_1.md`, `plan/architecture_2.md`
+- 1차(우선) 결정
+  - 기본 모드는 `rule_only`로 유지(결정론 우선)
+  - 사용자 매핑은 프로젝트 단위 CRUD로 분리 저장/검증/감사(checksum)
+  - `INGEST`/`CONSISTENCY` 모두 동일 추출 파이프라인(`ExtractionPipeline`) 재사용
+  - 모델 추출(local/remote)은 보강 경로이며 rule/user 결과를 덮어쓰지 않음
+  - 원격 추출 모드는 정책 게이트(전역 + 프로젝트 `enable_remote_api`)로 차단/허용
+- 2차(차순위) 계획
+  - 모델 추출 품질 임계치 및 slot별 confidence policy 세분화
+  - 글로벌(프로젝트 공통) 매핑 레이어 추가

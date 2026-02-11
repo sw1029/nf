@@ -73,3 +73,33 @@ def build_remote_prompt(
         "Return a short suggestion (max 2 sentences).\n"
     )
 
+
+def build_remote_extraction_prompt(
+    bundle: dict[str, Any],
+    *,
+    max_claim_chars: int = 2000,
+    max_slots: int = 12,
+) -> str:
+    claim_text = bundle.get("claim_text", "")
+    if not isinstance(claim_text, str):
+        claim_text = str(claim_text) if claim_text is not None else ""
+    model_slots = bundle.get("model_slots") or []
+    if not isinstance(model_slots, list):
+        model_slots = []
+    model_slots = [str(item) for item in model_slots if isinstance(item, str)][:max_slots]
+
+    payload = {
+        "claim_text": _truncate_text(claim_text, max_claim_chars),
+        "model_slots": model_slots,
+    }
+    payload_json = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    return (
+        "You are an extraction assistant.\n"
+        "Extract normalized slot candidates from input text.\n"
+        "Return JSON only with shape:\n"
+        '{"candidates":[{"slot_key":"job","value":"...","confidence":0.0,"matched_text":"..."}]}\n'
+        "If no confident extraction exists, return {\"candidates\":[]}.\n"
+        "<BEGIN_INPUT_JSON>\n"
+        f"{payload_json}\n"
+        "<END_INPUT_JSON>\n"
+    )

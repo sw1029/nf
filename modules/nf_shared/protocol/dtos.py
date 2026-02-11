@@ -21,6 +21,7 @@ FactID = str
 MentionID = str
 AnchorID = str
 TimelineEventID = str
+ExtractionMappingID = str
 
 
 class DocumentType(str, Enum):
@@ -330,6 +331,20 @@ class TimelineEvent:
     span_end: int
     status: FactStatus
     created_by: FactSource
+    created_at: AppTimestamp
+
+
+@dataclass(frozen=True)
+class ExtractionMapping:
+    mapping_id: ExtractionMappingID
+    project_id: ProjectID
+    slot_key: str
+    pattern: str
+    flags: str
+    transform: str
+    priority: int
+    enabled: bool
+    created_by: str
     created_at: AppTimestamp
 
 

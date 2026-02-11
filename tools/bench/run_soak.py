@@ -295,6 +295,47 @@ def get_job_metric_payloads(db_path: Path, job_id: str) -> list[dict[str, Any]]:
     return payloads
 
 
+def get_job_type_pressure(db_path: Path, job_type: str) -> tuple[int, int]:
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT
+                SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END) AS running_count,
+                SUM(CASE WHEN status = 'QUEUED' THEN 1 ELSE 0 END) AS queued_count
+            FROM jobs
+            WHERE type = ? AND status IN ('RUNNING', 'QUEUED')
+            """,
+            (job_type,),
+        ).fetchone()
+    if row is None:
+        return 0, 0
+    running = int(row[0] or 0)
+    queued = int(row[1] or 0)
+    return running, queued
+
+
+def wait_for_consistency_slot(
+    db_path: Path,
+    *,
+    max_heavy_jobs: int,
+    max_outstanding: int,
+    max_wait_sec: float = 60.0,
+    poll_sec: float = 0.25,
+) -> float:
+    start = time.perf_counter()
+    while True:
+        try:
+            running, queued = get_job_type_pressure(db_path, "CONSISTENCY")
+        except sqlite3.Error:
+            running, queued = 0, 0
+        outstanding = running + queued
+        if running < max_heavy_jobs and outstanding < max_outstanding:
+            return (time.perf_counter() - start) * 1000.0
+        if (time.perf_counter() - start) >= max_wait_sec:
+            return (time.perf_counter() - start) * 1000.0
+        time.sleep(max(0.05, poll_sec))
+
+
 def create_project_and_doc(client: ApiClient, *, project_name: str, seed_text: str, profile: str) -> tuple[str, str]:
     project = client.post("/projects", {"name": project_name, "settings": {"mode": "soak", "profile": profile}})
     project_id = str((project.get("project") or {}).get("project_id"))
@@ -417,6 +458,7 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
     consistency_claims_processed = 0.0
     consistency_chunks_processed = 0.0
     consistency_rows_scanned = 0.0
+    throttle_wait_ms = 0.0
 
     adaptive_delay_sec = 0.0
     if adaptive_throttle and streams > max_heavy_jobs:
@@ -508,6 +550,13 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
         if index_fts is None:
             time.sleep(max(0.0, sleep_sec))
             continue
+        if adaptive_throttle and streams > max_heavy_jobs:
+            max_outstanding = max_heavy_jobs + 1
+            throttle_wait_ms += wait_for_consistency_slot(
+                db_path,
+                max_heavy_jobs=max_heavy_jobs,
+                max_outstanding=max_outstanding,
+            )
         consistency = run_stage(
             job_type="CONSISTENCY",
             inputs={
@@ -612,6 +661,7 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
             "claims_processed": consistency_claims_processed,
             "chunks_processed": consistency_chunks_processed,
             "rows_scanned": consistency_rows_scanned,
+            "throttle_wait_ms": throttle_wait_ms,
         },
         "rss_mb_min": min(positive_rss) if positive_rss else 0.0,
         "rss_mb_max": max(positive_rss) if positive_rss else 0.0,
@@ -646,6 +696,7 @@ def _aggregate_streams(stream_results: list[dict[str, Any]], *, hours: float) ->
     claims_processed = 0.0
     chunks_processed = 0.0
     rows_scanned = 0.0
+    throttle_wait_ms = 0.0
     for item in stream_results:
         queue_lags_all.extend(item.get("_queue_lags_all_ms") or [])
         queue_lags_consistency.extend(item.get("_queue_lags_consistency_ms") or [])
@@ -655,6 +706,7 @@ def _aggregate_streams(stream_results: list[dict[str, Any]], *, hours: float) ->
         claims_processed += _to_positive_float(workload.get("claims_processed"))
         chunks_processed += _to_positive_float(workload.get("chunks_processed"))
         rows_scanned += _to_positive_float(workload.get("rows_scanned"))
+        throttle_wait_ms += _to_positive_float(workload.get("throttle_wait_ms"))
 
     failed_ratio = (failed_jobs / total_jobs) if total_jobs else 0.0
     queue_lag_all_p95 = percentile(queue_lags_all, 95)
@@ -699,6 +751,7 @@ def _aggregate_streams(stream_results: list[dict[str, Any]], *, hours: float) ->
             "claims_processed": claims_processed,
             "chunks_processed": chunks_processed,
             "rows_scanned": rows_scanned,
+            "throttle_wait_ms": throttle_wait_ms,
         },
         "rss_mb_min": min(positive_rss) if positive_rss else 0.0,
         "rss_mb_max": max(positive_rss) if positive_rss else 0.0,
@@ -828,6 +881,9 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=20260207)
     parser.add_argument("--repro-runs", type=int, default=3)
     parser.add_argument("--repro-hours", type=float, default=0.05)
+    parser.add_argument("--graph-enabled", action="store_true")
+    parser.add_argument("--graph-max-hops", type=int, default=1)
+    parser.add_argument("--graph-rerank-weight", type=float, default=0.25)
     parser.add_argument("--worker-procs", type=int, default=int(os.environ.get("NF_WORKER_PROCS", "1")))
     parser.add_argument("--max-heavy-jobs", type=int, default=int(os.environ.get("NF_MAX_HEAVY_JOBS", "1")))
     parser.add_argument("--policy-retry-max", type=int, default=5)
@@ -859,6 +915,10 @@ def main() -> int:
         raise SystemExit("--policy-retry-base-sec must be > 0")
     if args.policy_retry_max_sec < args.policy_retry_base_sec:
         raise SystemExit("--policy-retry-max-sec must be >= --policy-retry-base-sec")
+    if args.graph_max_hops not in {1, 2}:
+        raise SystemExit("--graph-max-hops must be 1 or 2")
+    if not (0.0 <= args.graph_rerank_weight <= 0.5):
+        raise SystemExit("--graph-rerank-weight must be between 0.0 and 0.5")
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -880,6 +940,9 @@ def main() -> int:
         "policy_retry_base_sec": args.policy_retry_base_sec,
         "policy_retry_max_sec": args.policy_retry_max_sec,
         "adaptive_throttle": args.adaptive_throttle,
+        "graph_enabled": args.graph_enabled,
+        "graph_max_hops": args.graph_max_hops,
+        "graph_rerank_weight": args.graph_rerank_weight,
     }
 
     throughput_run: dict[str, Any] | None = None
@@ -988,6 +1051,12 @@ def main() -> int:
             "policy_retry_max_sec": args.policy_retry_max_sec,
             "adaptive_throttle": args.adaptive_throttle,
         },
+        "graph": {
+            "enabled": bool(args.graph_enabled),
+            "max_hops": int(args.graph_max_hops),
+            "rerank_weight": float(args.graph_rerank_weight),
+            "applied_path": "retrieve_vec_async_only",
+        },
         "repro": {
             "seed": args.seed,
             "dataset_hash": dataset_hash,
@@ -1019,6 +1088,7 @@ def main() -> int:
         f"- queue_lag_consistency_p95_ms: `{aggregate['timings_ms']['queue_lag_consistency_p95']:.2f}`",
         f"- consistency_p95_ms: `{aggregate['consistency_p95_ms']:.2f}`",
         f"- status_breakdown: `{aggregate['status_breakdown']}`",
+        f"- graph: `{result['graph']}`",
         f"- semantic_hash: `{result['repro']['semantic_hash']}`",
         f"- metrics_hash: `{result['repro']['metrics_hash']}`",
         "",

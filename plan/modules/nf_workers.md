@@ -55,6 +55,7 @@ modules/nf_workers/
 * ☑ cancel flag(`cancel_requested`) 주기 체크
 * ☑ 크래시 복구: 리스 만료 잡은 QUEUED로 재전환
 * ☑ 실행/기동(개발/배포): 오케스트레이터와 함께 워커를 기동/종료하는 런처/스크립트 제공 (`run_local_stack.py`)
+* ☑ heavy job 제한은 submit 거절보다 lease/실행 단계에서 강제(큐 공정성 우선)
 
 ## 2) Job 실행기 계약(타입별)
 
@@ -117,6 +118,7 @@ modules/nf_workers/
 
 * ◐ 잡 단위 소프트 가드: 메모리/CPU 압력 시 PAUSE 또는 FAILSAFE (현재는 메모리 압력 감지 위주)
 * ☑ 무거운 잡 동시 실행은 오케스트레이터 semaphore를 전제로 함
+* ☑ soak 경로에서 `adaptive_throttle`로 stream별 heavy 단계 진입 제어(큐 적체 완화)
 
 ## 4) 테스트(pytest)
 

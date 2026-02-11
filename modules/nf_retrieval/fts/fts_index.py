@@ -19,6 +19,13 @@ def index_chunks(
     commit: bool = True,
 ) -> None:
     conn.execute("DELETE FROM fts_docs WHERE snapshot_id = ?", (snapshot_id,))
+    insert_sql = """
+        INSERT INTO fts_docs (
+            content, chunk_id, doc_id, snapshot_id, section_path,
+            tag_path, episode_id, span_start, span_end
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
 
     try:
         tag_rows = conn.execute(
@@ -37,6 +44,17 @@ def index_chunks(
     ]
     tag_i = 0
     inserted_rows = 0
+    row_buffer: list[tuple[Any, ...]] = []
+    buffer_limit = 2000
+
+    def flush_rows() -> None:
+        nonlocal inserted_rows
+        if not row_buffer:
+            return
+        conn.executemany(insert_sql, row_buffer)
+        inserted_rows += len(row_buffer)
+        row_buffer.clear()
+
     for chunk in chunks:
         content = text[chunk.span_start : chunk.span_end]
         chunk_start = int(chunk.span_start)
@@ -63,14 +81,7 @@ def index_chunks(
         if not tag_paths:
             tag_paths = [""]
         for tag_path in tag_paths:
-            conn.execute(
-                """
-                INSERT INTO fts_docs (
-                    content, chunk_id, doc_id, snapshot_id, section_path,
-                    tag_path, episode_id, span_start, span_end
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+            row_buffer.append(
                 (
                     content,
                     chunk.chunk_id,
@@ -81,9 +92,12 @@ def index_chunks(
                     chunk.episode_id,
                     chunk.span_start,
                     chunk.span_end,
-                ),
+                )
             )
-            inserted_rows += 1
+            if len(row_buffer) >= buffer_limit:
+                flush_rows()
+
+    flush_rows()
 
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
@@ -184,7 +198,8 @@ def fts_search(conn: sqlite3.Connection, req: RetrievalRequest) -> list[Retrieva
         params.append(filters["episode"])
 
     limit = int(req.get("k") or 10)
-    fetch_limit = max(50, limit * 10)
+    fetch_limit = max(30, limit * 6)
+    max_fetch_limit = max(fetch_limit, 240)
     sql = f"""
         SELECT
             content, chunk_id, doc_id, snapshot_id, section_path, tag_path,
@@ -196,21 +211,26 @@ def fts_search(conn: sqlite3.Connection, req: RetrievalRequest) -> list[Retrieva
         ORDER BY score
         LIMIT ?
     """
-    params.append(fetch_limit)
+    query_params = list(params)
 
-    try:
-        rows = conn.execute(sql, params).fetchall()
-    except sqlite3.OperationalError:
-        fallback_query = build_fallback_query(raw_query_text)
-        if not fallback_query or fallback_query == query_text:
-            return []
-        fallback_params = [fallback_query, *params[1:]]
+    def query_rows(limit_value: int) -> list[sqlite3.Row]:
+        params_with_limit = [*query_params, limit_value]
         try:
-            rows = conn.execute(sql, fallback_params).fetchall()
-            if stats is not None:
-                stats["query_mode"] = "fts_fallback"
+            return conn.execute(sql, params_with_limit).fetchall()
         except sqlite3.OperationalError:
-            return []
+            fallback_query = build_fallback_query(raw_query_text)
+            if not fallback_query or fallback_query == query_text:
+                return []
+            fallback_params = [fallback_query, *params_with_limit[1:]]
+            try:
+                rows_inner = conn.execute(sql, fallback_params).fetchall()
+                if stats is not None:
+                    stats["query_mode"] = "fts_fallback"
+                return rows_inner
+            except sqlite3.OperationalError:
+                return []
+
+    rows = query_rows(fetch_limit)
     if stats is not None:
         stats["rows_scanned"] = int(stats.get("rows_scanned", 0)) + len(rows)
     entity_filter = filters.get("entity_id")
@@ -272,38 +292,48 @@ def fts_search(conn: sqlite3.Connection, req: RetrievalRequest) -> list[Retrieva
         time_cache[key] = spans
         return spans
     best_rows_by_chunk_id: dict[str, sqlite3.Row] = {}
-    for row in rows:
-        if entity_filter or time_key_filter or timeline_idx_filter is not None:
-            doc_id = row["doc_id"]
-            span_start = row["span_start"]
-            span_end = row["span_end"]
-            if entity_filter:
-                spans = load_entity_spans(doc_id, entity_filter)
-                if not span_overlaps(span_start, span_end, spans):
-                    continue
-            if time_key_filter or timeline_idx_filter is not None:
-                spans = load_time_spans(doc_id, time_key_filter, timeline_idx_filter)
-                if not span_overlaps(span_start, span_end, spans):
-                    continue
-        chunk_id = row["chunk_id"]
-        if not isinstance(chunk_id, str):
-            continue
-        existing = best_rows_by_chunk_id.get(chunk_id)
-        if existing is None:
-            best_rows_by_chunk_id[chunk_id] = row
-            continue
-        try:
-            existing_score = float(existing["score"]) if existing["score"] is not None else 0.0
-        except (TypeError, ValueError):
-            existing_score = 0.0
-        try:
-            score = float(row["score"]) if row["score"] is not None else 0.0
-        except (TypeError, ValueError):
-            score = 0.0
-        existing_tag = existing["tag_path"] or ""
-        tag_path = row["tag_path"] or ""
-        if score < existing_score or (score == existing_score and len(tag_path) > len(existing_tag)):
-            best_rows_by_chunk_id[chunk_id] = row
+
+    def fold_rows(rows_to_fold: list[sqlite3.Row]) -> None:
+        for row in rows_to_fold:
+            if entity_filter or time_key_filter or timeline_idx_filter is not None:
+                doc_id = row["doc_id"]
+                span_start = row["span_start"]
+                span_end = row["span_end"]
+                if entity_filter:
+                    spans = load_entity_spans(doc_id, entity_filter)
+                    if not span_overlaps(span_start, span_end, spans):
+                        continue
+                if time_key_filter or timeline_idx_filter is not None:
+                    spans = load_time_spans(doc_id, time_key_filter, timeline_idx_filter)
+                    if not span_overlaps(span_start, span_end, spans):
+                        continue
+            chunk_id = row["chunk_id"]
+            if not isinstance(chunk_id, str):
+                continue
+            existing = best_rows_by_chunk_id.get(chunk_id)
+            if existing is None:
+                best_rows_by_chunk_id[chunk_id] = row
+                continue
+            try:
+                existing_score = float(existing["score"]) if existing["score"] is not None else 0.0
+            except (TypeError, ValueError):
+                existing_score = 0.0
+            try:
+                score = float(row["score"]) if row["score"] is not None else 0.0
+            except (TypeError, ValueError):
+                score = 0.0
+            existing_tag = existing["tag_path"] or ""
+            tag_path = row["tag_path"] or ""
+            if score < existing_score or (score == existing_score and len(tag_path) > len(existing_tag)):
+                best_rows_by_chunk_id[chunk_id] = row
+
+    fold_rows(rows)
+    while len(best_rows_by_chunk_id) < limit and fetch_limit < max_fetch_limit and len(rows) >= fetch_limit:
+        fetch_limit = min(max_fetch_limit, fetch_limit * 2)
+        rows = query_rows(fetch_limit)
+        if stats is not None:
+            stats["rows_scanned"] = int(stats.get("rows_scanned", 0)) + len(rows)
+        fold_rows(rows)
 
     unique_rows = list(best_rows_by_chunk_id.values())
     unique_rows.sort(key=lambda r: float(r["score"]) if r["score"] is not None else 0.0)

@@ -110,3 +110,26 @@ class ModelGateway(Protocol):
     def suggest_remote_api(self, bundle: EvidenceBundle) -> str: ...
     def suggest_local_gen(self, bundle: EvidenceBundle) -> str: ...  # 차순위(실구현)
 ```
+
+---
+
+## Extraction API Addendum (2026-02-11)
+
+### Must
+
+- Extend `ModelGateway` with extraction methods:
+  - `extract_slots_local(bundle)`
+  - `extract_slots_remote(bundle)`
+- Normalize extraction output to additive candidates:
+  - `slot_key`, `value`, `confidence`, `span_start`, `span_end`, `matched_text`
+- Keep extraction model path optional and fail-open to deterministic rule output.
+
+### Partial/Follow-up
+
+- Add slot-specific confidence calibration for local/remote outputs.
+- Add provider-specific response schema hardening and rejection metrics.
+
+### Tests/DoD
+
+- Contract checks: `tests/test_nf_model_gateway_contracts.py`
+- Extractor integration checks: `tests/test_nf_consistency_extractors.py`

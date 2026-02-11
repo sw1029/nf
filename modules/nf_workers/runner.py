@@ -16,6 +16,8 @@ except ModuleNotFoundError:  # pragma: no cover
     resource = None  # type: ignore[assignment]
 
 from modules.nf_consistency.engine import ConsistencyEngineImpl
+from modules.nf_consistency.extractors import normalize_extraction_profile
+from modules.nf_consistency.extractors.contracts import ExtractionMapping as ExtractorMapping
 from modules.nf_export.exporter import ExporterImpl
 from modules.nf_model_gateway.gateway import select_model
 from modules.nf_orchestrator.storage import db, docstore
@@ -30,6 +32,8 @@ from modules.nf_orchestrator.storage.repos import (
     project_repo,
     schema_repo,
 )
+from modules.nf_retrieval.graph.materialized import materialize_project_graph
+from modules.nf_retrieval.graph.rerank import rerank_results_with_graph
 from modules.nf_retrieval.fts.fts_index import fts_search, index_chunks
 from modules.nf_retrieval.vector.manifest import update_manifest, vector_search
 from modules.nf_retrieval.vector.shard_store import build_shard
@@ -293,6 +297,12 @@ def _parse_consistency_preflight(payload: dict[str, Any]) -> dict[str, Any]:
         "ensure_index_fts": ensure_index_fts,
         "schema_scope": schema_scope,
     }
+
+
+def _parse_extraction_profile(params: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(params, dict):
+        return normalize_extraction_profile(None)
+    return normalize_extraction_profile(params.get("extraction"))
 
 
 def _tag_assignment_signature(conn: sqlite3.Connection, snapshot_id: str) -> str:
@@ -721,6 +731,12 @@ def _handle_ingest(ctx: WorkerContext) -> None:
     proposed = 0
     approved = 0
     skipped = False
+    extractor_stats: dict[str, Any] = {
+        "rule_eval_ms": 0.0,
+        "model_eval_ms": 0.0,
+        "slot_matches": 0,
+    }
+    extraction_profile = _parse_extraction_profile(ctx.params if isinstance(ctx.params, dict) else None)
 
     with db.connect(ctx._db_path) as conn:
         doc = document_repo.get_document(conn, doc_id)
@@ -762,6 +778,24 @@ def _handle_ingest(ctx: WorkerContext) -> None:
                 snapshot_id=snapshot.snapshot_id,
             )
             text = docstore.read_text(snapshot.path)
+            extraction_mappings: list[ExtractorMapping] = []
+            if extraction_profile.get("use_user_mappings", True):
+                raw_mappings = schema_repo.list_extraction_mappings(conn, doc.project_id, enabled_only=True)
+                extraction_mappings = [
+                    ExtractorMapping(
+                        mapping_id=item.mapping_id,
+                        project_id=item.project_id,
+                        slot_key=item.slot_key,
+                        pattern=item.pattern,
+                        flags=item.flags,
+                        transform=item.transform,
+                        priority=item.priority,
+                        enabled=item.enabled,
+                        created_by=item.created_by,
+                        created_at=item.created_at,
+                    )
+                    for item in raw_mappings
+                ]
             facts: list[SchemaFact] = []
             seen_tag_paths: set[str] = set()
             try:
@@ -818,7 +852,14 @@ def _handle_ingest(ctx: WorkerContext) -> None:
                     facts.append(fact)
                     seen_tag_paths.add(fact.tag_path)
 
-                for extracted in extract_explicit_candidates(text, tag_defs):
+                for extracted in extract_explicit_candidates(
+                    text,
+                    tag_defs,
+                    profile=extraction_profile,
+                    mappings=extraction_mappings,
+                    gateway=select_model(purpose="consistency"),
+                    stats=extractor_stats,
+                ):
                     tag_path = extracted.tag_def.tag_path
                     if tag_path in seen_tag_paths:
                         continue
@@ -929,6 +970,13 @@ def _handle_ingest(ctx: WorkerContext) -> None:
                 "approved_fact_count": approved,
                 "incremental": True,
                 "docs_skipped": 1 if skipped else 0,
+                "extractor_profile": extractor_stats.get("extractor_profile", extraction_profile.get("mode", "rule_only")),
+                "extractor_version": extractor_stats.get("extractor_version", "extractor_v2"),
+                "ruleset_checksum": extractor_stats.get("ruleset_checksum", ""),
+                "mapping_checksum": extractor_stats.get("mapping_checksum", ""),
+                "rule_eval_ms": float(extractor_stats.get("rule_eval_ms", 0.0)),
+                "model_eval_ms": float(extractor_stats.get("model_eval_ms", 0.0)),
+                "slot_matches": int(extractor_stats.get("slot_matches", 0)),
                 **_standard_metrics_payload(
                     start_perf=start_perf,
                     claims_processed=proposed + approved,
@@ -955,11 +1003,13 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
     mentions_created = 0
     anchors_created = 0
     timeline_events_created = 0
+    graph_index_meta: dict[str, Any] | None = None
     grouping = ctx.params.get("grouping") if isinstance(ctx.params, dict) else None
     if not isinstance(grouping, dict):
         grouping = None
     group_entities = bool(grouping.get("entity_mentions")) if grouping else False
     group_time = bool(grouping.get("time_anchors")) if grouping else False
+    graph_extract = bool(grouping.get("graph_extract")) if grouping else False
     timeline_doc_id = grouping.get("timeline_doc_id") if grouping else None
     with db.connect(ctx._db_path) as conn:
         project_episodes = document_repo.list_episodes(conn, ctx.project_id)
@@ -1116,6 +1166,13 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                         )
                         anchors_created += 1
             conn.commit()
+        if graph_extract:
+            graph_doc = materialize_project_graph(conn, ctx.project_id)
+            graph_index_meta = {
+                "nodes_entity": len(graph_doc.get("entity_doc_ids") or {}),
+                "nodes_time": len(graph_doc.get("time_doc_ids") or {}),
+                "nodes_timeline": len(graph_doc.get("timeline_doc_ids") or {}),
+            }
 
     ctx.emit(
         JobEvent(
@@ -1133,6 +1190,8 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                 "entity_mentions_created": mentions_created,
                 "time_anchors_created": anchors_created,
                 "timeline_events_created": timeline_events_created,
+                "graph_extract_enabled": graph_extract,
+                "graph_index": graph_index_meta,
                 **_standard_metrics_payload(
                     start_perf=start_perf,
                     chunks_processed=indexed,
@@ -1292,6 +1351,7 @@ def _handle_consistency(ctx: WorkerContext) -> None:
 
     req["preflight"] = preflight
     req.setdefault("schema_scope", preflight["schema_scope"])
+    req["extraction"] = _parse_extraction_profile(ctx.params if isinstance(ctx.params, dict) else None)
     req_stats: dict[str, Any] = {}
     req["stats"] = req_stats
     verdicts = engine.run(req)
@@ -1310,6 +1370,13 @@ def _handle_consistency(ctx: WorkerContext) -> None:
                 "vid_count": total,
                 "violate_count": violates,
                 "unknown_count": unknowns,
+                "extractor_profile": req_stats.get("extractor_profile", req["extraction"]["mode"]),
+                "extractor_version": req_stats.get("extractor_version", "extractor_v2"),
+                "ruleset_checksum": req_stats.get("ruleset_checksum", ""),
+                "mapping_checksum": req_stats.get("mapping_checksum", ""),
+                "rule_eval_ms": float(req_stats.get("rule_eval_ms", 0.0)),
+                "model_eval_ms": float(req_stats.get("model_eval_ms", 0.0)),
+                "slot_matches": int(req_stats.get("slot_matches", 0)),
                 **_standard_metrics_payload(
                     start_perf=start_perf,
                     claims_processed=int(req_stats.get("claims_processed", total)),
@@ -1327,6 +1394,21 @@ def _handle_retrieve_vec(ctx: WorkerContext) -> None:
     query = ctx.payload.get("query")
     filters = ctx.payload.get("filters") or {}
     k = int(ctx.payload.get("k") or 10)
+    graph_params = ctx.params.get("graph") if isinstance(ctx.params, dict) else {}
+    if not isinstance(graph_params, dict):
+        graph_params = {}
+    graph_enabled = bool(graph_params.get("enabled", False))
+    graph_max_hops = graph_params.get("max_hops", 1)
+    graph_rerank_weight = graph_params.get("rerank_weight", 0.25)
+    try:
+        graph_max_hops = int(graph_max_hops)
+    except (TypeError, ValueError):
+        graph_max_hops = 1
+    try:
+        graph_rerank_weight = float(graph_rerank_weight)
+    except (TypeError, ValueError):
+        graph_rerank_weight = 0.25
+    graph_meta: dict[str, Any] = {"enabled": graph_enabled, "applied": False}
     if not isinstance(query, str):
         raise RuntimeError("query missing")
     req_stats: dict[str, Any] = {}
@@ -1341,6 +1423,16 @@ def _handle_retrieve_vec(ctx: WorkerContext) -> None:
     if results and isinstance(filters, dict):
         with db.connect(ctx._db_path) as conn:
             results = _filter_results_by_meta(conn, ctx.project_id, results, filters)
+            if graph_enabled:
+                results, graph_meta = rerank_results_with_graph(
+                    conn,
+                    project_id=ctx.project_id,
+                    query=query,
+                    results=results,
+                    filters=filters,
+                    max_hops=graph_max_hops,
+                    rerank_weight=graph_rerank_weight,
+                )
     if not results:
         with db.connect(ctx._db_path) as conn:
             results = fts_search(conn, req)
@@ -1372,6 +1464,7 @@ def _handle_retrieve_vec(ctx: WorkerContext) -> None:
             progress=1.0,
             payload={
                 "result_count": len(results),
+                "graph": graph_meta,
                 **_standard_metrics_payload(
                     start_perf=start_perf,
                     chunks_processed=int(req_stats.get("chunks_processed", len(results))),

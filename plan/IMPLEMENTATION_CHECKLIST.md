@@ -21,7 +21,7 @@
 
 * ☐ 각 모듈 문서는 “구현 순서(Phase)”를 본 문서와 동일하게 유지한다.
 * ☐ 요구사항(목적) 원문은 `plan/user_request.md`이며, 본 문서는 이를 “구현 관점”으로 Phase에 분해한다.
-* ☐ 정책 선택(D1~D5)은 `plan/DECISIONS_PENDING.md`를 1차 기준으로 하며, Phase 순서로 우회하지 않는다.
+* ☐ 정책 선택(D1~D8)은 `plan/DECISIONS_PENDING.md`를 1차 기준으로 하며, Phase 순서로 우회하지 않는다.
 * ☐ 실제 테스트는 conda의 `nf` 환경에서 수행한다.
 * ☐ Phase 완료 기준:
   - 최소 1개의 종단 간 시나리오가 **오케스트레이터 → 잡 → SSE**로 관찰 가능
@@ -38,7 +38,9 @@
 - Phase 40: 개발용 루프백 웹 UI(임시 디버그 UI)
 - Phase 50: 태그/엔티티/스키마(INGEST) + 승인 워크플로(D2/D3)
 - Phase 60: 정합성(CONSISTENCY) + 판정/근거 로그 + 화이트리스트
+- Phase 62: CONSISTENCY/FTS 성능 안정화(contract 유지)
 - Phase 70: 벡터 인덱스/검색(비동기) + `RETRIEVE_VEC` 스트리밍(D5)
+- Phase 72: Graph Hybrid 옵션 경로(기본 off)
 - Phase 80: 제안(LOCAL_RULE 우선) + 모델 게이트웨이 옵션(D4)
 - Phase 90: 내보내기 + 문법 교정(차순위 포함) (D1)
 - Phase 95: 데스크톱 UI(nf-desktop) 제품 흐름 통합/마감
@@ -55,7 +57,7 @@
 * 6) 개선 제안(LOCAL_RULE 우선, API opt-in, LOCAL_GEN 차순위): Phase 80
 * 7) 내보내기(txt/docx): Phase 90
 * 8) 에피소드/시점/인물 chunk 구성(+ 세계관 타임라인): Phase 30(청크/FTS) + Phase 50(엔티티/타임라인 문서) + Phase 95(요청/검토 UI)
-* 9) 규칙 기반 우선 + 경량 로컬 AI(차순위): Phase 50/60/80에 분산(정책은 D1~D5 준수)
+* 9) 규칙 기반 우선 + 경량 로컬 AI(차순위): Phase 50/60/80에 분산(정책은 D1~D8 준수)
 * 10~11) 로컬/원격 모델 분리 + opt-in: Phase 80(+ Phase 60 L3는 선택 게이트)
 * 12) 3단 강제 근거화(evidence_required): Phase 60(핵심), Phase 80(모델 경계)
 
@@ -175,6 +177,30 @@
 
 ---
 
+### Phase 62 — CONSISTENCY/FTS 성능 안정화(contract 유지)
+
+* ☑ Must: claim 단위 retrieval 경로에서 대량 `IN(doc_ids/snapshot_ids)` 필터 제거(project 범위 고정)
+* ☑ Must: fact 선형 스캔 제거(fact index: `(slot_key, entity_id|*)`)
+* ☑ Must: claim text 정규화 기반 job-scope LRU 캐시(기본 256)
+* ☑ Must: FTS adaptive fetch/refill(`max(30, k*6)` 시작, 증분 확장, 상한 240)
+* ☑ Must: `chunks(project_id, chunk_id)` 보조 인덱스 추가 + FTS insert batch화
+* ◐ Partial: DS-200 `consistency_p95 <= 5.0s` (대체로 접근, 조건별 편차 있음)
+* ◐ Partial: DS-800 `consistency_p95 <= 6.0s` (최신 7.6s로 미달)
+* ◐ Partial: DS-200 `retrieval_fts_p95 <= 300ms`, DS-800 `<= 450ms` (최신 634ms로 미달)
+
+DoD(테스트 포함):
+* ☑ `pytest -q tests/e2e/test_global_context_detection.py` 회귀 0
+* ☑ `pytest -q -m "not soak"` 회귀 0
+* ◐ `run_pipeline_bench.py` 200/800 측정 결과에서 `consistency_p95` 및 `retrieval_fts_p95` 중간 게이트 충족
+
+관련 문서:
+
+- `plan/modules/nf_consistency.md`
+- `plan/modules/nf_retrieval.md`
+- `plan/modules/nf_orchestrator.md`
+
+---
+
 ### Phase 70 — Vector 인덱스/검색 + `RETRIEVE_VEC` 스트리밍(D5)
 
 * ☑ `INDEX_VEC` job: shard build + manifest 갱신(최소) (shard 엔트리 meta(tag_path/episode_id) 전파 포함)
@@ -186,6 +212,28 @@
 
 - `plan/modules/nf_retrieval.md` (Vector)
 - `plan/modules/nf_workers.md` (retrieve_vec_job/index_vec_job)
+
+---
+
+### Phase 72 — Graph Hybrid 옵션 경로(기본 off)
+
+* ☑ Must: `INDEX_FTS.params.grouping.graph_extract` 추가(기본 `false`)
+* ☑ Must: `RETRIEVE_VEC.params.graph.enabled/max_hops/rerank_weight` 추가(기본 off)
+* ☑ Must: graph materialized index(`entity_mention_span/time_anchor/timeline_event/approved facts`) 생성 경로 확보
+* ☑ Must: graph rerank는 옵션 경로에서만 적용, 기본 FTS/vector 경로 불변
+* ☑ Must: 결과 JSON은 기존 스키마 유지 + `graph` 블록만 선택 추가
+* ◐ Partial: graph on/off A/B 회귀를 DS-200/800 기준으로 상시화(단기 수동 검증만 완료)
+
+DoD(테스트 포함):
+* ☑ `tests/test_nf_retrieval_graph_rerank.py` 통과
+* ☑ graph off/on 모두 기존 contract 응답 필드와 호환(추가 필드만 존재)
+* ◐ graph on에서 baseline 대비 성능 악화 없는지 200/800 반복 검증
+
+관련 문서:
+
+- `plan/modules/nf_retrieval.md`
+- `plan/modules/nf_workers.md`
+- `plan/modules/nf_graphrag.md`
 
 ---
 

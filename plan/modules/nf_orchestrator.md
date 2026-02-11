@@ -8,7 +8,7 @@
 
 - `plan/contracts.md`
 - `plan/architecture_2.md`
-- `plan/DECISIONS_PENDING.md` (D1~D5 반영 완료)
+- `plan/DECISIONS_PENDING.md` (D1~D8 반영 관리)
 
 구현 순서(Phase, 전체 로드맵: `plan/IMPLEMENTATION_CHECKLIST.md`):
 
@@ -129,6 +129,7 @@ modules/nf_orchestrator/
 ## 4) 정책 강제(필수)
 
 * ☑ `global_heavy_job_semaphore`로 무거운 잡 동시성 제한
+* ☑ heavy 제한 위치: submit 거절보다 lease/실행 단계 제한을 기본으로 적용(큐 적체/정책 충돌 완화)
 * ☑ `sync_retrieval_mode=FTS_ONLY` 강제(D5)
 * ☑ `explicit_fact_auto_approve=false` 기본 강제(D3 차순위 스위치)
 * ☑ `enable_local_generator=false` 기본(D4 차순위)

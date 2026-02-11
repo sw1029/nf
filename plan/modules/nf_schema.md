@@ -103,6 +103,10 @@ modules/nf_schema/
   - 시점: `time_anchor`(상대 time_key, 화수/episode 기반 1차 매핑) + `timeline_idx`(옵션)
   - 세계관 타임라인: 별도 문서 → `timeline_event(timeline_idx)`로 정리/확장
   - (2차/최적화) 승인 후 `chunk ↔ entity/time` 역인덱스 생성(선택)
+* ☑ Graph edge source 정규화 절차(옵션 경로):
+  - 소스 우선순위: `entity_mention_span`/`time_anchor`/`timeline_event`/`schema_facts(APPROVED)`
+  - project 단위 materialize 시 중복 edge 제거 및 가중치 정규화
+  - 불명확/충돌 edge는 생성하지 않고 UNKNOWN 경로로 보수 처리
 * ☐ 엔티티 해소 규칙 세분화(동명이인/호칭 변화)
 * ☐ 스키마 마이그레이션(버전 간 필드 변화) 자동화
 
@@ -151,3 +155,26 @@ class FactExtractor(Protocol):
 - `source=AUTO` → `status=PROPOSED`
 - `source=USER` → `status=APPROVED` (기본)
 - 충돌 시: 해당 fact 또는 관련 fact를 `PROPOSED`로 강등하거나 `value=unknown`으로 저장
+
+---
+
+## Extraction Alignment Addendum (2026-02-11)
+
+### Must
+
+- Reuse the same extraction stack as `CONSISTENCY` for explicit candidate extraction.
+- Apply the shared `ExtractionPipeline` with identical profile and user mappings.
+- Preserve schema-side responsibilities:
+  - tag selection (`TagDef` mapping)
+  - schema-type normalization/validation
+  - conflict policy (`PROPOSED`/`unknown`)
+
+### Partial/Follow-up
+
+- Add slot-to-tag mapping diagnostics for low-confidence candidates.
+- Add optional slot coverage report per dataset run.
+
+### Tests/DoD
+
+- Policy baseline: `tests/test_nf_schema_policy.py`
+- Consistency alignment guard: `tests/test_nf_consistency_scope_and_slots.py`

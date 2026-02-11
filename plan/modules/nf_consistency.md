@@ -54,6 +54,7 @@ modules/nf_consistency/
 * ☑ 잡 내부에서는 필요 시 벡터 확장 가능(무거운 잡 경로)
   - 단, “근거 부재를 모델로 뒤집지 못함” 정책 유지
 * ☑ Evidence는 `snapshot_id/chunk_id` 포함(가능하면)
+* ☑ 성능 보강: claim 정규화 키 기반 retrieval LRU cache(기본 256) + 재조회 제거
 
 ## 3) Judge Layer 1 (명시만)
 
@@ -64,6 +65,7 @@ modules/nf_consistency/
 
 * ☑ alias/정규화/약한 동일성 처리(충돌 시 unknown)
 * ☑ entity_id 불명확 시 unknown 우선
+* ☑ fact 선형 스캔 제거: `(slot_key, entity_id|*)` 인덱스 기반 판정
 
 ## 5) Judge Layer 3 (옵션 경로; 구조는 Must)
 
@@ -89,6 +91,8 @@ modules/nf_consistency/
 
 * ☑ `tests/test_nf_consistency_contracts.py`: ConsistencyRequest/ConsistencyEngine 계약 스모크
 * ☑ L1 위배 감지/OK/UNKNOWN 스모크(간단 schema + claim): `tests/test_nf_consistency_engine.py`
+* ◐ DS-200 성능 게이트: `consistency_p95 <= 5.0s` 목표(중간 게이트)
+* ◐ DS-800 성능 게이트: `consistency_p95 <= 6.0s` 목표(중간 게이트)
 * ☐ (차순위) 충돌/애매(동명이인/alias) 시 unknown 강등 테스트
 * ☐ (차순위) whitelist 적용 시 재경고 억제 테스트
 
@@ -139,3 +143,31 @@ class ConsistencyEngine(Protocol):
 ```
 
 `schema_ver`는 승인된 스키마 뷰(approved facts)를 기준으로 한다.
+
+---
+
+## Extraction V2 Addendum (2026-02-11)
+
+### Must (additive, contract-safe)
+
+- Introduce `ExtractionPipeline` as the single slot extraction path for `CONSISTENCY`.
+- Keep deterministic baseline: default mode is `rule_only`.
+- Add optional extraction profile in job params:
+  - `mode`: `rule_only|hybrid_local|hybrid_remote|hybrid_dual`
+  - `use_user_mappings`
+  - `model_slots`
+  - `model_timeout_ms`
+- Add user mapping layer with priority above builtin rules.
+- Enforce `VIOLATE -> CONTRADICT evidence` contract unchanged.
+
+### Partial/Follow-up
+
+- Improve slot-level confidence policy for model candidates.
+- Add per-slot extraction error counters for long-run diagnostics.
+
+### Tests/DoD
+
+- Regression: `tests/test_nf_consistency_engine.py`
+- Scope/slot coverage: `tests/test_nf_consistency_scope_and_slots.py`
+- New extractor tests: `tests/test_nf_consistency_extractors.py`
+- E2E gate: `tests/e2e/test_global_context_detection.py`

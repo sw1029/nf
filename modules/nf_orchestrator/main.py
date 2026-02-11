@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 import threading
@@ -16,6 +17,7 @@ from urllib.parse import parse_qs, urlparse
 from modules.nf_orchestrator.services.document_service import DocumentServiceImpl
 from modules.nf_orchestrator.services.entity_service import EntityServiceImpl
 from modules.nf_orchestrator.services.episode_service import EpisodeServiceImpl
+from modules.nf_orchestrator.services.extraction_service import ExtractionServiceImpl
 from modules.nf_orchestrator.services.ignore_service import IgnoreServiceImpl
 from modules.nf_orchestrator.services.job_service import JobServiceImpl
 from modules.nf_orchestrator.services.project_service import ProjectServiceImpl
@@ -42,6 +44,13 @@ from modules.nf_shared.protocol.dtos import (
     TagKind,
 )
 from modules.nf_shared.protocol.serialization import dump_json
+from modules.nf_consistency.extractors import (
+    ALLOWED_EXTRACTION_MODES,
+    ALLOWED_SLOT_KEYS,
+    compile_regex_flags,
+    normalize_extraction_profile,
+    validate_regex_pattern,
+)
 
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
@@ -88,6 +97,14 @@ def _build_openapi_spec() -> dict[str, Any]:
             "/projects/{project_id}/time-anchors/{anchor_id}": {"patch": {"summary": "Update time anchor status"}},
             "/projects/{project_id}/timeline-events": {"get": {"summary": "List timeline events"}},
             "/projects/{project_id}/timeline-events/{event_id}": {"patch": {"summary": "Update timeline event status"}},
+            "/projects/{project_id}/extraction/mappings": {
+                "get": {"summary": "List extraction mappings"},
+                "post": {"summary": "Create extraction mapping"},
+            },
+            "/projects/{project_id}/extraction/mappings/{mapping_id}": {
+                "patch": {"summary": "Update extraction mapping"},
+                "delete": {"summary": "Delete extraction mapping"},
+            },
             "/projects/{project_id}/whitelist": {"post": {"summary": "Add whitelist item"}, "delete": {"summary": "Delete whitelist item"}},
             "/projects/{project_id}/ignore": {"post": {"summary": "Add ignore item"}, "delete": {"summary": "Delete ignore item"}},
             "/jobs": {"post": {"summary": "Submit job"}},
@@ -111,6 +128,7 @@ class OrchestratorHTTPServer(ThreadingHTTPServer):
         self.tag_service = TagServiceImpl()
         self.entity_service = EntityServiceImpl()
         self.schema_service = SchemaServiceImpl()
+        self.extraction_service = ExtractionServiceImpl()
         self.timeline_service = TimelineServiceImpl()
         self.query_service = QueryServiceImpl()
         self.whitelist_service = WhitelistServiceImpl()
@@ -274,6 +292,9 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 return
             if resource == "timeline-events":
                 self._handle_timeline_events(project_id, tail)
+                return
+            if resource == "extraction":
+                self._handle_extraction(project_id, tail)
                 return
             if resource == "whitelist":
                 self._handle_whitelist(project_id)
@@ -793,6 +814,153 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             return
         self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
 
+    def _handle_extraction(self, project_id: str, tail: list[str]) -> None:
+        if len(tail) == 1 and tail[0] == "mappings":
+            if self.command == "GET":
+                query = parse_qs(urlparse(self.path).query)
+                enabled_only_raw = query.get("enabled_only", ["false"])[0]
+                enabled_only = str(enabled_only_raw).lower() in {"1", "true", "yes", "on"}
+                mappings = self.server.extraction_service.list_mappings(project_id, enabled_only=enabled_only)
+                checksum = self.server.extraction_service.mapping_checksum(project_id)
+                self._send_json(HTTPStatus.OK, {"mappings": dump_json(mappings), "mapping_checksum": checksum})
+                return
+            if self.command == "POST":
+                payload = self._read_json()
+                validated = self._validate_extraction_mapping_payload(payload, partial=False)
+                mapping = self.server.extraction_service.create_mapping(
+                    project_id,
+                    slot_key=validated["slot_key"],
+                    pattern=validated["pattern"],
+                    flags=validated["flags"],
+                    transform=validated["transform"],
+                    priority=validated["priority"],
+                    enabled=validated["enabled"],
+                    created_by=validated["created_by"],
+                )
+                checksum = self.server.extraction_service.mapping_checksum(project_id)
+                self._send_json(HTTPStatus.CREATED, {"mapping": dump_json(mapping), "mapping_checksum": checksum})
+                return
+        if len(tail) == 2 and tail[0] == "mappings":
+            mapping_id = tail[1]
+            if self.command == "PATCH":
+                current = self.server.extraction_service.get_mapping(mapping_id)
+                if current is None or current.project_id != project_id:
+                    self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "mapping을 찾을 수 없습니다")
+                    return
+                payload = self._read_json()
+                validated = self._validate_extraction_mapping_payload(payload, partial=True)
+                merged_pattern = validated.get("pattern", current.pattern)
+                merged_flags = validated.get("flags", current.flags)
+                try:
+                    re.compile(merged_pattern, compile_regex_flags(merged_flags))
+                except re.error as exc:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, f"regex compile failed: {exc}") from exc
+                mapping = self.server.extraction_service.update_mapping(
+                    mapping_id,
+                    slot_key=validated.get("slot_key"),
+                    pattern=validated.get("pattern"),
+                    flags=validated.get("flags"),
+                    transform=validated.get("transform"),
+                    priority=validated.get("priority"),
+                    enabled=validated.get("enabled"),
+                )
+                if mapping is None:
+                    self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "mapping을 찾을 수 없습니다")
+                    return
+                checksum = self.server.extraction_service.mapping_checksum(project_id)
+                self._send_json(HTTPStatus.OK, {"mapping": dump_json(mapping), "mapping_checksum": checksum})
+                return
+            if self.command == "DELETE":
+                current = self.server.extraction_service.get_mapping(mapping_id)
+                if current is None or current.project_id != project_id:
+                    self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "mapping을 찾을 수 없습니다")
+                    return
+                deleted = self.server.extraction_service.delete_mapping(mapping_id)
+                if not deleted:
+                    self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "mapping을 찾을 수 없습니다")
+                    return
+                checksum = self.server.extraction_service.mapping_checksum(project_id)
+                self._send_json(HTTPStatus.OK, {"deleted": True, "mapping_checksum": checksum})
+                return
+        self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _validate_extraction_mapping_payload(self, payload: dict[str, Any], *, partial: bool) -> dict[str, Any]:
+        validated: dict[str, Any] = {}
+        slot_key = payload.get("slot_key")
+        if slot_key is not None:
+            if not isinstance(slot_key, str) or slot_key not in ALLOWED_SLOT_KEYS:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "slot_key is invalid")
+            validated["slot_key"] = slot_key
+        elif not partial:
+            raise AppError(ErrorCode.VALIDATION_ERROR, "slot_key가 필요합니다")
+
+        pattern = payload.get("pattern")
+        if pattern is not None:
+            if not isinstance(pattern, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "pattern must be a string")
+            try:
+                validate_regex_pattern(pattern)
+            except ValueError as exc:
+                raise AppError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
+            validated["pattern"] = pattern
+        elif not partial:
+            raise AppError(ErrorCode.VALIDATION_ERROR, "pattern이 필요합니다")
+
+        flags = payload.get("flags")
+        if flags is not None:
+            if not isinstance(flags, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "flags must be a string")
+            unknown = [ch for ch in flags if ch.upper() not in {"I", "M", "S", "U", "A"}]
+            if unknown:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "flags contains unsupported values")
+            try:
+                if "pattern" in validated:
+                    re.compile(validated["pattern"], compile_regex_flags(flags))
+            except re.error as exc:
+                raise AppError(ErrorCode.VALIDATION_ERROR, f"regex compile failed: {exc}") from exc
+            validated["flags"] = flags
+        elif not partial:
+            validated["flags"] = ""
+
+        transform = payload.get("transform")
+        if transform is not None:
+            if not isinstance(transform, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "transform must be a string")
+            allowed = {"identity", "strip", "lower", "int", "bool", "death_flag"}
+            if transform not in allowed:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "transform is invalid")
+            validated["transform"] = transform
+        elif not partial:
+            validated["transform"] = "identity"
+
+        priority = payload.get("priority")
+        if priority is not None:
+            if not isinstance(priority, int):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "priority must be an integer")
+            if priority < 0 or priority > 1000:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "priority must be between 0 and 1000")
+            validated["priority"] = priority
+        elif not partial:
+            validated["priority"] = 100
+
+        enabled = payload.get("enabled")
+        if enabled is not None:
+            if not isinstance(enabled, bool):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "enabled must be boolean")
+            validated["enabled"] = enabled
+        elif not partial:
+            validated["enabled"] = True
+
+        created_by = payload.get("created_by")
+        if created_by is not None:
+            if not isinstance(created_by, str) or not created_by.strip():
+                raise AppError(ErrorCode.VALIDATION_ERROR, "created_by must be a non-empty string")
+            validated["created_by"] = created_by.strip()
+        elif not partial:
+            validated["created_by"] = "USER"
+
+        return validated
+
     def _handle_whitelist(self, project_id: str) -> None:
         if self.command == "POST":
             payload = self._read_json()
@@ -1090,8 +1258,8 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             if not isinstance(priority, int):
                 raise AppError(ErrorCode.VALIDATION_ERROR, "priority는 정수여야 합니다")
             self._validate_job_payload(job_type, inputs)
-            self._enforce_job_policy(job_type, inputs, project.settings)
-            self._enforce_heavy_job_semaphore(job_type)
+            self._validate_job_params(job_type, params)
+            self._enforce_job_policy(job_type, inputs, params, project.settings)
             job = self.server.job_service.submit(project_id, job_type, inputs, params, priority=priority)
             self._send_json(HTTPStatus.CREATED, {"job": dump_json(job)})
             return
@@ -1190,12 +1358,50 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             require_dict("range")
             require_str("format")
 
+    def _validate_job_params(self, job_type: JobType, params: dict[str, Any]) -> None:
+        if job_type not in {JobType.INGEST, JobType.CONSISTENCY}:
+            return
+        extraction_raw = params.get("extraction")
+        if extraction_raw is None:
+            return
+        if not isinstance(extraction_raw, dict):
+            raise AppError(ErrorCode.VALIDATION_ERROR, "params.extraction must be an object")
+        mode_raw = extraction_raw.get("mode")
+        if mode_raw is not None:
+            if not isinstance(mode_raw, str) or mode_raw not in ALLOWED_EXTRACTION_MODES:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "params.extraction.mode is invalid")
+        use_user_raw = extraction_raw.get("use_user_mappings")
+        if use_user_raw is not None and not isinstance(use_user_raw, bool):
+            raise AppError(ErrorCode.VALIDATION_ERROR, "params.extraction.use_user_mappings must be boolean")
+        model_slots_raw = extraction_raw.get("model_slots")
+        if model_slots_raw is not None:
+            if not isinstance(model_slots_raw, list):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "params.extraction.model_slots must be an array")
+            for slot_raw in model_slots_raw:
+                if not isinstance(slot_raw, str) or slot_raw not in ALLOWED_SLOT_KEYS:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "params.extraction.model_slots contains invalid slot")
+        timeout_raw = extraction_raw.get("model_timeout_ms")
+        if timeout_raw is not None and not isinstance(timeout_raw, int):
+            raise AppError(ErrorCode.VALIDATION_ERROR, "params.extraction.model_timeout_ms must be integer")
+        normalized = normalize_extraction_profile(extraction_raw)
+        mode = normalized["mode"]
+        if mode not in ALLOWED_EXTRACTION_MODES:
+            raise AppError(ErrorCode.VALIDATION_ERROR, "params.extraction.mode is invalid")
+        for slot in normalized["model_slots"]:
+            if slot not in ALLOWED_SLOT_KEYS:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "params.extraction.model_slots contains invalid slot")
+        timeout_ms = normalized["model_timeout_ms"]
+        if not isinstance(timeout_ms, int) or timeout_ms < 100:
+            raise AppError(ErrorCode.VALIDATION_ERROR, "params.extraction.model_timeout_ms must be >= 100")
+
     def _enforce_job_policy(
         self,
         job_type: JobType,
         inputs: dict[str, Any],
+        params: dict[str, Any],
         project_settings: dict[str, Any] | None = None,
     ) -> None:
+        project_settings = project_settings or {}
         if job_type == JobType.SUGGEST:
             mode_raw = inputs.get("mode")
             if isinstance(mode_raw, str):
@@ -1203,7 +1409,6 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                     mode = SuggestMode(mode_raw)
                 except ValueError as exc:
                     raise AppError(ErrorCode.VALIDATION_ERROR, "유효하지 않은 mode") from exc
-                project_settings = project_settings or {}
                 if mode is SuggestMode.API:
                     if not self.server.settings.enable_remote_api:
                         raise AppError(ErrorCode.POLICY_VIOLATION, "remote API가 비활성화되었습니다")
@@ -1214,6 +1419,15 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                         raise AppError(ErrorCode.POLICY_VIOLATION, "local generator가 비활성화되었습니다")
                     if not project_settings.get("enable_local_generator", False):
                         raise AppError(ErrorCode.POLICY_VIOLATION, "프로젝트 local generator가 비활성화되었습니다")
+        if job_type in {JobType.INGEST, JobType.CONSISTENCY}:
+            extraction_raw = params.get("extraction")
+            if isinstance(extraction_raw, dict):
+                mode = normalize_extraction_profile(extraction_raw)["mode"]
+                if mode in {"hybrid_remote", "hybrid_dual"}:
+                    if not self.server.settings.enable_remote_api:
+                        raise AppError(ErrorCode.POLICY_VIOLATION, "remote extraction API가 비활성화되었습니다")
+                    if not project_settings.get("enable_remote_api", False):
+                        raise AppError(ErrorCode.POLICY_VIOLATION, "프로젝트 remote API가 비활성화되었습니다")
 
     def _enforce_heavy_job_semaphore(self, job_type: JobType) -> None:
         if self.server.debug_state.get("disable_heavy_job_limit"):

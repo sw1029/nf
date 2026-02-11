@@ -225,3 +225,58 @@
   - 테스트 통과/실패 요약
   - 벤치 파일 경로
   - TODO 상태 변경(완료/보류/신규)
+
+## 11) 2026-02-11 성능 재평가(최신 800화/soak 반영)
+
+### 11.1 800화 듀얼 벤치 비교 (`20260210T063853Z` vs `20260210T210325Z`)
+
+| run_id | doc_count | retrieval_fts_p95(ms) | retrieval_fts_p99(ms) | consistency_p95(ms) | index_fts(ms) | index_vec(ms) | ingest_failures | consistency_failures | 판정 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| `20260210T063853Z` | 800 | 475.75 | 483.65 | 413180.87 | 141796.51 | 6723.44 | 0 | 0 | 정합성 경로 심각한 병목(미달) |
+| `20260210T210325Z` | 800 | 634.03 | 640.60 | 7649.10 | 213165.68 | 4538.15 | 0 | 0 | 정합성은 대폭 개선, FTS p95는 목표 미달 |
+
+핵심 해석:
+- `CONSISTENCY` p95는 약 `413s -> 7.65s`로 대폭 개선되었으나, 목표(`<= 2.5s`)는 아직 미달.
+- `retrieval_fts_p95`는 오히려 악화(`475ms -> 634ms`)되어 WS2 추가 최적화가 필요.
+- `index_fts`는 증가했지만 여전히 6분 이내(목표 충족).
+
+### 11.2 소크 실패 원인 분해 (`soak_20260209T174844Z.json`)
+
+| 항목 | 값 | 목표 | 판정 |
+|---|---:|---:|---|
+| failed_ratio | 3.09% | < 1% | 미달 |
+| orchestrator_crashes | 5 | 0 | 미달 |
+| policy_violations | 1209 | 참고지표 | 높음 |
+| submit_retries | 1151 | 참고지표 | 높음 |
+| queue_lag_all_p95(ms) | 87000 | < 60000 | 미달 |
+| queue_lag_consistency_p95(ms) | 115000 | < 60000 | 미달 |
+| consistency_p95(ms) | 146321.05 | <= 2500 | 미달 |
+| rss_mb_min/max | 0.0 / 0.0 | 유효값 수집 | 미달(계측 신뢰성 이슈) |
+
+보조 확인(단기 리그레션):
+- `soak_20260211T013024Z.json`(0.02h) 기준 `failed_ratio=0`, `orchestrator_crashes=0`, `queue_lag_all_p95=12000ms`.
+- 단기 구간 안정화는 보이나, 장시간/고부하 재검증은 사용자 위임 항목으로 유지.
+
+## 12) 병목-대응 매핑(WS1~WS4)
+
+| 워크스트림 | 병목/리스크 | 반영 내용 | 반영 파일(대표) | 현재 상태 |
+|---|---|---|---|---|
+| WS1 | `CONSISTENCY` 과도 지연 | fact index + claim retrieval LRU cache + 대량 IN 필터 제거 | `modules/nf_consistency/engine.py` | 부분 충족(대폭 개선, 목표 미달) |
+| WS2 | FTS 검색/인덱싱 지연 | adaptive fetch/refill + batch insert + `chunks(project_id,chunk_id)` 인덱스 | `modules/nf_retrieval/fts/fts_index.py`, `modules/nf_orchestrator/storage/db.py` | 부분 충족(FTS p95 미달) |
+| WS3 | heavy job 경쟁/큐 적체 | submit 거절 완화(lease 단계 중심), soak adaptive throttle/분리지표 | `modules/nf_orchestrator/main.py`, `tools/bench/run_soak.py` | 부분 충족(단기 양호, 장기 재검증 필요) |
+| WS4 | GraphRAG 잔여 요구 미반영 | 옵션형 graph materialize/rerank 경로 추가(기본 off) | `modules/nf_retrieval/graph/*`, `modules/nf_workers/runner.py` | 충족(옵션 경로 도입 완료) |
+
+## 13) GraphRAG 옵션형 적용 로드맵
+
+### 13.1 현재 반영(기본 off)
+- `INDEX_FTS`의 `params.grouping.graph_extract`로 프로젝트 그래프 추출/물질화.
+- `RETRIEVE_VEC`의 `params.graph.enabled/max_hops/rerank_weight`로 graph rerank 실행.
+- 기본 검색 경로(FTS-only sync, vector async)는 유지.
+
+### 13.2 단기(계약 유지형 튜닝)
+- graph rerank 메타(`seed_docs`, `expanded_docs`, `applied`)를 벤치/회귀 지표에 고정 수집.
+- `graph.enabled=false`와 `true`를 동일 데이터셋에서 A/B 비교해 성능 저하 여부를 게이트로 관리.
+
+### 13.3 중기(실험 경로)
+- RAPTOR skeleton은 플러그인 레벨로 유지하고 기본 파이프라인에는 연결하지 않음.
+- graph/rule/vector 결합 비율은 additive 파라미터로만 노출(기본 계약 불변).

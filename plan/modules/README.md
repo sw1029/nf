@@ -12,6 +12,7 @@
 - `plan/modules/nf_workers.md`
 - `plan/modules/nf_schema.md`
 - `plan/modules/nf_retrieval.md`
+- `plan/modules/nf_graphrag.md`
 - `plan/modules/nf_consistency.md`
 - `plan/modules/nf_model_gateway.md`
 - `plan/modules/nf_export.md`

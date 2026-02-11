@@ -50,6 +50,9 @@ modules/nf_retrieval/
 * ◐ `snippet`: Evidence 스니펫 생성(길이 제한) (현재는 텍스트 일부 발췌; tag_path/section_path 메타 전파는 별도)
 * ☑ API: `fts_search(request: RetrievalRequest) -> RetrievalResult[]`
 * ☑ fts_meta(체크섬 기반 증분 인덱싱)
+* ☑ FTS fetch 전략 적응형 전환: 1차 `max(30, k*6)` → 부족 시 refill(상한 240)
+* ☑ FTS 인덱스 입력 batch insert(`executemany`)로 write amplification 완화
+* ☑ chunk join 보조 인덱스(`chunks(project_id, chunk_id)`)로 검색 조인 비용 완화
 * ☑ tag_path 전파: tag_assignment(span overlap) 기반으로 retrieval evidence의 tag_path를 채우기(FTS/CONSISTENCY/SUGGEST 공통)
 * ☑ (추가 요구) filters 확장: `entity_id/time_key/timeline_idx`로 chunk group 필터링 지원
   - 1차: `entity_mention_span/time_anchor`의 span overlap 기반 필터(사용자 요청 시 생성된 메타)
@@ -91,6 +94,7 @@ modules/nf_retrieval/
 # [C] 선택 — 여유 시
 
 * ☐ semantic chunking 고도화(문서 타입별)
+* ◐ Graph rerank 옵션(`params.graph.enabled`) 고도화/튜닝
 
 ---
 

@@ -227,6 +227,13 @@
 * ☐ 모델/인덱스/런타임 종속성 최소화(가능하면 CPU 기본)
 * ☐ 로컬 서비스(loopback) 방화벽/권한 이슈 최소화 가이드(내장)
 
+## 9) 2026-02-11 성능/안정성 Must 추가(계약 유지형)
+
+* ☑ Consistency fact-index + claim retrieval LRU cache 도입 (`modules/nf_consistency/engine.py`)
+* ☑ FTS adaptive fetch/refill + `chunks(project_id, chunk_id)` 인덱스 도입
+* ☑ submit 단계 heavy 거절 최소화 + lease/실행 단계 제한 중심으로 정렬
+* ◐ DS-800 기준 `consistency_p95 <= 6.0s`/`retrieval_fts_p95 <= 450ms` 중간 게이트 재충족
+
 ---
 
 # [S] Should — 안정성/성능/UX 향상을 위해 강력 권장
@@ -299,7 +306,9 @@
 * ☐ HNSWlib 대체 백엔드
 * ☐ semantic chunking 고도화(문서 타입별)
 * ☐ graph/제약 엔진 분기(얕은 그래프 기반)
-* ☐ GraphRAG/RAPTOR 실험적 플러그인 모듈화(옵션 선택형)
+* ◐ GraphRAG light plugin(옵션 rerank 경로) 적용
+* ◐ RAPTOR experimental skeleton(기본 경로 미연결) 적용
+* ☐ GraphRAG/RAPTOR 실험적 플러그인 고도화(옵션 선택형)
 
 ---
 
@@ -307,6 +316,7 @@
 
 * ☐ GraphRAG “필수 기능”으로 통합(기본 골조 완료 후 옵션으로만)
 * ☐ RAPTOR/SELF-RAG를 기본 경로에 강제(실험적 기능으로 분리 유지)
+* ☑ GraphRAG/RAPTOR 기본 경로 강제 금지(옵션 경로 유지)
 * ☐ BitNet/Gemma 양자화 모델을 초기 필수 다운로드로 강제(선택 다운로드/옵트인 유지)
 * ☐ 암시/추정 레이어를 자동 확정하여 스키마에 반영(오염 위험 때문에 금지)
 * ☐ “단일 신뢰도 점수”만 전면 노출(분해 항목 동시 노출을 유지)

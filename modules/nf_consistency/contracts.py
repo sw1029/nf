@@ -20,6 +20,7 @@ class ConsistencyRequest(TypedDict, total=False):
     preflight: ConsistencyPreflight
     schema_scope: Literal["latest_approved", "explicit_only"]
     stats: dict
+    extraction: dict
 
 
 class ConsistencyEngine(Protocol):

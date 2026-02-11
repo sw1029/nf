@@ -308,6 +308,20 @@ def _initialize(conn: sqlite3.Connection) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS extraction_mappings (
+            mapping_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            slot_key TEXT NOT NULL,
+            pattern TEXT NOT NULL,
+            flags TEXT NOT NULL DEFAULT '',
+            transform TEXT NOT NULL DEFAULT 'identity',
+            priority INTEGER NOT NULL DEFAULT 100,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS fts_meta (
             doc_id TEXT PRIMARY KEY,
             checksum TEXT NOT NULL,
@@ -367,6 +381,7 @@ def _ensure_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_doc_snapshots_doc_version ON doc_snapshots(doc_id, version)",
         "CREATE INDEX IF NOT EXISTS idx_chunks_snapshot ON chunks(snapshot_id)",
         "CREATE INDEX IF NOT EXISTS idx_chunks_doc_snapshot ON chunks(doc_id, snapshot_id)",
+        "CREATE INDEX IF NOT EXISTS idx_chunks_project_chunk ON chunks(project_id, chunk_id)",
         "CREATE INDEX IF NOT EXISTS idx_tag_assignment_snapshot_span ON tag_assignment(snapshot_id, span_start, span_end)",
         "CREATE INDEX IF NOT EXISTS idx_schema_facts_project_schema_status ON schema_facts(project_id, schema_ver, status)",
         "CREATE INDEX IF NOT EXISTS idx_schema_facts_project_schema_layer_status ON schema_facts(project_id, schema_ver, layer, status)",
@@ -377,6 +392,7 @@ def _ensure_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_time_anchor_lookup ON time_anchor(project_id, doc_id, time_key, timeline_idx, status)",
         "CREATE INDEX IF NOT EXISTS idx_whitelist_lookup ON whitelist_item(project_id, claim_fingerprint, scope)",
         "CREATE INDEX IF NOT EXISTS idx_ignore_lookup ON ignore_item(project_id, claim_fingerprint, scope, kind)",
+        "CREATE INDEX IF NOT EXISTS idx_extraction_mapping_lookup ON extraction_mappings(project_id, enabled, priority, slot_key)",
     )
     for stmt in index_statements:
         conn.execute(stmt)

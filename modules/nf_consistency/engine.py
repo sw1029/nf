@@ -4,10 +4,13 @@ import hashlib
 import re
 import unicodedata
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any
 
 from modules.nf_consistency.contracts import ConsistencyRequest
+from modules.nf_consistency.extractors import ExtractionPipeline, normalize_extraction_profile
+from modules.nf_consistency.extractors.contracts import ExtractionMapping as ExtractorMapping
 from modules.nf_model_gateway.gateway import select_model
 from modules.nf_orchestrator.storage import db, docstore
 from modules.nf_orchestrator.storage.repos import (
@@ -32,18 +35,7 @@ from modules.nf_shared.protocol.dtos import (
     VerdictEvidenceLink,
     VerdictLog,
 )
-
-_AGE_RE = re.compile(r"(\d{1,3})\s*(?:살|세)")
-_TIME_RE = re.compile(r"(\d{1,2}:\d{2}|\d{4}년\s*\d{1,2}월\s*\d{1,2}일|\d{1,2}월\s*\d{1,2}일)")
-_PLACE_RE = re.compile(r"(?:장소|위치)[:\s]+([^\n,.]+)")
-_REL_RE = re.compile(r"(?:관계)[:\s]+([^\n,.]+)")
-_AFFIL_RE = re.compile(r"(?:소속)[:\s]+([^\n,.]+)")
-_JOB_RE = re.compile(r"(?:직업|클래스)[:\s]+([^\n,.]+)")
-_TALENT_RE = re.compile(r"(?:재능)[:\s]+([^\n,.]+)")
-_DEATH_RE = re.compile(r"(사망|죽었|죽었다|사망했다|사망함)")
-_ALIVE_RE = re.compile(r"(생존|살아있)")
-_JOB_FALLBACK_RE = re.compile(r"(\d+\s*서클\s*마법사)")
-_NO_TALENT_RE = re.compile(r"재능\s*없(?:음|다)")
+_FACT_ALL_KEY = "__all__"
 
 
 def _fingerprint(text: str) -> str:
@@ -65,59 +57,33 @@ def _segment_text(text: str) -> list[tuple[int, int, str]]:
     return segments
 
 
-def _extract_slots(segment: str) -> dict[str, object]:
-    slots: dict[str, object] = {}
-
-    age_match = _AGE_RE.search(segment)
-    if age_match:
-        slots["age"] = int(age_match.group(1))
-
-    time_match = _TIME_RE.search(segment)
-    if time_match:
-        slots["time"] = time_match.group(1)
-
-    place_match = _PLACE_RE.search(segment)
-    if place_match:
-        slots["place"] = place_match.group(1).strip()
-
-    relation_match = _REL_RE.search(segment)
-    if relation_match:
-        slots["relation"] = relation_match.group(1).strip()
-
-    affiliation_match = _AFFIL_RE.search(segment)
-    if affiliation_match:
-        slots["affiliation"] = affiliation_match.group(1).strip()
-
-    job_match = _JOB_RE.search(segment)
-    if job_match:
-        slots["job"] = job_match.group(1).strip()
-    elif "노 클래스" in segment:
-        slots["job"] = "노 클래스"
-    else:
-        circle_match = _JOB_FALLBACK_RE.search(segment)
-        if circle_match:
-            slots["job"] = circle_match.group(1)
-
-    talent_match = _TALENT_RE.search(segment)
-    if talent_match:
-        slots["talent"] = talent_match.group(1).strip()
-    elif _NO_TALENT_RE.search(segment):
-        slots["talent"] = "재능 없음"
-    elif "천재" in segment:
-        slots["talent"] = "천재"
-
-    if _DEATH_RE.search(segment):
-        slots["death"] = True
-    elif _ALIVE_RE.search(segment):
-        slots["death"] = False
-
-    return slots
+def _extract_slots(segment: str, *, pipeline: ExtractionPipeline | None = None) -> dict[str, object]:
+    if pipeline is None:
+        return {}
+    return pipeline.extract(segment).slots
 
 
-def _extract_claims(text: str) -> list[tuple[int, int, str, dict[str, object]]]:
+def _extract_claims(
+    text: str,
+    *,
+    pipeline: ExtractionPipeline | None = None,
+    stats: dict[str, Any] | None = None,
+) -> list[tuple[int, int, str, dict[str, object]]]:
     claims = []
     for span_start, span_end, segment in _segment_text(text):
-        slots = _extract_slots(segment)
+        if pipeline is None:
+            slots = {}
+            result_rule_ms = 0.0
+            result_model_ms = 0.0
+        else:
+            result = pipeline.extract(segment)
+            slots = result.slots
+            result_rule_ms = result.rule_eval_ms
+            result_model_ms = result.model_eval_ms
+        if stats is not None:
+            stats["rule_eval_ms"] = float(stats.get("rule_eval_ms", 0.0)) + result_rule_ms
+            stats["model_eval_ms"] = float(stats.get("model_eval_ms", 0.0)) + result_model_ms
+            stats["slot_matches"] = int(stats.get("slot_matches", 0)) + len(slots)
         if slots:
             claims.append((span_start, span_end, segment, slots))
     return claims
@@ -281,26 +247,50 @@ def _load_facts_for_scope(
     return resolved_schema_ver, facts
 
 
-def _judge_with_facts(slots: dict[str, object], facts: list) -> tuple[Verdict | None, list[tuple[str, EvidenceRole]]]:
+def _build_fact_index(facts: list) -> dict[tuple[str, str | None], list]:
+    indexed: dict[tuple[str, str | None], list] = {}
+    for fact in facts:
+        slot_key = _fact_slot_key(fact.tag_path)
+        if slot_key is None:
+            continue
+        indexed.setdefault((slot_key, _FACT_ALL_KEY), []).append(fact)
+        entity_id = fact.entity_id if isinstance(fact.entity_id, str) and fact.entity_id else None
+        indexed.setdefault((slot_key, entity_id), []).append(fact)
+    return indexed
+
+
+def _judge_with_fact_index(
+    slots: dict[str, object],
+    fact_index: dict[tuple[str, str | None], list],
+    *,
+    target_entity_id: str | None,
+) -> tuple[Verdict | None, list[tuple[str, EvidenceRole]]]:
     if not slots:
         return None, []
 
     saw_ok = False
     saw_violate = False
     link_set: set[tuple[str, EvidenceRole]] = set()
-    for fact in facts:
-        slot_key = _fact_slot_key(fact.tag_path)
-        if slot_key is None or slot_key not in slots:
+    for slot_key, claimed_value in slots.items():
+        if target_entity_id is None:
+            candidates = fact_index.get((slot_key, _FACT_ALL_KEY), [])
+        else:
+            candidates = [
+                *fact_index.get((slot_key, target_entity_id), []),
+                *fact_index.get((slot_key, None), []),
+            ]
+        if not candidates:
             continue
-        judged = _compare_slot(slot_key, slots[slot_key], fact.value)
-        if judged is None:
-            continue
-        if judged is Verdict.VIOLATE:
-            saw_violate = True
-            link_set.add((fact.evidence_eid, EvidenceRole.CONTRADICT))
-        elif judged is Verdict.OK:
-            saw_ok = True
-            link_set.add((fact.evidence_eid, EvidenceRole.SUPPORT))
+        for fact in candidates:
+            judged = _compare_slot(slot_key, claimed_value, fact.value)
+            if judged is None:
+                continue
+            if judged is Verdict.VIOLATE:
+                saw_violate = True
+                link_set.add((fact.evidence_eid, EvidenceRole.CONTRADICT))
+            elif judged is Verdict.OK:
+                saw_ok = True
+                link_set.add((fact.evidence_eid, EvidenceRole.SUPPORT))
 
     links = sorted(link_set, key=lambda item: (item[0], item[1].value))
     if saw_violate:
@@ -308,6 +298,12 @@ def _judge_with_facts(slots: dict[str, object], facts: list) -> tuple[Verdict | 
     if saw_ok:
         return Verdict.OK, links
     return None, []
+
+
+def _claim_cache_key(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text or "")
+    normalized = re.sub(r"\s+", " ", normalized).strip().lower()
+    return normalized
 
 
 class ConsistencyEngineImpl:
@@ -327,6 +323,9 @@ class ConsistencyEngineImpl:
             req_stats.setdefault("chunks_processed", 0)
             req_stats.setdefault("rows_scanned", 0)
             req_stats.setdefault("shards_loaded", 0)
+            req_stats.setdefault("rule_eval_ms", 0.0)
+            req_stats.setdefault("model_eval_ms", 0.0)
+            req_stats.setdefault("slot_matches", 0)
 
         if not isinstance(project_id, str) or not isinstance(doc_id, str) or not isinstance(snapshot_id, str):
             raise RuntimeError("invalid consistency request")
@@ -361,10 +360,40 @@ class ConsistencyEngineImpl:
 
             settings = load_config()
             gateway = select_model(purpose="consistency")
-            claims = _extract_claims(text)
-            project_docs = document_repo.list_documents(conn, project_id)
-            project_doc_ids = [item.doc_id for item in project_docs]
-            project_snapshot_ids = [item.head_snapshot_id for item in project_docs]
+            extraction_profile = normalize_extraction_profile(req.get("extraction"))
+            extraction_mappings: list[ExtractorMapping] = []
+            if extraction_profile.get("use_user_mappings", True):
+                raw_mappings = schema_repo.list_extraction_mappings(conn, project_id, enabled_only=True)
+                extraction_mappings = [
+                    ExtractorMapping(
+                        mapping_id=item.mapping_id,
+                        project_id=item.project_id,
+                        slot_key=item.slot_key,
+                        pattern=item.pattern,
+                        flags=item.flags,
+                        transform=item.transform,
+                        priority=item.priority,
+                        enabled=item.enabled,
+                        created_by=item.created_by,
+                        created_at=item.created_at,
+                    )
+                    for item in raw_mappings
+                ]
+            extractor_pipeline = ExtractionPipeline(
+                profile=extraction_profile,
+                mappings=extraction_mappings,
+                gateway=gateway,
+            )
+            if req_stats is not None:
+                req_stats["extractor_profile"] = extractor_pipeline.profile["mode"]
+                req_stats["extractor_version"] = extractor_pipeline.version
+                req_stats["ruleset_checksum"] = extractor_pipeline.ruleset_checksum
+                req_stats["mapping_checksum"] = extractor_pipeline.mapping_checksum
+            claims = _extract_claims(text, pipeline=extractor_pipeline, stats=req_stats)
+            fact_index = _build_fact_index(facts)
+            project_doc_ids_for_vector: list[str] | None = None
+            retrieval_cache: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
+            retrieval_cache_size = 256
 
             verdicts: list[VerdictLog] = []
             for span_start, span_end, claim_text, slots in claims:
@@ -382,21 +411,41 @@ class ConsistencyEngineImpl:
                 if whitelist_repo.is_whitelisted(conn, project_id, fingerprint, scope=doc_id):
                     continue
 
-                retrieval_req: dict[str, Any] = {
-                    "project_id": project_id,
-                    "query": claim_text,
-                    "filters": {
-                        "doc_ids": project_doc_ids,
-                        "snapshot_ids": project_snapshot_ids,
-                    },
-                    "k": 3,
+                retrieval_stats: dict[str, Any] = {
+                    "chunks_processed": 0,
+                    "rows_scanned": 0,
+                    "shards_loaded": 0,
                 }
-                retrieval_stats: dict[str, Any] = {}
-                retrieval_req["stats"] = retrieval_stats
-
-                results = fts_search(conn, retrieval_req)
-                if not results and settings.vector_index_mode.upper() != "DISABLED":
-                    results = vector_search(retrieval_req)
+                cache_key = _claim_cache_key(claim_text)
+                cached_results = retrieval_cache.get(cache_key)
+                if cached_results is not None:
+                    retrieval_cache.move_to_end(cache_key)
+                    results = cached_results
+                else:
+                    retrieval_req: dict[str, Any] = {
+                        "project_id": project_id,
+                        "query": claim_text,
+                        "filters": {},
+                        "k": 3,
+                        "stats": retrieval_stats,
+                    }
+                    results = fts_search(conn, retrieval_req)
+                    if not results and settings.vector_index_mode.upper() != "DISABLED":
+                        if project_doc_ids_for_vector is None:
+                            project_docs = document_repo.list_documents(conn, project_id)
+                            project_doc_ids_for_vector = [item.doc_id for item in project_docs]
+                        vector_req: dict[str, Any] = {
+                            "project_id": project_id,
+                            "query": claim_text,
+                            "filters": {"doc_ids": project_doc_ids_for_vector},
+                            "k": 3,
+                            "stats": retrieval_stats,
+                        }
+                        results = vector_search(vector_req)
+                    retrieval_cache[cache_key] = results
+                    retrieval_cache.move_to_end(cache_key)
+                    while len(retrieval_cache) > retrieval_cache_size:
+                        retrieval_cache.popitem(last=False)
                 if req_stats is not None:
                     req_stats["chunks_processed"] = int(req_stats.get("chunks_processed", 0)) + int(
                         retrieval_stats.get("chunks_processed", 0)
@@ -431,14 +480,17 @@ class ConsistencyEngineImpl:
                 verdict = Verdict.UNKNOWN
                 candidates = find_entity_candidates(claim_text, alias_index)
                 ambiguous = len(candidates) > 1
-                filtered_facts = facts
+                target_entity_id: str | None = None
                 if len(candidates) == 1:
-                    target = next(iter(candidates))
-                    filtered_facts = [fact for fact in facts if fact.entity_id in (None, target)]
+                    target_entity_id = next(iter(candidates))
 
                 fact_links: list[tuple[str, EvidenceRole]] = []
-                if filtered_facts:
-                    judged, fact_links = _judge_with_facts(slots, filtered_facts)
+                if fact_index:
+                    judged, fact_links = _judge_with_fact_index(
+                        slots,
+                        fact_index,
+                        target_entity_id=target_entity_id,
+                    )
                     if judged is not None:
                         verdict = judged
                 if ambiguous:

@@ -420,6 +420,9 @@ def main() -> int:
     parser.add_argument("--repro-runs", type=int, default=3)
     parser.add_argument("--repro-dataset", default="verify/datasets/DS-GROWTH-50.jsonl")
     parser.add_argument("--repro-limit-docs", type=int, default=50)
+    parser.add_argument("--graph-enabled", action="store_true")
+    parser.add_argument("--graph-max-hops", type=int, default=1)
+    parser.add_argument("--graph-rerank-weight", type=float, default=0.25)
     parser.add_argument("--worker-procs", type=int, default=int(os.environ.get("NF_WORKER_PROCS", "1")))
     parser.add_argument("--max-heavy-jobs", type=int, default=int(os.environ.get("NF_MAX_HEAVY_JOBS", "1")))
     args = parser.parse_args()
@@ -434,6 +437,10 @@ def main() -> int:
         raise SystemExit("--consistency-parallelism must be >= 1")
     if args.repro_runs < 1:
         raise SystemExit("--repro-runs must be >= 1")
+    if args.graph_max_hops not in {1, 2}:
+        raise SystemExit("--graph-max-hops must be 1 or 2")
+    if not (0.0 <= args.graph_rerank_weight <= 0.5):
+        raise SystemExit("--graph-rerank-weight must be between 0.0 and 0.5")
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -498,6 +505,9 @@ def main() -> int:
             "ingest_parallelism": args.ingest_parallelism,
             "consistency_parallelism": args.consistency_parallelism,
             "profile": args.profile,
+            "graph_enabled": args.graph_enabled,
+            "graph_max_hops": args.graph_max_hops,
+            "graph_rerank_weight": args.graph_rerank_weight,
         },
         extra={
             "base_url": args.base_url,
@@ -523,6 +533,12 @@ def main() -> int:
             "max_heavy_jobs": args.max_heavy_jobs,
             "ingest_parallelism": args.ingest_parallelism,
             "consistency_parallelism": args.consistency_parallelism,
+        },
+        "graph": {
+            "enabled": bool(args.graph_enabled),
+            "max_hops": max(1, min(2, int(args.graph_max_hops))),
+            "rerank_weight": max(0.0, min(0.5, float(args.graph_rerank_weight))),
+            "applied_path": "retrieve_vec_async_only",
         },
         "repro": {
             "seed": args.seed,
@@ -555,6 +571,7 @@ def main() -> int:
         f"- retrieval_fts_p95_ms: `{main_run.timings_ms.get('retrieval_fts_p95', 0.0):.2f}`",
         f"- semantic_hash: `{output['repro']['semantic_hash']}`",
         f"- metrics_hash: `{output['repro']['metrics_hash']}`",
+        f"- graph: `{output['graph']}`",
         "",
         "## Repro",
         f"- semantic_consistent: `{output['repro']['semantic_consistent']}`",
