@@ -536,7 +536,7 @@
         <label>형식 선택</label>
         <div class="radio-group" style="display:flex; gap:10px; margin-top:5px;">
           <label style="cursor:pointer;"><input type="radio" name="export-fmt" value="txt" checked> 텍스트 (.txt)</label>
-          <label style="cursor:pointer;"><input type="radio" name="export-fmt" value="json"> 데이터 (.json)</label>
+          <label style="cursor:pointer;"><input type="radio" name="export-fmt" value="docx"> 문서 (.docx)</label>
         </div>
       </div>
       <div class="actions">
@@ -1693,7 +1693,10 @@
           window.open(jobRes.job.result.url, '_blank');
         } else if (jobRes.job.result && jobRes.job.result.content) {
           // Manual download if content is returned directly
-          const blob = new Blob([jobRes.job.result.content], { type: format === 'json' ? 'application/json' : 'text/plain' });
+          const mimeType = format === 'docx'
+            ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            : 'text/plain';
+          const blob = new Blob([jobRes.job.result.content], { type: mimeType });
           const link = document.createElement('a');
           link.href = URL.createObjectURL(blob);
           link.download = `export_${state.currentDocId}.${format}`;

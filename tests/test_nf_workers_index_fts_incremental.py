@@ -143,3 +143,46 @@ def test_index_fts_uses_fts_meta_incremental_skip(tmp_path: Path) -> None:
         assert payload_3["docs_indexed"] == 1
         assert payload_3["docs_skipped"] == 0
 
+
+@pytest.mark.unit
+def test_index_fts_graph_extract_failure_is_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "첫 문장.\n둘째 문장."
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    def _raise_graph_extract(_conn, _project_id):  # noqa: ANN001
+        raise RuntimeError("graph exploded")
+
+    monkeypatch.setattr(runner, "materialize_project_graph", _raise_graph_extract)
+
+    job_id = f"job-{uuid.uuid4()}"
+    ctx = runner.WorkerContext(
+        job_id=job_id,
+        project_id=project_id,
+        payload={"scope": doc_id},
+        params={"grouping": {"graph_extract": True}},
+        db_path=db_path,
+    )
+    runner._handle_index_fts(ctx)
+
+    with db.connect(db_path) as conn:
+        payload = _last_event_payload(conn, job_id)
+    assert payload["graph_extract_enabled"] is True
+    graph = payload.get("graph")
+    assert isinstance(graph, dict)
+    assert graph.get("enabled") is True
+    warning = graph.get("warning")
+    assert isinstance(warning, str)
+    assert "graph exploded" in warning

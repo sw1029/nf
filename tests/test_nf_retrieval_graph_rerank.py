@@ -70,6 +70,9 @@ def test_graph_rerank_boosts_seeded_doc(tmp_path: Path) -> None:
         )
 
     assert meta["applied"] is True
+    assert isinstance(meta.get("seed_docs"), list)
+    assert isinstance(meta.get("expanded_docs"), list)
+    assert isinstance(meta.get("boosted_results"), int)
     assert reranked[0]["evidence"]["doc_id"] == "doc-a"
     assert float(reranked[0]["score"]) > float(reranked[1]["score"])
 
@@ -98,5 +101,7 @@ def test_graph_rerank_skips_when_no_seed(tmp_path: Path) -> None:
         )
 
     assert meta["applied"] is False
+    assert meta.get("seed_docs") == []
+    assert meta.get("expanded_docs") == []
+    assert int(meta.get("boosted_results", -1)) == 0
     assert reranked == results
-

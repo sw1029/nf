@@ -10,6 +10,7 @@ from modules.nf_model_gateway.contracts import (
     ExtractionCandidate,
     ModelGateway,
 )
+from modules.nf_model_gateway.local.nli_model import infer_nli
 from modules.nf_model_gateway.prompting import build_remote_extraction_prompt, build_remote_prompt
 from modules.nf_model_gateway.remote.circuit_breaker import CircuitBreaker
 from modules.nf_model_gateway.remote.provider import mask_sensitive, select_remote_provider
@@ -17,10 +18,13 @@ from modules.nf_model_gateway.remote.rate_limit import RateLimiter
 from modules.nf_shared.config import Settings, load_config
 from modules.nf_shared.logging import get_logger
 
+GatewayPurpose = Literal["consistency", "suggest_local_rule", "suggest_local_gen", "remote_api"]
+
 
 class BasicModelGateway:
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, *, purpose: GatewayPurpose | None = None) -> None:
         self._settings = settings or load_config()
+        self._purpose: GatewayPurpose = purpose or "suggest_local_rule"
         self._rate_limiter = RateLimiter()
         self._circuit_breaker = CircuitBreaker()
         self._remote_provider = select_remote_provider()
@@ -29,15 +33,31 @@ class BasicModelGateway:
     def nli_score(self, bundle: EvidenceBundle) -> float:
         if self._settings.evidence_required_for_model_output and not bundle.get("evidence"):
             return 0.0
-        return 0.5
+        if self._purpose != "consistency":
+            return 0.0
+        claim_text = str(bundle.get("claim_text", "") or "")
+        evidence = bundle.get("evidence") or []
+        snippets: list[str] = []
+        for item in evidence:
+            if isinstance(item, dict):
+                snippet = str(item.get("snippet_text", "") or "")
+                if snippet:
+                    snippets.append(snippet)
+        premise = "\n".join(snippets[:3])
+        score = infer_nli(premise, claim_text)
+        return max(0.0, min(1.0, float(score)))
 
     def suggest_local_rule(self, bundle: EvidenceBundle) -> str:
+        if self._purpose == "consistency":
+            raise RuntimeError("consistency gateway does not generate suggestions")
         evidence_count = len(bundle.get("evidence") or [])
         if self._settings.evidence_required_for_model_output and evidence_count == 0:
             return "insufficient evidence"
         return f"{bundle.get('claim_text', '')} (evidence: {evidence_count})"
 
     def suggest_remote_api(self, bundle: EvidenceBundle) -> str:
+        if self._purpose != "remote_api":
+            raise RuntimeError("remote API gateway is not selected for this purpose")
         if not self._settings.enable_remote_api:
             raise RuntimeError("remote api disabled")
         if self._settings.evidence_required_for_model_output and not bundle.get("evidence"):
@@ -58,16 +78,22 @@ class BasicModelGateway:
         return result
 
     def suggest_local_gen(self, bundle: EvidenceBundle) -> str:
+        if self._purpose != "suggest_local_gen":
+            raise RuntimeError("local generator gateway is not selected for this purpose")
         if not self._settings.enable_local_generator:
             raise RuntimeError("local generator disabled")
         return self.suggest_local_rule(bundle)
 
     def extract_slots_local(self, bundle: ExtractionBundle) -> list[ExtractionCandidate]:
+        if self._purpose != "consistency":
+            return []
         if not self._settings.enable_layer3_model and not self._settings.enable_local_generator:
             return []
         return _heuristic_extract(bundle)
 
     def extract_slots_remote(self, bundle: ExtractionBundle) -> list[ExtractionCandidate]:
+        if self._purpose != "consistency":
+            return []
         if not self._settings.enable_remote_api:
             return []
         if not self._rate_limiter.allow():
@@ -90,8 +116,7 @@ class BasicModelGateway:
 def select_model(
     purpose: Literal["consistency", "suggest_local_rule", "suggest_local_gen", "remote_api"] | None = None
 ) -> ModelGateway:
-    _ = purpose
-    return BasicModelGateway()
+    return BasicModelGateway(purpose=purpose)
 
 
 _AGE_RE = re.compile(r"(\d{1,3})\s*(?:살|세)")

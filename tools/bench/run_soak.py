@@ -370,6 +370,9 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
     policy_retry_base_sec = max(0.01, float(task.get("policy_retry_base_sec", 0.5)))
     policy_retry_max_sec = max(policy_retry_base_sec, float(task.get("policy_retry_max_sec", 8.0)))
     adaptive_throttle = bool(task.get("adaptive_throttle", True))
+    graph_enabled = bool(task.get("graph_enabled", False))
+    graph_max_hops = max(1, min(2, int(task.get("graph_max_hops", 1))))
+    graph_rerank_weight = max(0.0, min(0.5, float(task.get("graph_rerank_weight", 0.25))))
 
     rng = random.Random(seed + (stream_id * 9973))
     run_started = now_ts()
@@ -419,6 +422,10 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
                 "chunks_processed": 0.0,
                 "rows_scanned": 0.0,
             },
+            "graph": {
+                "jobs_total": 0,
+                "jobs_applied": 0,
+            },
             "_queue_lags_all_ms": [],
             "_queue_lags_consistency_ms": [],
             "_consistency_elapsed_ms": [],
@@ -459,6 +466,8 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
     consistency_chunks_processed = 0.0
     consistency_rows_scanned = 0.0
     throttle_wait_ms = 0.0
+    graph_jobs_total = 0
+    graph_jobs_applied = 0
 
     adaptive_delay_sec = 0.0
     if adaptive_throttle and streams > max_heavy_jobs:
@@ -476,7 +485,13 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
         if len(errors) < 5:
             errors.append(f"{label}: {exc}")
 
-    def submit_with_retry(*, job_type: str, inputs: dict[str, Any], timeout_sec: float) -> JobRun | None:
+    def submit_with_retry(
+        *,
+        job_type: str,
+        inputs: dict[str, Any],
+        params: dict[str, Any] | None = None,
+        timeout_sec: float,
+    ) -> JobRun | None:
         nonlocal policy_violations, submit_retries, adaptive_delay_sec, network_errors, unexpected_errors
         attempt = 0
         while True:
@@ -488,6 +503,7 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
                     project_id=project_id,
                     job_type=job_type,
                     inputs=inputs,
+                    params=params,
                     timeout_sec=timeout_sec,
                 )
                 if adaptive_throttle and adaptive_delay_sec > 0:
@@ -516,10 +532,16 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
                     errors.append(f"{job_type}: {exc}")
                 return None
 
-    def run_stage(*, job_type: str, inputs: dict[str, Any], timeout_sec: float) -> JobRun | None:
+    def run_stage(
+        *,
+        job_type: str,
+        inputs: dict[str, Any],
+        params: dict[str, Any] | None = None,
+        timeout_sec: float,
+    ) -> JobRun | None:
         nonlocal total_jobs, failed_jobs
         total_jobs += 1
-        run = submit_with_retry(job_type=job_type, inputs=inputs, timeout_sec=timeout_sec)
+        run = submit_with_retry(job_type=job_type, inputs=inputs, params=params, timeout_sec=timeout_sec)
         if run is None:
             failed_jobs += 1
             return None
@@ -575,6 +597,25 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
         if consistency is None:
             time.sleep(max(0.0, sleep_sec))
             continue
+        retrieve_vec = run_stage(
+            job_type="RETRIEVE_VEC",
+            inputs={
+                "query": RETRIEVAL_QUERY,
+                "k": 10,
+                "filters": {},
+            },
+            params={
+                "graph": {
+                    "enabled": graph_enabled,
+                    "max_hops": graph_max_hops,
+                    "rerank_weight": graph_rerank_weight,
+                }
+            },
+            timeout_sec=1200.0,
+        )
+        if retrieve_vec is None:
+            time.sleep(max(0.0, sleep_sec))
+            continue
 
         try:
             client.post(
@@ -589,7 +630,7 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             record_error("retrieval", exc)
 
-        runs = [ingest, index_fts, consistency]
+        runs = [ingest, index_fts, consistency, retrieve_vec]
         for run in runs:
             queue_lag_ms = get_job_queue_lag_ms(db_path, run.job_id)
             queue_lags_all_ms.append(queue_lag_ms)
@@ -609,6 +650,19 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
                 consistency_claims_processed += claims
                 consistency_chunks_processed += chunks
                 consistency_rows_scanned += rows
+            if run.job_type == "RETRIEVE_VEC":
+                graph_meta: dict[str, Any] | None = None
+                for payload in reversed(payloads):
+                    if not isinstance(payload, dict):
+                        continue
+                    maybe_graph = payload.get("graph")
+                    if isinstance(maybe_graph, dict):
+                        graph_meta = maybe_graph
+                        break
+                if graph_meta is not None:
+                    graph_jobs_total += 1
+                    if bool(graph_meta.get("applied")):
+                        graph_jobs_applied += 1
 
         time.sleep(max(0.0, sleep_sec))
 
@@ -663,6 +717,10 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
             "rows_scanned": consistency_rows_scanned,
             "throttle_wait_ms": throttle_wait_ms,
         },
+        "graph": {
+            "jobs_total": graph_jobs_total,
+            "jobs_applied": graph_jobs_applied,
+        },
         "rss_mb_min": min(positive_rss) if positive_rss else 0.0,
         "rss_mb_max": max(positive_rss) if positive_rss else 0.0,
         "rss_drift_pct": rss_drift_pct,
@@ -697,6 +755,8 @@ def _aggregate_streams(stream_results: list[dict[str, Any]], *, hours: float) ->
     chunks_processed = 0.0
     rows_scanned = 0.0
     throttle_wait_ms = 0.0
+    graph_jobs_total = 0
+    graph_jobs_applied = 0
     for item in stream_results:
         queue_lags_all.extend(item.get("_queue_lags_all_ms") or [])
         queue_lags_consistency.extend(item.get("_queue_lags_consistency_ms") or [])
@@ -707,6 +767,9 @@ def _aggregate_streams(stream_results: list[dict[str, Any]], *, hours: float) ->
         chunks_processed += _to_positive_float(workload.get("chunks_processed"))
         rows_scanned += _to_positive_float(workload.get("rows_scanned"))
         throttle_wait_ms += _to_positive_float(workload.get("throttle_wait_ms"))
+        graph_info = item.get("graph") or {}
+        graph_jobs_total += int(graph_info.get("jobs_total", 0) or 0)
+        graph_jobs_applied += int(graph_info.get("jobs_applied", 0) or 0)
 
     failed_ratio = (failed_jobs / total_jobs) if total_jobs else 0.0
     queue_lag_all_p95 = percentile(queue_lags_all, 95)
@@ -753,6 +816,11 @@ def _aggregate_streams(stream_results: list[dict[str, Any]], *, hours: float) ->
             "rows_scanned": rows_scanned,
             "throttle_wait_ms": throttle_wait_ms,
         },
+        "graph": {
+            "jobs_total": graph_jobs_total,
+            "jobs_applied": graph_jobs_applied,
+            "applied_ratio": (graph_jobs_applied / graph_jobs_total) if graph_jobs_total > 0 else 0.0,
+        },
         "rss_mb_min": min(positive_rss) if positive_rss else 0.0,
         "rss_mb_max": max(positive_rss) if positive_rss else 0.0,
         "rss_drift_pct": rss_drift_pct,
@@ -781,6 +849,9 @@ def _run_parallel_once(
     policy_retry_max_sec: float,
     adaptive_throttle: bool,
     max_heavy_jobs: int,
+    graph_enabled: bool,
+    graph_max_hops: int,
+    graph_rerank_weight: float,
 ) -> dict[str, Any]:
     run_started = now_ts()
     run_start_perf = time.perf_counter()
@@ -803,6 +874,9 @@ def _run_parallel_once(
             "policy_retry_base_sec": policy_retry_base_sec,
             "policy_retry_max_sec": policy_retry_max_sec,
             "adaptive_throttle": adaptive_throttle,
+            "graph_enabled": graph_enabled,
+            "graph_max_hops": graph_max_hops,
+            "graph_rerank_weight": graph_rerank_weight,
         }
         for stream_id in range(1, streams + 1)
     ]
@@ -964,6 +1038,9 @@ def main() -> int:
             policy_retry_max_sec=args.policy_retry_max_sec,
             adaptive_throttle=args.adaptive_throttle,
             max_heavy_jobs=args.max_heavy_jobs,
+            graph_enabled=args.graph_enabled,
+            graph_max_hops=args.graph_max_hops,
+            graph_rerank_weight=args.graph_rerank_weight,
         )
 
     repro_runs: list[dict[str, Any]] = []
@@ -988,6 +1065,9 @@ def main() -> int:
                     policy_retry_max_sec=args.policy_retry_max_sec,
                     adaptive_throttle=args.adaptive_throttle,
                     max_heavy_jobs=args.max_heavy_jobs,
+                    graph_enabled=args.graph_enabled,
+                    graph_max_hops=args.graph_max_hops,
+                    graph_rerank_weight=args.graph_rerank_weight,
                 )
             )
 
@@ -1035,6 +1115,7 @@ def main() -> int:
         "consistency_p95_ms": aggregate["consistency_p95_ms"],
         "timings_ms": aggregate["timings_ms"],
         "workload": aggregate["workload"],
+        "graph_runtime": aggregate.get("graph", {}),
         "rss_mb_min": aggregate["rss_mb_min"],
         "rss_mb_max": aggregate["rss_mb_max"],
         "rss_drift_pct": aggregate["rss_drift_pct"],
@@ -1089,6 +1170,7 @@ def main() -> int:
         f"- consistency_p95_ms: `{aggregate['consistency_p95_ms']:.2f}`",
         f"- status_breakdown: `{aggregate['status_breakdown']}`",
         f"- graph: `{result['graph']}`",
+        f"- graph_runtime: `{result['graph_runtime']}`",
         f"- semantic_hash: `{result['repro']['semantic_hash']}`",
         f"- metrics_hash: `{result['repro']['metrics_hash']}`",
         "",

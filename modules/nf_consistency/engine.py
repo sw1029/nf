@@ -207,6 +207,28 @@ def _resolve_schema_scope(req: ConsistencyRequest) -> str:
     return "latest_approved"
 
 
+def _normalize_consistency_filters(raw: Any) -> dict[str, object]:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, object] = {}
+
+    entity_id = raw.get("entity_id")
+    if isinstance(entity_id, str) and entity_id.strip():
+        normalized["entity_id"] = entity_id.strip()
+
+    time_key = raw.get("time_key")
+    if isinstance(time_key, str) and time_key.strip():
+        normalized["time_key"] = time_key.strip()
+
+    timeline_idx = raw.get("timeline_idx")
+    if timeline_idx is not None:
+        try:
+            normalized["timeline_idx"] = int(timeline_idx)
+        except (TypeError, ValueError):
+            pass
+    return normalized
+
+
 def _load_facts_for_scope(
     conn,
     *,
@@ -316,6 +338,8 @@ class ConsistencyEngineImpl:
         snapshot_id = req.get("input_snapshot_id")
         range_info = req.get("range") or {}
         schema_scope = _resolve_schema_scope(req)
+        retrieval_filters = _normalize_consistency_filters(req.get("filters"))
+        metadata_filter_requested = bool(retrieval_filters)
         stats_raw = req.get("stats")
         req_stats = stats_raw if isinstance(stats_raw, dict) else None
         if req_stats is not None:
@@ -425,19 +449,25 @@ class ConsistencyEngineImpl:
                     retrieval_req: dict[str, Any] = {
                         "project_id": project_id,
                         "query": claim_text,
-                        "filters": {},
+                        "filters": dict(retrieval_filters),
                         "k": 3,
                         "stats": retrieval_stats,
                     }
                     results = fts_search(conn, retrieval_req)
-                    if not results and settings.vector_index_mode.upper() != "DISABLED":
+                    if (
+                        not results
+                        and settings.vector_index_mode.upper() != "DISABLED"
+                        and not metadata_filter_requested
+                    ):
                         if project_doc_ids_for_vector is None:
                             project_docs = document_repo.list_documents(conn, project_id)
                             project_doc_ids_for_vector = [item.doc_id for item in project_docs]
+                        vector_filters = dict(retrieval_filters)
+                        vector_filters["doc_ids"] = project_doc_ids_for_vector
                         vector_req: dict[str, Any] = {
                             "project_id": project_id,
                             "query": claim_text,
-                            "filters": {"doc_ids": project_doc_ids_for_vector},
+                            "filters": vector_filters,
                             "k": 3,
                             "stats": retrieval_stats,
                         }

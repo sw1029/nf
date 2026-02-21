@@ -1325,6 +1325,24 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             require_str("input_doc_id")
             require_str("input_snapshot_id")
             require_dict("range")
+            filters = inputs.get("filters")
+            if filters is not None:
+                if not isinstance(filters, dict):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "filters는 객체여야 합니다")
+                entity_id = filters.get("entity_id")
+                time_key = filters.get("time_key")
+                timeline_idx = filters.get("timeline_idx")
+                if entity_id is not None and not isinstance(entity_id, str):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "filters.entity_id는 문자열이어야 합니다")
+                if time_key is not None and not isinstance(time_key, str):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "filters.time_key는 문자열이어야 합니다")
+                if timeline_idx is not None:
+                    try:
+                        int(timeline_idx)
+                    except (TypeError, ValueError) as exc:
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR, "filters.timeline_idx는 정수여야 합니다"
+                        ) from exc
             preflight = inputs.get("preflight")
             if preflight is not None:
                 if not isinstance(preflight, dict):

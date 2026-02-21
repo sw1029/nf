@@ -70,12 +70,130 @@ class ApiClient:
     def post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", path, body)
 
+    def get_text(self, path: str) -> str:
+        url = self.base_url + path
+        req = request.Request(url=url, method="GET")
+        try:
+            with request.urlopen(req, timeout=self.timeout) as resp:
+                return resp.read().decode("utf-8", errors="ignore")
+        except error.HTTPError as exc:
+            payload = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"HTTP {exc.code} {path}: {payload}") from exc
+
 
 @dataclass
 class JobRun:
     job_id: str
     status: str
     elapsed_ms: float
+
+
+def parse_sse_events(raw: str) -> list[tuple[int, dict[str, Any]]]:
+    if not raw:
+        return []
+    out: list[tuple[int, dict[str, Any]]] = []
+    current_id: int | None = None
+    data_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_id, data_lines
+        if not data_lines:
+            current_id = None
+            return
+        data_raw = "\n".join(data_lines).strip()
+        data_lines = []
+        if not data_raw:
+            current_id = None
+            return
+        try:
+            payload = json.loads(data_raw)
+        except json.JSONDecodeError:
+            current_id = None
+            return
+        if isinstance(payload, dict):
+            out.append((int(current_id or 0), payload))
+        current_id = None
+
+    for line in raw.splitlines():
+        if line.startswith(":"):
+            continue
+        if line.startswith("id:"):
+            try:
+                current_id = int(line.split(":", 1)[1].strip())
+            except (TypeError, ValueError):
+                current_id = None
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line.split(":", 1)[1].lstrip())
+            continue
+        if not line.strip():
+            flush()
+    flush()
+    return out
+
+
+def get_job_events(client: ApiClient, job_id: str, *, after_seq: int = 0) -> list[tuple[int, dict[str, Any]]]:
+    # NOTE:
+    # /jobs/{id}/events is an SSE endpoint and may keep the connection open
+    # with "Connection: keep-alive". Reading until EOF can block and timeout.
+    # Parse incrementally and stop on the keep-alive heartbeat comment.
+    url = client.base_url + f"/jobs/{parse.quote(job_id)}/events?after={after_seq}"
+    req = request.Request(url=url, method="GET")
+
+    out: list[tuple[int, dict[str, Any]]] = []
+    current_id: int | None = None
+    data_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_id, data_lines
+        if not data_lines:
+            current_id = None
+            return
+        data_raw = "\n".join(data_lines).strip()
+        data_lines = []
+        if not data_raw:
+            current_id = None
+            return
+        try:
+            payload = json.loads(data_raw)
+        except json.JSONDecodeError:
+            current_id = None
+            return
+        if isinstance(payload, dict):
+            out.append((int(current_id or 0), payload))
+        current_id = None
+
+    try:
+        with request.urlopen(req, timeout=client.timeout) as resp:
+            while True:
+                raw_line = resp.readline()
+                if not raw_line:
+                    break
+                line = raw_line.decode("utf-8", errors="ignore").rstrip("\r\n")
+                if line.startswith(":"):
+                    if line.startswith(": keep-alive"):
+                        break
+                    continue
+                if line.startswith("id:"):
+                    try:
+                        current_id = int(line.split(":", 1)[1].strip())
+                    except (TypeError, ValueError):
+                        current_id = None
+                    continue
+                if line.startswith("data:"):
+                    data_lines.append(line.split(":", 1)[1].lstrip())
+                    continue
+                if not line.strip():
+                    flush()
+    except TimeoutError:
+        # Degrade gracefully: benchmark should continue even if SSE tail closes late.
+        pass
+    except error.HTTPError as exc:
+        payload = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"HTTP {exc.code} /jobs/{job_id}/events: {payload}") from exc
+
+    flush()
+    return out
 
 
 @dataclass
@@ -233,6 +351,9 @@ def run_pipeline_once(
     consistency_samples: int,
     ingest_parallelism: int,
     consistency_parallelism: int,
+    graph_enabled: bool,
+    graph_max_hops: int,
+    graph_rerank_weight: float,
     seed: int,
     run_label: str,
 ) -> BenchRunResult:
@@ -318,10 +439,47 @@ def run_pipeline_once(
     consistency_runs = run_parallel_jobs(consistency_tasks, parallelism=consistency_parallelism)
 
     retrieval_ms: list[float] = []
+    retrieval_vec_ms: list[float] = []
+    retrieve_vec_failures = 0
+    graph_applied = 0
+    graph_total = 0
     for query in _pick_retrieval_queries(records, limit=min(30, len(records)), seed=seed):
         t0 = time.perf_counter()
         client.post("/query/retrieval", {"project_id": project_id, "query": query, "k": 10, "filters": {}})
         retrieval_ms.append((time.perf_counter() - t0) * 1000.0)
+
+        retrieve_vec = submit_and_wait(
+            client,
+            project_id=project_id,
+            job_type="RETRIEVE_VEC",
+            inputs={"query": query, "filters": {}, "k": 10},
+            params={
+                "graph": {
+                    "enabled": bool(graph_enabled),
+                    "max_hops": max(1, min(2, int(graph_max_hops))),
+                    "rerank_weight": max(0.0, min(0.5, float(graph_rerank_weight))),
+                }
+            },
+            timeout_sec=7200.0,
+        )
+        retrieval_vec_ms.append(retrieve_vec.elapsed_ms)
+        if retrieve_vec.status != "SUCCEEDED":
+            retrieve_vec_failures += 1
+            continue
+        for _seq, event in get_job_events(client, retrieve_vec.job_id):
+            message = str((event.get("message") or "")).strip().lower()
+            if message != "retrieve_vec complete":
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            graph = payload.get("graph")
+            if not isinstance(graph, dict):
+                continue
+            graph_total += 1
+            if bool(graph.get("applied")):
+                graph_applied += 1
+            break
 
     finished = now_ts()
     total_elapsed_ms = (time.perf_counter() - bench_start) * 1000.0
@@ -333,6 +491,8 @@ def run_pipeline_once(
         "consistency_p95": percentile([r.elapsed_ms for r in consistency_runs], 95),
         "retrieval_fts_p95": percentile(retrieval_ms, 95),
         "retrieval_fts_p99": percentile(retrieval_ms, 99),
+        "retrieval_vec_p95": percentile(retrieval_vec_ms, 95),
+        "retrieval_vec_p99": percentile(retrieval_vec_ms, 99),
         "total": total_elapsed_ms,
     }
     status = {
@@ -340,15 +500,22 @@ def run_pipeline_once(
         "index_vec": index_vec.status,
         "ingest_failures": len([r for r in ingest_runs if r.status != "SUCCEEDED"]),
         "consistency_failures": len([r for r in consistency_runs if r.status != "SUCCEEDED"]),
+        "retrieve_vec_failures": retrieve_vec_failures,
     }
 
     semantic = {
         "doc_count": len(doc_ids),
         "status": status,
+        "graph": {
+            "enabled": bool(graph_enabled),
+            "applied_count": graph_applied,
+            "sampled_jobs": graph_total,
+        },
         "guards": {
             "index_jobs_succeeded": status["index_fts"] == "SUCCEEDED" and status["index_vec"] == "SUCCEEDED",
             "ingest_failures_zero": status["ingest_failures"] == 0,
             "consistency_failures_zero": status["consistency_failures"] == 0,
+            "retrieve_vec_failures_zero": status["retrieve_vec_failures"] == 0,
         },
     }
     semantic_hash = sha256_obj(normalize_semantic(semantic))
@@ -455,6 +622,9 @@ def main() -> int:
             consistency_samples=args.consistency_samples,
             ingest_parallelism=args.ingest_parallelism,
             consistency_parallelism=args.consistency_parallelism,
+            graph_enabled=args.graph_enabled,
+            graph_max_hops=args.graph_max_hops,
+            graph_rerank_weight=args.graph_rerank_weight,
             seed=args.seed,
             run_label="throughput",
         )
@@ -471,6 +641,9 @@ def main() -> int:
                     consistency_samples=min(args.consistency_samples, args.repro_limit_docs),
                     ingest_parallelism=args.ingest_parallelism,
                     consistency_parallelism=args.consistency_parallelism,
+                    graph_enabled=args.graph_enabled,
+                    graph_max_hops=args.graph_max_hops,
+                    graph_rerank_weight=args.graph_rerank_weight,
                     seed=args.seed,
                     run_label=f"repro-{idx + 1}",
                 )
@@ -484,10 +657,12 @@ def main() -> int:
 
     consistency_vals = [run.timings_ms.get("consistency_p95", 0.0) for run in repro_runs]
     retrieval_vals = [run.timings_ms.get("retrieval_fts_p95", 0.0) for run in repro_runs]
+    retrieval_vec_vals = [run.timings_ms.get("retrieval_vec_p95", 0.0) for run in repro_runs]
     ingest_vals = [run.timings_ms.get("ingest_p95", 0.0) for run in repro_runs]
     metrics_cv = {
         "consistency_p95_cv": coefficient_of_variation(consistency_vals),
         "retrieval_fts_p95_cv": coefficient_of_variation(retrieval_vals),
+        "retrieval_vec_p95_cv": coefficient_of_variation(retrieval_vec_vals),
         "ingest_p95_cv": coefficient_of_variation(ingest_vals),
     }
 
@@ -540,6 +715,10 @@ def main() -> int:
             "rerank_weight": max(0.0, min(0.5, float(args.graph_rerank_weight))),
             "applied_path": "retrieve_vec_async_only",
         },
+        "graph_runtime": {
+            "applied_count": int((main_run.semantic.get("graph") or {}).get("applied_count", 0)),
+            "sampled_jobs": int((main_run.semantic.get("graph") or {}).get("sampled_jobs", 0)),
+        },
         "repro": {
             "seed": args.seed,
             "dataset_hash": main_run.dataset_hash,
@@ -569,6 +748,8 @@ def main() -> int:
         f"- ingest_p95_ms: `{main_run.timings_ms.get('ingest_p95', 0.0):.2f}`",
         f"- consistency_p95_ms: `{main_run.timings_ms.get('consistency_p95', 0.0):.2f}`",
         f"- retrieval_fts_p95_ms: `{main_run.timings_ms.get('retrieval_fts_p95', 0.0):.2f}`",
+        f"- retrieval_vec_p95_ms: `{main_run.timings_ms.get('retrieval_vec_p95', 0.0):.2f}`",
+        f"- graph_runtime: `{output['graph_runtime']}`",
         f"- semantic_hash: `{output['repro']['semantic_hash']}`",
         f"- metrics_hash: `{output['repro']['metrics_hash']}`",
         f"- graph: `{output['graph']}`",

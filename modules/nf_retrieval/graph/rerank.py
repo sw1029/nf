@@ -100,7 +100,15 @@ def rerank_results_with_graph(
     max_hops = 1 if max_hops < 1 else min(2, max_hops)
     rerank_weight = max(0.0, min(0.5, rerank_weight))
     if not results or rerank_weight <= 0:
-        return results, {"applied": False, "reason": "empty_or_zero_weight"}
+        return results, {
+            "applied": False,
+            "reason": "empty_or_zero_weight",
+            "seed_docs": [],
+            "expanded_docs": [],
+            "boosted_results": 0,
+            "seed_doc_count": 0,
+            "boosted_result_count": 0,
+        }
 
     graph = load_project_graph(project_id)
     if graph is None:
@@ -108,11 +116,27 @@ def rerank_results_with_graph(
 
     seeds = _collect_seed_docs(graph, query, filters)
     if not seeds:
-        return results, {"applied": False, "reason": "no_seeds"}
+        return results, {
+            "applied": False,
+            "reason": "no_seeds",
+            "seed_docs": [],
+            "expanded_docs": [],
+            "boosted_results": 0,
+            "seed_doc_count": 0,
+            "boosted_result_count": 0,
+        }
 
     distances = _expand_docs(graph, seeds, max_hops=max_hops)
     if not distances:
-        return results, {"applied": False, "reason": "no_reachable_docs"}
+        return results, {
+            "applied": False,
+            "reason": "no_reachable_docs",
+            "seed_docs": sorted(seeds),
+            "expanded_docs": [],
+            "boosted_results": 0,
+            "seed_doc_count": len(seeds),
+            "boosted_result_count": 0,
+        }
 
     reranked: list[dict[str, Any]] = []
     boosted = 0
@@ -137,11 +161,16 @@ def rerank_results_with_graph(
         boosted += 1
 
     reranked.sort(key=lambda row: float(row.get("score") or 0.0), reverse=True)
+    seed_docs = sorted(seeds)
+    expanded_docs = sorted(distances.keys())
     return reranked, {
         "applied": True,
         "max_hops": max_hops,
         "rerank_weight": rerank_weight,
-        "seed_doc_count": len(seeds),
+        "seed_docs": seed_docs,
+        "expanded_docs": expanded_docs,
+        "boosted_results": boosted,
+        # Backward compatible aliases.
+        "seed_doc_count": len(seed_docs),
         "boosted_result_count": boosted,
     }
-

@@ -1004,6 +1004,7 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
     anchors_created = 0
     timeline_events_created = 0
     graph_index_meta: dict[str, Any] | None = None
+    graph_warning: str | None = None
     grouping = ctx.params.get("grouping") if isinstance(ctx.params, dict) else None
     if not isinstance(grouping, dict):
         grouping = None
@@ -1167,12 +1168,31 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                         anchors_created += 1
             conn.commit()
         if graph_extract:
-            graph_doc = materialize_project_graph(conn, ctx.project_id)
-            graph_index_meta = {
-                "nodes_entity": len(graph_doc.get("entity_doc_ids") or {}),
-                "nodes_time": len(graph_doc.get("time_doc_ids") or {}),
-                "nodes_timeline": len(graph_doc.get("timeline_doc_ids") or {}),
-            }
+            try:
+                graph_doc = materialize_project_graph(conn, ctx.project_id)
+                graph_index_meta = {
+                    "nodes_entity": len(graph_doc.get("entity_doc_ids") or {}),
+                    "nodes_time": len(graph_doc.get("time_doc_ids") or {}),
+                    "nodes_timeline": len(graph_doc.get("timeline_doc_ids") or {}),
+                }
+            except Exception as exc:  # noqa: BLE001
+                graph_warning = f"graph materialize skipped: {exc}"
+                ctx.emit(
+                    JobEvent(
+                        event_id="",
+                        job_id=ctx.job_id,
+                        ts="",
+                        level=JobEventLevel.WARN,
+                        message="graph extract skipped",
+                        progress=None,
+                        payload={
+                            "graph": {
+                                "enabled": True,
+                                "warning": graph_warning,
+                            }
+                        },
+                    )
+                )
 
     ctx.emit(
         JobEvent(
@@ -1192,6 +1212,11 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                 "timeline_events_created": timeline_events_created,
                 "graph_extract_enabled": graph_extract,
                 "graph_index": graph_index_meta,
+                "graph": {
+                    "enabled": graph_extract,
+                    "index": graph_index_meta,
+                    "warning": graph_warning,
+                },
                 **_standard_metrics_payload(
                     start_perf=start_perf,
                     chunks_processed=indexed,
@@ -1347,6 +1372,23 @@ def _handle_consistency(ctx: WorkerContext) -> None:
     if not isinstance(doc_id, str) or not isinstance(snapshot_id, str):
         raise RuntimeError("input_doc_id/input_snapshot_id missing")
 
+    filters_raw = req.get("filters")
+    filters = filters_raw if isinstance(filters_raw, dict) else {}
+    scoped_filters: dict[str, Any] = {}
+    entity_id = filters.get("entity_id")
+    if isinstance(entity_id, str) and entity_id.strip():
+        scoped_filters["entity_id"] = entity_id.strip()
+    time_key = filters.get("time_key")
+    if isinstance(time_key, str) and time_key.strip():
+        scoped_filters["time_key"] = time_key.strip()
+    timeline_idx = filters.get("timeline_idx")
+    if timeline_idx is not None:
+        try:
+            scoped_filters["timeline_idx"] = int(timeline_idx)
+        except (TypeError, ValueError):
+            pass
+    req["filters"] = scoped_filters
+
     _run_consistency_preflight(ctx, doc_id=doc_id, snapshot_id=snapshot_id, preflight=preflight)
 
     req["preflight"] = preflight
@@ -1408,7 +1450,14 @@ def _handle_retrieve_vec(ctx: WorkerContext) -> None:
         graph_rerank_weight = float(graph_rerank_weight)
     except (TypeError, ValueError):
         graph_rerank_weight = 0.25
-    graph_meta: dict[str, Any] = {"enabled": graph_enabled, "applied": False}
+    graph_meta: dict[str, Any] = {
+        "enabled": graph_enabled,
+        "applied": False,
+        "reason": "disabled" if not graph_enabled else "",
+        "seed_docs": [],
+        "expanded_docs": [],
+        "boosted_results": 0,
+    }
     if not isinstance(query, str):
         raise RuntimeError("query missing")
     req_stats: dict[str, Any] = {}
@@ -1424,7 +1473,7 @@ def _handle_retrieve_vec(ctx: WorkerContext) -> None:
         with db.connect(ctx._db_path) as conn:
             results = _filter_results_by_meta(conn, ctx.project_id, results, filters)
             if graph_enabled:
-                results, graph_meta = rerank_results_with_graph(
+                results, rerank_meta = rerank_results_with_graph(
                     conn,
                     project_id=ctx.project_id,
                     query=query,
@@ -1433,6 +1482,8 @@ def _handle_retrieve_vec(ctx: WorkerContext) -> None:
                     max_hops=graph_max_hops,
                     rerank_weight=graph_rerank_weight,
                 )
+                graph_meta.update(rerank_meta)
+                graph_meta["enabled"] = True
     if not results:
         with db.connect(ctx._db_path) as conn:
             results = fts_search(conn, req)
@@ -1484,7 +1535,12 @@ def _handle_suggest(ctx: WorkerContext) -> None:
     if not isinstance(range_info, dict):
         range_info = {}
     mode = SuggestMode(mode_raw) if isinstance(mode_raw, str) else SuggestMode.LOCAL_RULE
-    gateway = select_model(purpose="suggest_local_rule")
+    purpose = "suggest_local_rule"
+    if mode is SuggestMode.API:
+        purpose = "remote_api"
+    elif mode is SuggestMode.LOCAL_GEN:
+        purpose = "suggest_local_gen"
+    gateway = select_model(purpose=purpose)
 
     doc_scope = None
     doc_id_raw = range_info.get("doc_id")

@@ -14,6 +14,7 @@ def test_consistency_request_typed_dict_fields() -> None:
         "schema_ver",
         "preflight",
         "schema_scope",
+        "filters",
         "extraction",
         "stats",
     }
