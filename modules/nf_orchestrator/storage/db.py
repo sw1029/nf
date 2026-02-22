@@ -368,9 +368,11 @@ def _initialize(conn: sqlite3.Connection) -> None:
     _ensure_columns(conn, "jobs", "error_message", "error_message TEXT")
     _ensure_columns(conn, "documents", "metadata_json", "metadata_json TEXT")
     _ensure_columns(conn, "verdict_log", "claim_fingerprint", "claim_fingerprint TEXT")
+    _ensure_columns(conn, "verdict_log", "unknown_reasons_json", "unknown_reasons_json TEXT")
     _ensure_indexes(conn)
     _drop_redundant_indexes(conn)
     _backfill_verdict_log_claim_fingerprints(conn)
+    _backfill_verdict_log_unknown_reasons(conn)
     conn.commit()
 
 
@@ -431,4 +433,21 @@ def _backfill_verdict_log_claim_fingerprints(conn: sqlite3.Connection) -> None:
         conn.execute(
             "UPDATE verdict_log SET claim_fingerprint = ? WHERE vid = ?",
             (_fingerprint(row["claim_text"] or ""), row["vid"]),
+        )
+
+
+def _backfill_verdict_log_unknown_reasons(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT vid
+        FROM verdict_log
+        WHERE unknown_reasons_json IS NULL OR unknown_reasons_json = ''
+        """,
+    ).fetchall()
+    if not rows:
+        return
+    for row in rows:
+        conn.execute(
+            "UPDATE verdict_log SET unknown_reasons_json = '[]' WHERE vid = ?",
+            (row["vid"],),
         )

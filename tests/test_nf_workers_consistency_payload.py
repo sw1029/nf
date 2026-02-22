@@ -141,6 +141,12 @@ def test_consistency_complete_payload_includes_unknown_reason_counts(
     assert isinstance(reason_counts, dict)
     assert int(reason_counts.get("NO_EVIDENCE", 0)) == 1
     assert int(reason_counts.get("SLOT_UNCOMPARABLE", 0)) == 1
+    assert payload.get("graph_mode") == "off"
+    assert "graph_expand_applied_count" in payload
+    assert "graph_auto_trigger_count" in payload
+    assert "graph_auto_skip_count" in payload
+    assert "layer3_rerank_applied_count" in payload
+    assert "layer3_model_fallback_count" in payload
 
 
 @pytest.mark.unit
@@ -191,6 +197,8 @@ def test_consistency_worker_forwards_layer3_promotion_options(
                 "layer3_min_fts_for_promotion": 0.33,
                 "layer3_max_claim_chars": 180,
                 "layer3_ok_threshold": 0.91,
+                "layer3_contradict_threshold": 0.86,
+                "graph_mode": "auto",
             }
         },
         db_path=db_path,
@@ -201,3 +209,5 @@ def test_consistency_worker_forwards_layer3_promotion_options(
     assert float(captured_req.get("layer3_min_fts_for_promotion", 0.0)) == pytest.approx(0.33)
     assert int(captured_req.get("layer3_max_claim_chars", 0)) == 180
     assert float(captured_req.get("layer3_ok_threshold", 0.0)) == pytest.approx(0.91)
+    assert float(captured_req.get("layer3_contradict_threshold", 0.0)) == pytest.approx(0.86)
+    assert captured_req.get("graph_mode") == "auto"

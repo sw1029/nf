@@ -70,4 +70,5 @@ class QueryServiceImpl:
                 "claim_fingerprint": fingerprint,
                 "whitelisted": whitelisted,
                 "ignored": ignored,
+                "unknown_reasons": list(verdict.unknown_reasons),
             }

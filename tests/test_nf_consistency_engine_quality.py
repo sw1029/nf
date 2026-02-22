@@ -86,6 +86,13 @@ def test_segment_text_handles_decimal_ellipsis_and_quote_tail() -> None:
     ]
 
 
+@pytest.mark.unit
+def test_resolve_graph_mode_keeps_legacy_compatibility() -> None:
+    assert consistency_engine._resolve_graph_mode({}, legacy_enabled=False) == "off"
+    assert consistency_engine._resolve_graph_mode({}, legacy_enabled=True) == "manual"
+    assert consistency_engine._resolve_graph_mode({"graph_mode": "auto"}, legacy_enabled=True) == "auto"
+
+
 @dataclass(frozen=True)
 class _FakeFact:
     evidence_eid: str
@@ -202,7 +209,7 @@ def test_consistency_two_stage_retrieval_can_surface_graph_boosted_candidate(
             "input_doc_id": doc_id,
             "input_snapshot_id": snapshot_id,
             "range": {"start": 0, "end": len(text)},
-            "graph_expand_enabled": True,
+            "graph_mode": "manual",
         }
     )
 

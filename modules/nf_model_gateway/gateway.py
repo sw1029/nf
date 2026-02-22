@@ -10,7 +10,7 @@ from modules.nf_model_gateway.contracts import (
     ExtractionCandidate,
     ModelGateway,
 )
-from modules.nf_model_gateway.local.nli_model import infer_nli
+from modules.nf_model_gateway.local.nli_model import infer_nli_distribution
 from modules.nf_model_gateway.prompting import build_remote_extraction_prompt, build_remote_prompt
 from modules.nf_model_gateway.remote.circuit_breaker import CircuitBreaker
 from modules.nf_model_gateway.remote.provider import mask_sensitive, select_remote_provider
@@ -44,8 +44,17 @@ class BasicModelGateway:
                 if snippet:
                     snippets.append(snippet)
         premise = "\n".join(snippets[:3])
-        score = infer_nli(premise, claim_text)
-        return max(0.0, min(1.0, float(score)))
+        scores = infer_nli_distribution(
+            premise,
+            claim_text,
+            enabled=bool(self._settings.enable_local_nli),
+            model_id=str(self._settings.local_nli_model_id),
+        )
+        try:
+            entail = float(scores.get("entail", 0.0))
+        except (TypeError, ValueError):
+            entail = 0.0
+        return max(0.0, min(1.0, entail))
 
     def suggest_local_rule(self, bundle: EvidenceBundle) -> str:
         if self._purpose == "consistency":

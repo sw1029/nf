@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping
 
@@ -376,6 +376,7 @@ class VerdictLog:
     breakdown: ReliabilityBreakdown
     whitelist_applied: bool
     created_at: AppTimestamp
+    unknown_reasons: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)

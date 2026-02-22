@@ -29,6 +29,12 @@ def _as_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _safe_ratio(numerator: float, denominator: float) -> float:
+    if denominator <= 0:
+        return 0.0
+    return numerator / denominator
+
+
 def _pipeline_thresholds(doc_count: int) -> tuple[float, float]:
     # Aligned with current policy notes in IMPLEMENTATION_STATUS:
     # retrieval_fts_p95: DS-200 <= 300ms, DS-800 <= 450ms
@@ -42,9 +48,10 @@ def _render_bool(value: bool) -> str:
     return "PASS" if value else "FAIL"
 
 
-def _pipeline_report(payload: dict[str, Any]) -> tuple[bool, bool, list[str]]:
+def _pipeline_report(payload: dict[str, Any], baseline: dict[str, Any] | None = None) -> tuple[bool, bool, list[str]]:
     status = payload.get("status") or {}
     timings = payload.get("timings_ms") or {}
+    consistency_runtime = payload.get("consistency_runtime") or {}
     doc_count = _as_int(payload.get("doc_count"), 0)
 
     execution_complete = all(
@@ -56,13 +63,36 @@ def _pipeline_report(payload: dict[str, Any]) -> tuple[bool, bool, list[str]]:
     )
 
     retrieval_fts_target, consistency_target = _pipeline_thresholds(doc_count)
+    baseline_timings = (baseline or {}).get("timings_ms") or {}
+    baseline_consistency = _as_float(baseline_timings.get("consistency_p95"), 0.0)
+    baseline_retrieval = _as_float(baseline_timings.get("retrieval_fts_p95"), 0.0)
+    current_consistency = _as_float(timings.get("consistency_p95"))
+    current_retrieval = _as_float(timings.get("retrieval_fts_p95"))
+    consistency_regressed_ok = True
+    retrieval_regressed_ok = True
+    if baseline_consistency > 0.0:
+        consistency_regressed_ok = current_consistency <= (baseline_consistency * 1.10)
+    if baseline_retrieval > 0.0:
+        retrieval_regressed_ok = current_retrieval <= (baseline_retrieval * 1.10)
+
+    graph_mode = str(consistency_runtime.get("graph_mode") or "off")
+    graph_expand_applied_count = _as_int(consistency_runtime.get("graph_expand_applied_count"), 0)
+    graph_auto_trigger_count = _as_int(consistency_runtime.get("graph_auto_trigger_count"), 0)
+    graph_auto_skip_count = _as_int(consistency_runtime.get("graph_auto_skip_count"), 0)
+    auto_total = graph_auto_trigger_count + graph_auto_skip_count
+    auto_apply_rate = _safe_ratio(float(graph_auto_trigger_count), float(auto_total))
+
     goal_checks = {
         "index_jobs_succeeded": status.get("index_fts") == "SUCCEEDED" and status.get("index_vec") == "SUCCEEDED",
         "ingest_failures_zero": _as_int(status.get("ingest_failures")) == 0,
         "consistency_failures_zero": _as_int(status.get("consistency_failures")) == 0,
         "retrieve_vec_failures_zero": _as_int(status.get("retrieve_vec_failures")) == 0,
-        "retrieval_fts_p95_gate": _as_float(timings.get("retrieval_fts_p95")) <= retrieval_fts_target,
-        "consistency_p95_gate": _as_float(timings.get("consistency_p95")) <= consistency_target,
+        "retrieval_fts_p95_gate": current_retrieval <= retrieval_fts_target,
+        "consistency_p95_gate": current_consistency <= consistency_target,
+        "consistency_p95_regression_le_10pct": consistency_regressed_ok,
+        "retrieval_fts_p95_regression_le_10pct": retrieval_regressed_ok,
+        "graph_off_applied_zero": graph_mode != "off" or graph_expand_applied_count == 0,
+        "graph_auto_apply_rate_le_30pct": graph_mode != "auto" or auto_apply_rate <= 0.30,
     }
     goal_achieved = all(goal_checks.values())
 
@@ -70,11 +100,16 @@ def _pipeline_report(payload: dict[str, Any]) -> tuple[bool, bool, list[str]]:
         f"- pipeline_execution_complete: `{_render_bool(execution_complete)}`",
         f"- pipeline_goal_achieved: `{_render_bool(goal_achieved)}`",
         f"- pipeline_doc_count: `{doc_count}`",
-        f"- pipeline_retrieval_fts_p95_ms: `{_as_float(timings.get('retrieval_fts_p95')):.2f}` (target <= {retrieval_fts_target:.0f})",
-        f"- pipeline_consistency_p95_ms: `{_as_float(timings.get('consistency_p95')):.2f}` (target <= {consistency_target:.0f})",
+        f"- pipeline_retrieval_fts_p95_ms: `{current_retrieval:.2f}` (target <= {retrieval_fts_target:.0f})",
+        f"- pipeline_consistency_p95_ms: `{current_consistency:.2f}` (target <= {consistency_target:.0f})",
         f"- pipeline_retrieval_vec_p95_ms: `{_as_float(timings.get('retrieval_vec_p95')):.2f}`",
+        f"- baseline_consistency_p95_ms: `{baseline_consistency:.2f}`",
+        f"- baseline_retrieval_fts_p95_ms: `{baseline_retrieval:.2f}`",
         f"- pipeline_graph: `{payload.get('graph')}`",
         f"- pipeline_graph_runtime: `{payload.get('graph_runtime')}`",
+        f"- pipeline_consistency_runtime: `{consistency_runtime}`",
+        f"- consistency_graph_mode: `{graph_mode}`",
+        f"- consistency_graph_auto_apply_rate: `{auto_apply_rate:.4f}`",
     ]
     for key, passed in goal_checks.items():
         lines.append(f"- {key}: `{_render_bool(passed)}`")
@@ -117,11 +152,13 @@ def _soak_report(payload: dict[str, Any]) -> tuple[bool, bool, list[str]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Render execution-vs-goal gate report from benchmark artifacts.")
     parser.add_argument("--pipeline", type=Path, default=None)
+    parser.add_argument("--pipeline-baseline", type=Path, default=None)
     parser.add_argument("--soak", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
     pipeline = _load_json(args.pipeline)
+    pipeline_baseline = _load_json(args.pipeline_baseline)
     soak = _load_json(args.soak)
     if pipeline is None and soak is None:
         raise SystemExit("at least one of --pipeline or --soak is required")
@@ -141,6 +178,8 @@ def main() -> int:
     ]
     if args.pipeline is not None:
         lines.append(f"- pipeline_artifact: `{args.pipeline}`")
+    if args.pipeline_baseline is not None:
+        lines.append(f"- pipeline_baseline_artifact: `{args.pipeline_baseline}`")
     if args.soak is not None:
         lines.append(f"- soak_artifact: `{args.soak}`")
     lines.append("")
@@ -148,7 +187,7 @@ def main() -> int:
     overall_execution = True
     overall_goal = True
     if pipeline is not None:
-        execution_ok, goal_ok, report_lines = _pipeline_report(pipeline)
+        execution_ok, goal_ok, report_lines = _pipeline_report(pipeline, pipeline_baseline)
         overall_execution = overall_execution and execution_ok
         overall_goal = overall_goal and goal_ok
         lines.append("## Pipeline")

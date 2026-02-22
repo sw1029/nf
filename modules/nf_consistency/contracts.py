@@ -31,12 +31,14 @@ class ConsistencyRequest(TypedDict, total=False):
     exclude_self_evidence: bool
     self_evidence_scope: ConsistencySelfEvidenceScope
     graph_expand_enabled: bool
+    graph_mode: Literal["off", "manual", "auto"]
     graph_max_hops: int
     graph_doc_cap: int
     layer3_verdict_promotion: bool
     layer3_min_fts_for_promotion: float
     layer3_max_claim_chars: int
     layer3_ok_threshold: float
+    layer3_contradict_threshold: float
 
 
 class ConsistencyEngine(Protocol):

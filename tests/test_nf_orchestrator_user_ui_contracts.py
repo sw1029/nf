@@ -17,7 +17,9 @@ def test_user_ui_verdict_renderer_uses_current_api_fields() -> None:
     html = Path("modules/nf_orchestrator/user_ui.html").read_text(encoding="utf-8")
     assert "claim_text" in html
     assert "reliability_overall" in html
-    assert "v.claim || '내용 없음'" not in html
+    assert "unknown_reasons" in html
+    assert "analysis-card.unknown" in html
+    assert "v.claim ||" not in html
 
 
 @pytest.mark.unit
@@ -32,3 +34,13 @@ def test_user_ui_export_formats_match_backend_contract() -> None:
     assert 'name="export-fmt" value="txt"' in html
     assert 'name="export-fmt" value="docx"' in html
     assert 'name="export-fmt" value="json"' not in html
+
+
+@pytest.mark.unit
+def test_user_ui_has_background_consistency_hooks() -> None:
+    html = Path("modules/nf_orchestrator/user_ui.html").read_text(encoding="utf-8")
+    assert "_segmentTextForConsistency" in html
+    assert "pendingConsistencySegments" in html
+    assert "scheduleBackgroundConsistencyCheck" in html
+    assert "runBackgroundConsistencyCheck" in html
+    assert "toggle-show-ok" in html

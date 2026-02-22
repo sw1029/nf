@@ -1,23 +1,28 @@
 from __future__ import annotations
 
-import re
+from typing import Any
 
+from modules.nf_model_gateway.local.text_pair_classifier import classify_text_pair
 
-_TOKEN_RE = re.compile(r"\w+", flags=re.UNICODE)
-
-
-def _tokens(text: str) -> set[str]:
-    return {token.lower() for token in _TOKEN_RE.findall(text or "") if token}
+def infer_nli_distribution(
+    premise: str,
+    hypothesis: str,
+    *,
+    enabled: bool = False,
+    model_id: str | None = None,
+) -> dict[str, Any]:
+    return classify_text_pair(
+        premise,
+        hypothesis,
+        enabled=enabled,
+        model_id=model_id,
+    )
 
 
 def infer_nli(premise: str, hypothesis: str) -> float:
-    if not premise or not hypothesis:
-        return 0.0
-    premise_tokens = _tokens(premise)
-    hypothesis_tokens = _tokens(hypothesis)
-    if not premise_tokens or not hypothesis_tokens:
-        return 0.0
-    overlap = len(premise_tokens & hypothesis_tokens)
-    coverage = overlap / max(1, len(hypothesis_tokens))
-    # Conservative score to avoid overconfident promotion.
-    return max(0.0, min(1.0, 0.1 + (0.8 * coverage)))
+    scores = infer_nli_distribution(premise, hypothesis, enabled=False, model_id=None)
+    try:
+        entail = float(scores.get("entail", 0.0))
+    except (TypeError, ValueError):
+        entail = 0.0
+    return max(0.0, min(1.0, entail))

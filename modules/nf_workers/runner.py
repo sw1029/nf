@@ -1412,6 +1412,9 @@ def _handle_consistency(ctx: WorkerContext) -> None:
         graph_expand_enabled = consistency_params.get("graph_expand_enabled")
         if isinstance(graph_expand_enabled, bool):
             req["graph_expand_enabled"] = graph_expand_enabled
+        graph_mode = consistency_params.get("graph_mode")
+        if isinstance(graph_mode, str):
+            req["graph_mode"] = graph_mode
         graph_max_hops = consistency_params.get("graph_max_hops")
         if isinstance(graph_max_hops, int):
             req["graph_max_hops"] = graph_max_hops
@@ -1430,6 +1433,9 @@ def _handle_consistency(ctx: WorkerContext) -> None:
         layer3_ok_threshold = consistency_params.get("layer3_ok_threshold")
         if isinstance(layer3_ok_threshold, (int, float)):
             req["layer3_ok_threshold"] = float(layer3_ok_threshold)
+        layer3_contradict_threshold = consistency_params.get("layer3_contradict_threshold")
+        if isinstance(layer3_contradict_threshold, (int, float)):
+            req["layer3_contradict_threshold"] = float(layer3_contradict_threshold)
     req_stats: dict[str, Any] = {}
     req["stats"] = req_stats
     verdicts = engine.run(req)
@@ -1458,6 +1464,12 @@ def _handle_consistency(ctx: WorkerContext) -> None:
                 "unknown_reason_counts": dict(req_stats.get("unknown_reason_counts", {}))
                 if isinstance(req_stats.get("unknown_reason_counts"), dict)
                 else {},
+                "graph_mode": str(req_stats.get("graph_mode", req.get("graph_mode", "off"))),
+                "graph_expand_applied_count": int(req_stats.get("graph_expand_applied_count", 0)),
+                "graph_auto_trigger_count": int(req_stats.get("graph_auto_trigger_count", 0)),
+                "graph_auto_skip_count": int(req_stats.get("graph_auto_skip_count", 0)),
+                "layer3_rerank_applied_count": int(req_stats.get("layer3_rerank_applied_count", 0)),
+                "layer3_model_fallback_count": int(req_stats.get("layer3_model_fallback_count", 0)),
                 **_standard_metrics_payload(
                     start_perf=start_perf,
                     claims_processed=int(req_stats.get("claims_processed", total)),

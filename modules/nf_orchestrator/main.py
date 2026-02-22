@@ -1422,6 +1422,13 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                         ErrorCode.VALIDATION_ERROR,
                         "params.consistency.graph_expand_enabled must be boolean",
                     )
+                graph_mode_raw = consistency_raw.get("graph_mode")
+                if graph_mode_raw is not None:
+                    if not isinstance(graph_mode_raw, str) or graph_mode_raw not in {"off", "manual", "auto"}:
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.graph_mode must be off, manual, or auto",
+                        )
                 graph_hops_raw = consistency_raw.get("graph_max_hops")
                 if graph_hops_raw is not None:
                     if not isinstance(graph_hops_raw, int) or graph_hops_raw not in {1, 2}:
@@ -1482,6 +1489,18 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                         raise AppError(
                             ErrorCode.VALIDATION_ERROR,
                             "params.consistency.layer3_ok_threshold must be between 0 and 1",
+                        )
+                layer3_contradict_threshold_raw = consistency_raw.get("layer3_contradict_threshold")
+                if layer3_contradict_threshold_raw is not None:
+                    if not isinstance(layer3_contradict_threshold_raw, (int, float)):
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.layer3_contradict_threshold must be number",
+                        )
+                    if not 0.0 <= float(layer3_contradict_threshold_raw) <= 1.0:
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.layer3_contradict_threshold must be between 0 and 1",
                         )
         extraction_raw = params.get("extraction")
         if extraction_raw is None:

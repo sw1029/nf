@@ -1,10 +1,10 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ko">
 
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NF 집필 도구</title>
+  <title>NF 吏묓븘 ?꾧뎄</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -345,6 +345,11 @@
       border-left-color: #e74c3c;
     }
 
+    .analysis-card.unknown {
+      border-left-color: #94a3b8;
+      background: #f8fafc;
+    }
+
     /* Episode Context Menu Button */
     .menu-btn {
       padding: 4px;
@@ -370,7 +375,7 @@
   <div id="loading-overlay" class="overlay">
     <div style="text-align: center; background: white; padding: 20px; border-radius: 12px;">
       <img src="/assets/img.gif" class="loading-spinner" alt="Loading...">
-      <p id="loading-text" style="color: var(--text-secondary); margin-top: 10px;">처리 중입니다...</p>
+      <p id="loading-text" style="color: var(--text-secondary); margin-top: 10px;">泥섎━ 以묒엯?덈떎...</p>
     </div>
   </div>
 
@@ -378,32 +383,32 @@
   <div id="success-popup" class="overlay">
     <div class="modal">
       <img src="/assets/check.png" class="success-icon" alt="Success">
-      <h3 id="success-title">완료되었습니다</h3>
+      <h3 id="success-title">?꾨즺?섏뿀?듬땲??/h3>
       <p id="success-message" style="color: var(--text-secondary); margin-bottom: 20px;"></p>
-      <button class="btn btn-primary" onclick="closeSuccessPopup()">확인</button>
+      <button class="btn btn-primary" onclick="closeSuccessPopup()">?뺤씤</button>
     </div>
   </div>
 
   <!-- Setup Modal (Project Select) -->
   <div id="setup-modal" class="overlay active">
     <div class="modal" style="text-align: left;">
-      <h2 style="margin-top:0">환영합니다</h2>
-      <p style="color: #666; margin-bottom: 20px;">작업할 프로젝트를 선택하거나 새로 만드세요.</p>
+      <h2 style="margin-top:0">?섏쁺?⑸땲??/h2>
+      <p style="color: #666; margin-bottom: 20px;">?묒뾽???꾨줈?앺듃瑜??좏깮?섍굅???덈줈 留뚮뱶?몄슂.</p>
 
-      <label style="display:block; margin-bottom:5px; font-size:0.9rem;">기존 프로젝트 불러오기</label>
+      <label style="display:block; margin-bottom:5px; font-size:0.9rem;">湲곗〈 ?꾨줈?앺듃 遺덈윭?ㅺ린</label>
       <select id="project-select"
         style="width:100%; padding:10px; margin-bottom:20px; border-radius:6px; border:1px solid #ddd;"></select>
 
-      <div style="text-align: center; color: #aaa; margin-bottom: 20px;">- 또는 -</div>
+      <div style="text-align: center; color: #aaa; margin-bottom: 20px;">- ?먮뒗 -</div>
 
-      <label style="display:block; margin-bottom:5px; font-size:0.9rem;">새 프로젝트 이름</label>
+      <label style="display:block; margin-bottom:5px; font-size:0.9rem;">???꾨줈?앺듃 ?대쫫</label>
       <input id="new-project-name"
         style="width:100%; padding:10px; margin-bottom:20px; border-radius:6px; border:1px solid #ddd;"
-        placeholder="나만의 멋진 소설">
+        placeholder="?섎쭔??硫뗭쭊 ?뚯꽕">
 
       <div style="display: flex; gap: 10px;">
-        <button class="btn btn-primary" style="flex:1" onclick="handleCreateProject()">새 프로젝트 시작</button>
-        <button class="btn btn-secondary" style="flex:1" onclick="handleLoadProject()">불러오기</button>
+        <button class="btn btn-primary" style="flex:1" onclick="handleCreateProject()">???꾨줈?앺듃 ?쒖옉</button>
+        <button class="btn btn-secondary" style="flex:1" onclick="handleLoadProject()">遺덈윭?ㅺ린</button>
       </div>
     </div>
   </div>
@@ -418,15 +423,15 @@
       </div>
 
       <div class="tabs">
-        <button class="tab-btn active" onclick="switchNavTab('EPISODE')">본문</button>
-        <button class="tab-btn" onclick="switchNavTab('SETTING')">설정</button>
-        <button class="tab-btn" onclick="switchNavTab('PLOT')">구상</button>
-        <button class="tab-btn" onclick="switchNavTab('TIMELINE')">타임라인</button>
+        <button class="tab-btn active" onclick="switchNavTab('EPISODE')">蹂몃Ц</button>
+        <button class="tab-btn" onclick="switchNavTab('SETTING')">?ㅼ젙</button>
+        <button class="tab-btn" onclick="switchNavTab('PLOT')">援ъ긽</button>
+        <button class="tab-btn" onclick="switchNavTab('TIMELINE')">??꾨씪??/button>
       </div>
 
       <div style="padding: 10px; display:flex; gap:5px;">
-        <button class="btn btn-primary" style="flex:1" onclick="createNewDoc()">+ 새 문서</button>
-        <button class="btn btn-secondary" style="flex:1" onclick="createNewChapter()">+ 새 챕터</button>
+        <button class="btn btn-primary" style="flex:1" onclick="createNewDoc()">+ ??臾몄꽌</button>
+        <button class="btn btn-secondary" style="flex:1" onclick="createNewChapter()">+ ??梨뺥꽣</button>
       </div>
 
       <div id="doc-list" class="list-container">
@@ -434,7 +439,7 @@
       </div>
 
       <div style="padding: 20px; border-top: 1px solid var(--border-color);">
-        <button class="btn btn-secondary" style="width:100%" onclick="exitProject()">프로젝트 나가기</button>
+        <button class="btn btn-secondary" style="width:100%" onclick="exitProject()">?꾨줈?앺듃 ?섍?湲?/button>
       </div>
     </aside>
 
@@ -444,10 +449,10 @@
       <!-- Placeholder -->
       <div id="empty-state"
         style="position:absolute; top:0; left:0; width:100%; height:100%; background:white; z-index:10; display:flex; flex-direction:column; justify-content:center; align-items:center; color:#ccc;">
-        <div style="font-size:3rem; margin-bottom:20px;">📝</div>
-        <div style="font-size:1.2rem;">문서를 선택하거나 새로 만드세요</div>
+        <div style="font-size:3rem; margin-bottom:20px;">?뱷</div>
+        <div style="font-size:1.2rem;">臾몄꽌瑜??좏깮?섍굅???덈줈 留뚮뱶?몄슂</div>
         <div style="margin-top:20px;">
-          <button class="btn btn-primary" onclick="createNewDoc()">새 문서 만들기</button>
+          <button class="btn btn-primary" onclick="createNewDoc()">??臾몄꽌 留뚮뱾湲?/button>
         </div>
       </div>
 
@@ -455,49 +460,49 @@
       <div class="toolbar">
         <div style="display:flex; align-items:center;">
           <span id="doc-type-badge"
-            style="background:#eee; padding:4px 8px; border-radius:4px; font-size:0.8rem; margin-right:10px; font-weight:600;">유형</span>
-          <input id="doc-title-input" class="doc-title-input" placeholder="제목을 입력하세요" oninput="handleInput()"
+            style="background:#eee; padding:4px 8px; border-radius:4px; font-size:0.8rem; margin-right:10px; font-weight:600;">?좏삎</span>
+          <input id="doc-title-input" class="doc-title-input" placeholder="?쒕ぉ???낅젰?섏꽭?? oninput="handleInput()"
             onclick="this.select()">
         </div>
 
         <div style="display:flex; gap:10px; align-items:center;">
-          <span id="save-status" style="font-size:0.8rem; color:#aaa; margin-right:10px;">저장됨</span>
-          <button class="btn btn-secondary" onclick="openExportModal()">내보내기</button>
-          <button class="btn btn-secondary" onclick="toggleConfigPanel()">화면 설정</button>
-          <button class="btn btn-icon" onclick="toggleRightSidebar()">☰</button>
+          <span id="save-status" style="font-size:0.8rem; color:#aaa; margin-right:10px;">??λ맖</span>
+          <button class="btn btn-secondary" onclick="openExportModal()">?대낫?닿린</button>
+          <button class="btn btn-secondary" onclick="toggleConfigPanel()">?붾㈃ ?ㅼ젙</button>
+          <button class="btn btn-icon" onclick="toggleRightSidebar()">??/button>
         </div>
       </div>
 
       <!-- Config Panel -->
       <div id="config-panel" class="config-panel">
-        <h4 style="margin-top:0">에디터 설정</h4>
+        <h4 style="margin-top:0">?먮뵒???ㅼ젙</h4>
         <div class="config-row">
-          <span class="config-label">글자 크기</span>
+          <span class="config-label">湲???ш린</span>
           <input type="range" class="config-input" min="14" max="24" value="18"
             oninput="updateEditorConfig('fontSize', this.value + 'px')">
         </div>
         <div class="config-row">
-          <span class="config-label">줄 간격</span>
+          <span class="config-label">以?媛꾧꺽</span>
           <input type="range" class="config-input" min="1.2" max="2.5" step="0.1" value="1.8"
             oninput="updateEditorConfig('lineHeight', this.value)">
         </div>
         <div class="config-row">
-          <span class="config-label">자간</span>
+          <span class="config-label">?먭컙</span>
           <input type="range" class="config-input" min="-1" max="2" step="0.1" value="0"
             oninput="updateEditorConfig('letterSpacing', this.value + 'px')">
         </div>
         <div class="config-row">
-          <span class="config-label">폰트</span>
+          <span class="config-label">?고듃</span>
           <select class="config-input" onchange="updateEditorConfig('fontFamily', this.value)">
-            <option value="'Noto Serif KR', serif">명조체 (Serif)</option>
-            <option value="'Noto Sans KR', sans-serif">고딕체 (Sans)</option>
+            <option value="'Noto Serif KR', serif">紐낆“泥?(Serif)</option>
+            <option value="'Noto Sans KR', sans-serif">怨좊뵓泥?(Sans)</option>
           </select>
         </div>
       </div>
 
       <!-- Editor -->
       <div class="editor-container">
-        <div id="editor" class="paper" contenteditable="true" placeholder="여기에 내용을 작성하세요..." oninput="handleInput()">
+        <div id="editor" class="paper" contenteditable="true" placeholder="?ш린???댁슜???묒꽦?섏꽭??.." oninput="handleInput()">
         </div>
       </div>
 
@@ -506,22 +511,25 @@
     <!-- Right Sidebar: Assistant -->
     <aside class="sidebar right" id="assistant-sidebar">
       <div class="sidebar-header">
-        <div class="sidebar-title">작가 도우미</div>
+        <div class="sidebar-title">?묎? ?꾩슦誘?/div>
       </div>
 
       <div class="tabs">
-        <button class="tab-btn active" onclick="switchAssistTab('CHECK')">오류 점검</button>
-        <button class="tab-btn" onclick="switchAssistTab('SEARCH')">기억 탐색</button>
+        <button class="tab-btn active" onclick="switchAssistTab('CHECK')">?ㅻ쪟 ?먭?</button>
+        <button class="tab-btn" onclick="switchAssistTab('SEARCH')">湲곗뼲 ?먯깋</button>
       </div>
 
       <div style="padding: 15px; border-bottom: 1px solid #eee;">
-        <button id="assist-action-btn" class="btn btn-primary" style="width:100%" onclick="runAssistantAction()">지금
-          점검하기</button>
+        <button id="assist-action-btn" class="btn btn-primary" style="width:100%" onclick="runAssistantAction()">吏湲?
+          ?먭??섍린</button>
+        <label style="display:block; margin-top:8px; font-size:0.8rem; color:#64748b; cursor:pointer;">
+          <input id="toggle-show-ok" type="checkbox" style="margin-right:6px;"> Show OK verdicts
+        </label>
       </div>
 
       <div id="assistant-content" class="list-container">
         <div style="text-align:center; color:#aaa; margin-top:50px;">
-          도우미가 대기 중입니다.
+          ?꾩슦誘멸? ?湲?以묒엯?덈떎.
         </div>
       </div>
     </aside>
@@ -531,17 +539,17 @@
   <!-- Export Modal -->
   <div id="export-modal" class="overlay">
     <div class="modal">
-      <h2>문서 내보내기</h2>
+      <h2>臾몄꽌 ?대낫?닿린</h2>
       <div class="form-group">
-        <label>형식 선택</label>
+        <label>?뺤떇 ?좏깮</label>
         <div class="radio-group" style="display:flex; gap:10px; margin-top:5px;">
-          <label style="cursor:pointer;"><input type="radio" name="export-fmt" value="txt" checked> 텍스트 (.txt)</label>
-          <label style="cursor:pointer;"><input type="radio" name="export-fmt" value="docx"> 문서 (.docx)</label>
+          <label style="cursor:pointer;"><input type="radio" name="export-fmt" value="txt" checked> ?띿뒪??(.txt)</label>
+          <label style="cursor:pointer;"><input type="radio" name="export-fmt" value="docx"> 臾몄꽌 (.docx)</label>
         </div>
       </div>
       <div class="actions">
-        <button onclick="closeExportModal()">취소</button>
-        <button class="primary" onclick="handleExport()">내보내기</button>
+        <button onclick="closeExportModal()">痍⑥냼</button>
+        <button class="primary" onclick="handleExport()">?대낫?닿린</button>
       </div>
     </div>
   </div>
@@ -572,9 +580,15 @@
       docs: {},
       saveTimeout: null,
       postSavePipelineTimer: null,
+      backgroundConsistencyTimer: null,
+      backgroundConsistencyRunning: false,
       isDirty: false,
       draggedDocId: null,
       draggedGroup: null,
+      pendingConsistencySegments: [],
+      lastSegmentFingerprints: [],
+      lastVerdicts: [],
+      showOkVerdicts: false,
       editorConfig: {
         fontSize: '1.1rem',
         lineHeight: '1.8',
@@ -583,12 +597,107 @@
       }
     };
 
+    const SENTENCE_END_CHARS = new Set(['.', '!', '?', '\n', '。', '！', '？', '…', '．']);
+    const SENTENCE_TAIL_CHARS = new Set(['.', '…', '\'', '"', ')', ']', '}', '’', '”', '」', '』', '》']);
+
+    function _hashSegmentText(text) {
+      let hash = 2166136261;
+      const value = String(text || '');
+      for (let i = 0; i < value.length; i += 1) {
+        hash ^= value.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return `fnv1a:${(hash >>> 0).toString(16)}`;
+    }
+
+    function _trimSegmentSpan(text, start, end) {
+      let left = Math.max(0, Number(start || 0));
+      let right = Math.max(left, Number(end || 0));
+      while (left < right && /\s/.test(text[left])) left += 1;
+      while (right > left && /\s/.test(text[right - 1])) right -= 1;
+      if (right <= left) return null;
+      return { start: left, end: right, text: text.slice(left, right) };
+    }
+
+    function _segmentTextForConsistency(text) {
+      const src = String(text || '');
+      const segments = [];
+      const textLen = src.length;
+      let cursor = 0;
+      let idx = 0;
+
+      const appendSegment = (segStart, segEnd, closed) => {
+        const trimmed = _trimSegmentSpan(src, segStart, segEnd);
+        if (!trimmed) return;
+        segments.push({
+          start: trimmed.start,
+          end: trimmed.end,
+          text: trimmed.text,
+          fingerprint: _hashSegmentText(trimmed.text),
+          closed: Boolean(closed),
+        });
+      };
+
+      while (idx < textLen) {
+        const ch = src[idx];
+        if (!SENTENCE_END_CHARS.has(ch)) {
+          idx += 1;
+          continue;
+        }
+        if (
+          ch === '.'
+          && idx > 0
+          && idx < (textLen - 1)
+          && /\d/.test(src[idx - 1] || '')
+          && /\d/.test(src[idx + 1] || '')
+        ) {
+          idx += 1;
+          continue;
+        }
+        let segEnd = idx;
+        if (ch !== '\n') {
+          segEnd = idx + 1;
+          while (segEnd < textLen && SENTENCE_TAIL_CHARS.has(src[segEnd])) {
+            segEnd += 1;
+          }
+        }
+        appendSegment(cursor, segEnd, true);
+        cursor = ch === '\n' ? (idx + 1) : segEnd;
+        idx = cursor;
+      }
+      appendSegment(cursor, textLen, false);
+      return segments;
+    }
+
+    function _collectChangedSegments(prevSegments, nextSegments) {
+      const prevMap = new Map();
+      (Array.isArray(prevSegments) ? prevSegments : []).forEach((item) => {
+        if (!item || !Number.isInteger(item.start) || !Number.isInteger(item.end)) return;
+        prevMap.set(`${item.start}:${item.end}`, item.fingerprint || '');
+      });
+      const changed = [];
+      (Array.isArray(nextSegments) ? nextSegments : []).forEach((item) => {
+        if (!item || !Number.isInteger(item.start) || !Number.isInteger(item.end)) return;
+        if (!item.closed) return;
+        const key = `${item.start}:${item.end}`;
+        const prevFingerprint = prevMap.get(key);
+        if (prevFingerprint !== item.fingerprint) {
+          changed.push(item);
+        }
+      });
+      return changed;
+    }
+
+    function _spanOverlaps(startA, endA, startB, endB) {
+      return startA < endB && startB < endA;
+    }
+
     // ... (Config Management omitted, stays same) ...
 
     // --- Editor Input Handler ---
     function handleInput() {
       state.isDirty = true;
-      document.getElementById('save-status').innerText = "저장되지 않음";
+      document.getElementById('save-status').innerText = "??λ릺吏 ?딆쓬";
       document.getElementById('save-status').style.color = "#e67e22";
 
       // Debounce still useful for stopping typing updates
@@ -603,8 +712,8 @@
       const title = document.getElementById('doc-title-input').value; // Always get fresh title
 
       // Visual Feedback
-      if (immediate) showLoading("저장 중...");
-      else document.getElementById('save-status').innerText = "저장 중...";
+      if (immediate) showLoading("???以?..");
+      else document.getElementById('save-status').innerText = "???以?..";
 
       // Optimistic Update (Immediate UI Sync)
       if (state.docs[state.currentDocId]) {
@@ -623,16 +732,19 @@
         await api(`/projects/${state.projectId}/documents/${state.currentDocId}`, 'PATCH', {
           title, content
         });
+        const nextSegments = _segmentTextForConsistency(content);
+        state.pendingConsistencySegments = _collectChangedSegments(state.lastSegmentFingerprints, nextSegments);
+        state.lastSegmentFingerprints = nextSegments;
 
         state.isDirty = false;
-        document.getElementById('save-status').innerText = "저장됨";
+        document.getElementById('save-status').innerText = "??λ맖";
         document.getElementById('save-status').style.color = "#aaa";
         if (immediate) hideLoading();
         schedulePostSavePipeline(state.currentDocId);
 
         // No need to render again unless we want to confirm from server
       } catch (e) {
-        document.getElementById('save-status').innerText = "저장 실패";
+        document.getElementById('save-status').innerText = "????ㅽ뙣";
         document.getElementById('save-status').style.color = "red";
         if (immediate) hideLoading();
         console.error(e);
@@ -680,7 +792,7 @@
     }
 
     // --- Loading & Success UI ---
-    function showLoading(msg = "처리 중입니다...") {
+    function showLoading(msg = "泥섎━ 以묒엯?덈떎...") {
       document.getElementById('loading-text').innerText = msg;
       document.getElementById('loading-overlay').classList.add('active');
     }
@@ -689,7 +801,7 @@
       document.getElementById('loading-overlay').classList.remove('active');
     }
 
-    function showSuccess(msg = "완료되었습니다") {
+    function showSuccess(msg = "?꾨즺?섏뿀?듬땲??) {
       document.getElementById('success-message').innerText = msg;
       document.getElementById('success-popup').classList.add('active');
     }
@@ -713,9 +825,17 @@
       try {
         const data = await api('/projects');
         const select = document.getElementById('project-select');
+        const showOkToggle = document.getElementById('toggle-show-ok');
+        if (showOkToggle) {
+          showOkToggle.checked = Boolean(state.showOkVerdicts);
+          showOkToggle.addEventListener('change', () => {
+            state.showOkVerdicts = Boolean(showOkToggle.checked);
+            renderVerdicts(state.lastVerdicts || []);
+          });
+        }
 
         if (data.projects && Object.keys(data.projects).length > 0) {
-          select.innerHTML = '<option value="">선택하세요</option>';
+          select.innerHTML = '<option value="">?좏깮?섏꽭??/option>';
           Object.values(data.projects).forEach(p => {
             const opt = document.createElement('option');
             opt.value = p.project_id;
@@ -723,7 +843,7 @@
             select.appendChild(opt);
           });
         } else {
-          select.innerHTML = '<option value="">프로젝트가 없습니다</option>';
+          select.innerHTML = '<option value="">?꾨줈?앺듃媛 ?놁뒿?덈떎</option>';
         }
       } catch (e) {
         console.error("Init Error", e);
@@ -732,25 +852,25 @@
 
     async function handleCreateProject() {
       const name = document.getElementById('new-project-name').value;
-      if (!name) return alert("이름을 입력해주세요");
+      if (!name) return alert("?대쫫???낅젰?댁＜?몄슂");
 
-      showLoading("프로젝트 생성 중...");
+      showLoading("?꾨줈?앺듃 ?앹꽦 以?..");
       try {
         const res = await api('/projects', 'POST', { name, settings: { mode: 'dev' } });
         hideLoading();
         loadProject(res.project.project_id, res.project.name);
         document.getElementById('setup-modal').classList.remove('active');
-        // showSuccess("프로젝트가 생성되었습니다."); // Skip for faster UX
+        // showSuccess("?꾨줈?앺듃媛 ?앹꽦?섏뿀?듬땲??"); // Skip for faster UX
       } catch (e) {
         hideLoading();
         console.error("Create Project Error", e);
-        alert("생성 실패: " + e.message);
+        alert("?앹꽦 ?ㅽ뙣: " + e.message);
       }
     }
 
     async function handleLoadProject() {
       const pid = document.getElementById('project-select').value;
-      if (!pid) return alert("선택해주세요");
+      if (!pid) return alert("?좏깮?댁＜?몄슂");
       const name = document.querySelector(`#project-select option[value="${pid}"]`).textContent;
       loadProject(pid, name);
       document.getElementById('setup-modal').classList.remove('active');
@@ -774,7 +894,7 @@
     // --- Doc Management ---
     async function refreshDocList() {
       const list = document.getElementById('doc-list');
-      list.innerHTML = '<div style="text-align:center; padding:20px; color:#aaa;">로딩 중...</div>';
+      list.innerHTML = '<div style="text-align:center; padding:20px; color:#aaa;">濡쒕뵫 以?..</div>';
 
       try {
         const res = await api(`/projects/${state.projectId}/documents`);
@@ -789,7 +909,7 @@
         state.docs = docsMap;
         renderDocList();
       } catch (e) {
-        list.innerHTML = '<div style="text-align:center; color:red;">로드 실패</div>';
+        list.innerHTML = '<div style="text-align:center; color:red;">濡쒕뱶 ?ㅽ뙣</div>';
       }
     }
 
@@ -821,7 +941,7 @@
 
       docs.forEach(d => {
         const gName = (d.metadata && d.metadata.group) || "";
-        if (!gName || gName === "미분류") {
+        if (!gName || gName === "誘몃텇瑜?) {
           noGroup.push(d);
         } else {
           if (!groups[gName]) groups[gName] = [];
@@ -876,7 +996,7 @@
         html += `
             <div class="struct-node group-node">
                 <div class="node-circle big"></div>
-                <div class="node-label" style="opacity:0.7">미분류</div>
+                <div class="node-label" style="opacity:0.7">誘몃텇瑜?/div>
             </div>
             <div class="struct-line"></div>
           `;
@@ -936,7 +1056,7 @@
       });
 
       if (relevantDocs.length === 0) {
-        list.innerHTML = '<div style="text-align:center; padding:20px; color:#ccc;">아직 문서가 없습니다.</div>';
+        list.innerHTML = '<div style="text-align:center; padding:20px; color:#ccc;">?꾩쭅 臾몄꽌媛 ?놁뒿?덈떎.</div>';
         return;
       }
 
@@ -962,22 +1082,22 @@
 
       const docs = Object.values(state.docs).filter(d => d.type === 'EPISODE');
       if (docs.length === 0) {
-        list.innerHTML = '<div style="text-align:center; padding:20px; color:#ccc;">에피소드가 없습니다.</div>';
+        list.innerHTML = '<div style="text-align:center; padding:20px; color:#ccc;">?먰뵾?뚮뱶媛 ?놁뒿?덈떎.</div>';
         return;
       }
 
       // Grouping
-      const groups = { "미분류": [] };
+      const groups = { "誘몃텇瑜?: [] };
       docs.forEach(d => {
-        const gName = (d.metadata && d.metadata.group) ? d.metadata.group : "미분류";
+        const gName = (d.metadata && d.metadata.group) ? d.metadata.group : "誘몃텇瑜?;
         if (!groups[gName]) groups[gName] = [];
         groups[gName].push(d);
       });
 
       // Sorting: Groups then items within groups
       const sortedGroupNames = Object.keys(groups).sort((a, b) => {
-        if (a === "미분류") return 1;
-        if (b === "미분류") return -1;
+        if (a === "誘몃텇瑜?) return 1;
+        if (b === "誘몃텇瑜?) return -1;
         return a.localeCompare(b);
       });
 
@@ -1020,10 +1140,10 @@
           item.ondragover = (e) => handleDragOver(e);
           item.ondrop = (e) => handleDropOnItem(e, doc.doc_id, gName);
 
-          // Label construction: "제1화 제목" or just "제목"
+          // Label construction: "?????쒕ぉ" or just "?쒕ぉ"
           let label = doc.title;
           if (doc.metadata && doc.metadata.episode_no) {
-            label = `<span style="color:#e67e22; font-weight:bold; margin-right:5px;">제${doc.metadata.episode_no}화</span> ${doc.title}`;
+            label = `<span style="color:#e67e22; font-weight:bold; margin-right:5px;">??{doc.metadata.episode_no}??/span> ${doc.title}`;
           }
 
           item.innerHTML = `
@@ -1077,7 +1197,7 @@
       const newGroup = targetGroupName;
 
       const groupDocs = Object.values(state.docs).filter(d => {
-        const g = (d.metadata && d.metadata.group) ? d.metadata.group : "미분류";
+        const g = (d.metadata && d.metadata.group) ? d.metadata.group : "誘몃텇瑜?;
         return g === newGroup;
       });
       const maxOrder = groupDocs.reduce((max, d) => Math.max(max, (d.metadata?.order || 0)), 0);
@@ -1101,7 +1221,7 @@
       const targetOrder = (targetDoc.metadata && targetDoc.metadata.order) !== undefined ? targetDoc.metadata.order : 0;
 
       const groupDocs = Object.values(state.docs).filter(d => {
-        const g = (d.metadata && d.metadata.group) ? d.metadata.group : "미분류";
+        const g = (d.metadata && d.metadata.group) ? d.metadata.group : "誘몃텇瑜?;
         return g === targetGroup;
       }).sort((a, b) => (a.metadata?.order || 0) - (b.metadata?.order || 0));
 
@@ -1180,10 +1300,10 @@
       e.preventDefault();
 
       const options = [
-        { label: "이름 변경 (Rename)", action: () => promptRenameDoc(docId) },
-        { label: "그룹 이동 (Move)", action: () => promptMoveGroup(docId) },
-        { label: "화수 설정 (Set No.)", action: () => promptEpisodeNo(docId) },
-        { label: "삭제 (Delete)", action: () => confirmDeleteDoc(docId), color: '#e74c3c' }
+        { label: "?대쫫 蹂寃?(Rename)", action: () => promptRenameDoc(docId) },
+        { label: "洹몃９ ?대룞 (Move)", action: () => promptMoveGroup(docId) },
+        { label: "?붿닔 ?ㅼ젙 (Set No.)", action: () => promptEpisodeNo(docId) },
+        { label: "??젣 (Delete)", action: () => confirmDeleteDoc(docId), color: '#e74c3c' }
       ];
 
       showCtxMenu(e.clientX, e.clientY, options);
@@ -1191,7 +1311,7 @@
 
     function promptRenameDoc(docId) {
       const doc = state.docs[docId];
-      const newTitle = prompt("변경할 제목:", doc.title);
+      const newTitle = prompt("蹂寃쏀븷 ?쒕ぉ:", doc.title);
       if (newTitle && newTitle !== doc.title) {
         // Optimistic Update
         state.docs[docId].title = newTitle;
@@ -1205,7 +1325,7 @@
 
         api(`/projects/${state.projectId}/documents/${docId}`, 'PATCH', { title: newTitle })
           .catch(e => {
-            alert("이름 변경 실패");
+            alert("?대쫫 蹂寃??ㅽ뙣");
             console.error(e);
             // Rollback? Simplified for now.
           });
@@ -1215,7 +1335,7 @@
     function promptMoveGroup(docId) {
       const doc = state.docs[docId];
       const currentGroup = (doc.metadata && doc.metadata.group) || "";
-      const newGroup = prompt("이동할 그룹명 (비워두면 '미분류'):", currentGroup);
+      const newGroup = prompt("?대룞??洹몃９紐?(鍮꾩썙?먮㈃ '誘몃텇瑜?):", currentGroup);
       if (newGroup !== null) {
         const meta = doc.metadata || {};
         meta.group = newGroup;
@@ -1230,10 +1350,10 @@
     function promptEpisodeNo(docId) {
       const doc = state.docs[docId];
       const currentNo = (doc.metadata && doc.metadata.episode_no) || "";
-      const num = prompt("화수 번호 (숫자만 입력):", currentNo);
+      const num = prompt("?붿닔 踰덊샇 (?レ옄留??낅젰):", currentNo);
       if (num !== null) {
         const intNum = parseInt(num, 10);
-        if (isNaN(intNum)) return alert("유효한 숫자가 아닙니다.");
+        if (isNaN(intNum)) return alert("?좏슚???レ옄媛 ?꾨떃?덈떎.");
 
         const meta = doc.metadata || {};
         meta.episode_no = intNum;
@@ -1246,7 +1366,7 @@
     }
 
     function confirmDeleteDoc(docId) {
-      if (confirm("정말 이 문서를 삭제하시겠습니까?")) {
+      if (confirm("?뺣쭚 ??臾몄꽌瑜???젣?섏떆寃좎뒿?덇퉴?")) {
         api(`/projects/${state.projectId}/documents/${docId}`, 'DELETE')
           .then(() => {
             delete state.docs[docId];
@@ -1264,19 +1384,19 @@
       e.preventDefault();
 
       const options = [
-        { label: "그룹 이름 변경 (Rename)", action: () => promptRenameGroup(groupName) },
+        { label: "洹몃９ ?대쫫 蹂寃?(Rename)", action: () => promptRenameGroup(groupName) },
       ];
 
       showCtxMenu(e.clientX, e.clientY, options);
     }
 
     async function promptRenameGroup(oldName) {
-      const newName = prompt("새 그룹 이름:", oldName);
+      const newName = prompt("??洹몃９ ?대쫫:", oldName);
       if (newName && newName !== oldName) {
-        showLoading("그룹 이름 변경 중...");
+        showLoading("洹몃９ ?대쫫 蹂寃?以?..");
 
         const groupDocs = Object.values(state.docs).filter(d => {
-          const g = (d.metadata && d.metadata.group) ? d.metadata.group : "미분류";
+          const g = (d.metadata && d.metadata.group) ? d.metadata.group : "誘몃텇瑜?;
           return g === oldName;
         });
 
@@ -1296,7 +1416,7 @@
           });
           refreshDocList();
         } catch (err) {
-          alert("그룹 이름 변경 실패");
+          alert("洹몃９ ?대쫫 蹂寃??ㅽ뙣");
           console.error(err);
         } finally {
           hideLoading();
@@ -1305,7 +1425,7 @@
     }
 
     async function createNewDoc() {
-      const title = "제목 없음";
+      const title = "?쒕ぉ ?놁쓬";
 
       // Type based on current tab
       let type = state.currentNavTab;
@@ -1313,7 +1433,7 @@
         // Ask subtype? For now default to SETTING
       }
 
-      showLoading("문서 생성 중...");
+      showLoading("臾몄꽌 ?앹꽦 以?..");
       try {
         const res = await api(`/projects/${state.projectId}/documents`, 'POST', {
           title, type, content: ''
@@ -1321,7 +1441,7 @@
         hideLoading();
         await refreshDocList();
         loadDoc(res.document.doc_id);
-      } catch (e) { hideLoading(); alert("실패"); }
+      } catch (e) { hideLoading(); alert("?ㅽ뙣"); }
     }
 
     async function loadDoc(did) {
@@ -1337,7 +1457,7 @@
       document.getElementById('empty-state').style.display = 'none';
       if (document.getElementById('loading-overlay').classList.contains('active') === false) {
         // Only show local loading if not blocked by something else
-        // showLoading("문서 로딩 중..."); // Might be too intrusive?
+        // showLoading("臾몄꽌 濡쒕뵫 以?.."); // Might be too intrusive?
         // Let's just use the editor placeholder or opacity?
         document.getElementById('editor').style.opacity = '0.5';
       }
@@ -1347,12 +1467,16 @@
         const fullDoc = res.document;
 
         document.getElementById('doc-title-input').value = fullDoc.title || '';
-        document.getElementById('editor').innerText = fullDoc.content || '';
+        const loadedContent = fullDoc.content || '';
+        document.getElementById('editor').innerText = loadedContent;
         document.getElementById('editor').style.opacity = '1';
 
         // Reset dirty state after load
         state.isDirty = false;
-        document.getElementById('save-status').innerText = "저장됨";
+        state.pendingConsistencySegments = [];
+        state.lastSegmentFingerprints = _segmentTextForConsistency(loadedContent);
+        state.lastVerdicts = [];
+        document.getElementById('save-status').innerText = "??λ맖";
         document.getElementById('save-status').style.color = "#aaa";
 
         document.getElementById('doc-type-badge').innerText = fullDoc.type || 'UNKNOWN';
@@ -1363,7 +1487,7 @@
         // hideLoading();
       } catch (e) {
         console.error("Load Doc Error", e);
-        document.getElementById('editor').innerText = "로드 실패";
+        document.getElementById('editor').innerText = "濡쒕뱶 ?ㅽ뙣";
         document.getElementById('editor').style.opacity = '1';
       }
     }
@@ -1378,8 +1502,8 @@
       state.assistantMode = mode;
 
       const btn = document.getElementById('assist-action-btn');
-      if (mode === 'CHECK') btn.innerText = "오류 점검하기";
-      if (mode === 'SEARCH') btn.innerText = "관련 내용 찾기";
+      if (mode === 'CHECK') btn.innerText = "?ㅻ쪟 ?먭??섍린";
+      if (mode === 'SEARCH') btn.innerText = "愿???댁슜 李얘린";
     }
 
     // --- API Helper for Jobs ---
@@ -1397,7 +1521,7 @@
               return;
             }
             if (status === 'FAILED' || status === 'CANCELED') {
-              reject(new Error(res.job.error || "작업 실패"));
+              reject(new Error(res.job.error || "?묒뾽 ?ㅽ뙣"));
               return;
             }
 
@@ -1418,12 +1542,12 @@
       if (!docId || !state.projectId) return;
       if (state.postSavePipelineTimer) clearTimeout(state.postSavePipelineTimer);
       state.postSavePipelineTimer = setTimeout(() => {
-        runPostSavePipeline(docId);
+        void runPostSavePipeline(docId);
       }, 400);
     }
 
     async function runPostSavePipeline(docId) {
-      if (!state.projectId || !docId) return;
+      if (!state.projectId || !docId) return false;
       try {
         const ingest = await api('/jobs', 'POST', {
           type: 'INGEST',
@@ -1437,8 +1561,81 @@
           inputs: { scope: docId }
         });
         await waitForJob(indexFts.job.job_id);
+        scheduleBackgroundConsistencyCheck(docId);
+        return true;
       } catch (e) {
         console.error('post-save pipeline failed', e);
+        return false;
+      }
+    }
+
+    function scheduleBackgroundConsistencyCheck(docId) {
+      if (!docId || !state.projectId) return;
+      if (!Array.isArray(state.pendingConsistencySegments) || state.pendingConsistencySegments.length === 0) return;
+      if (state.backgroundConsistencyTimer) clearTimeout(state.backgroundConsistencyTimer);
+      state.backgroundConsistencyTimer = setTimeout(() => {
+        void runBackgroundConsistencyCheck(docId);
+      }, 2000);
+    }
+
+    async function runBackgroundConsistencyCheck(docId) {
+      if (!state.projectId || !docId || state.backgroundConsistencyRunning) return;
+      const pending = (Array.isArray(state.pendingConsistencySegments) ? state.pendingConsistencySegments : [])
+        .filter((item) => item && Number.isInteger(item.start) && Number.isInteger(item.end) && item.end > item.start)
+        .slice(0, 8);
+      if (pending.length === 0) return;
+      const pendingKeys = new Set(pending.map((item) => `${item.start}:${item.end}`));
+      state.backgroundConsistencyRunning = true;
+      try {
+        for (const segment of pending) {
+          const res = await api('/jobs', 'POST', {
+            type: 'CONSISTENCY',
+            project_id: state.projectId,
+            inputs: {
+              input_doc_id: docId,
+              input_snapshot_id: 'latest',
+              range: {
+                start: segment.start,
+                end: segment.end
+              },
+              preflight: {
+                ensure_ingest: false,
+                ensure_index_fts: false,
+                schema_scope: 'explicit_only'
+              },
+              schema_scope: 'explicit_only'
+            }
+          });
+          await waitForJob(res.job.job_id);
+        }
+
+        const vRes = await api('/query/verdicts', 'POST', {
+          project_id: state.projectId,
+          input_doc_id: docId
+        });
+        const verdicts = Array.isArray(vRes.verdicts) ? vRes.verdicts : [];
+        const filtered = verdicts.filter((item) => {
+          const span = (item && typeof item.segment_span === 'object') ? item.segment_span : {};
+          const start = Number.isInteger(span.start) ? span.start : null;
+          const end = Number.isInteger(span.end) ? span.end : null;
+          if (start === null || end === null || end <= start) return false;
+          return pending.some((segment) => _spanOverlaps(start, end, segment.start, segment.end));
+        });
+        if (filtered.length > 0) {
+          renderVerdicts(filtered, { background: true });
+        }
+      } catch (e) {
+        console.error('background consistency failed', e);
+      } finally {
+        state.backgroundConsistencyRunning = false;
+        const queued = Array.isArray(state.pendingConsistencySegments) ? state.pendingConsistencySegments : [];
+        state.pendingConsistencySegments = queued.filter((item) => {
+          if (!item || !Number.isInteger(item.start) || !Number.isInteger(item.end)) return false;
+          return !pendingKeys.has(`${item.start}:${item.end}`);
+        });
+        if (state.pendingConsistencySegments.length > 0) {
+          scheduleBackgroundConsistencyCheck(docId);
+        }
       }
     }
 
@@ -1452,22 +1649,22 @@
     }
 
     function verdictLabel(verdict) {
-      if (verdict === 'VIOLATE') return '설정 충돌';
-      if (verdict === 'OK') return '정합성 양호';
-      return '사실 확인 필요';
+      if (verdict === 'VIOLATE') return '?ㅼ젙 異⑸룎';
+      if (verdict === 'OK') return '?뺥빀???묓샇';
+      return '?ъ떎 ?뺤씤 ?꾩슂';
     }
 
     async function runAssistantAction() {
-      if (!state.currentDocId) return alert("문서를 먼저 여세요");
+      if (!state.currentDocId) return alert("臾몄꽌瑜?癒쇱? ?ъ꽭??);
 
       const mode = state.assistantMode || 'CHECK';
       const contentPanel = document.getElementById('assistant-content');
 
       if (mode === 'SEARCH') {
-        contentPanel.innerHTML = '<div style="text-align:center; padding:20px; color:#666;"><img src="/assets/img.gif" width="30"> 관련 내용 탐색 중...</div>';
+        contentPanel.innerHTML = '<div style="text-align:center; padding:20px; color:#666;"><img src="/assets/img.gif" width="30"> 愿???댁슜 ?먯깋 以?..</div>';
         try {
           const editor = document.getElementById('editor');
-          const query = editor.innerText.substring(0, 500) || "내용 없음"; // Contextual search
+          const query = editor.innerText.substring(0, 500) || "?댁슜 ?놁쓬"; // Contextual search
 
           // Try Sync Retrieval (FTS)
           const res = await api('/query/retrieval', 'POST', {
@@ -1477,16 +1674,16 @@
           });
 
           if (!res.results || res.results.length === 0) {
-            contentPanel.innerHTML = '<div style="padding:20px; text-align:center;">관련된 내용을 찾을 수 없습니다.</div>';
+            contentPanel.innerHTML = '<div style="padding:20px; text-align:center;">愿?⑤맂 ?댁슜??李얠쓣 ???놁뒿?덈떎.</div>';
             return;
           }
 
-          let html = '<div style="padding:10px;"><strong>검색 결과</strong></div>';
+          let html = '<div style="padding:10px;"><strong>寃??寃곌낵</strong></div>';
           res.results.forEach((r) => {
             const evidence = (r && typeof r === 'object' && typeof r.evidence === 'object') ? r.evidence : {};
             const docId = evidence.doc_id || r.doc_id || '';
-            const snippet = evidence.snippet_text || r.snippet || '(스니펫 없음)';
-            const title = (docId && state.docs[docId] && state.docs[docId].title) ? state.docs[docId].title : (docId || '문서');
+            const snippet = evidence.snippet_text || r.snippet || '(?ㅻ땲???놁쓬)';
+            const title = (docId && state.docs[docId] && state.docs[docId].title) ? state.docs[docId].title : (docId || '臾몄꽌');
             const score = Number(r.score || 0);
             html += `
                     <div class="analysis-card info" style="cursor:pointer;" data-doc-id="${escapeHtml(docId)}">
@@ -1494,7 +1691,7 @@
                         <div style="font-size:0.8rem; color:#666; margin-top:5px;">
                             ${escapeHtml(snippet)}
                         </div>
-                        <div style="font-size:0.75rem; color:#999; margin-top:5px;">점수: ${Number.isFinite(score) ? score.toFixed(3) : '-'}</div>
+                        <div style="font-size:0.75rem; color:#999; margin-top:5px;">?먯닔: ${Number.isFinite(score) ? score.toFixed(3) : '-'}</div>
                     </div>
                 `;
           });
@@ -1508,13 +1705,13 @@
 
         } catch (e) {
           console.error(e);
-          contentPanel.innerHTML = `<div style="text-align:center; padding:20px; color:red;">검색 실패<br>${e.message}</div>`;
+          contentPanel.innerHTML = `<div style="text-align:center; padding:20px; color:red;">寃???ㅽ뙣<br>${e.message}</div>`;
         }
         return;
       }
 
       // CHECK Mode
-      contentPanel.innerHTML = '<div style="text-align:center; padding:20px;"><img src="/assets/img.gif" width="40" alt="loading"><br>AI가 분석 중입니다... <span id="check-progress">0%</span></div>';
+      contentPanel.innerHTML = '<div style="text-align:center; padding:20px;"><img src="/assets/img.gif" width="40" alt="loading"><br>AI媛 遺꾩꽍 以묒엯?덈떎... <span id="check-progress">0%</span></div>';
 
       try {
         // 1. Submit Job
@@ -1553,27 +1750,46 @@
         });
 
         renderVerdicts(vRes.verdicts || []);
-        showSuccess("점검이 완료되었습니다.");
+        showSuccess("?먭????꾨즺?섏뿀?듬땲??");
 
       } catch (e) {
         console.error(e);
-        contentPanel.innerHTML = `<div style="color:red; padding:20px;">분석 실패: ${e.message}</div>`;
+        contentPanel.innerHTML = `<div style="color:red; padding:20px;">遺꾩꽍 ?ㅽ뙣: ${e.message}</div>`;
       }
     }
 
-    function renderVerdicts(verdicts) {
+    function renderVerdicts(verdicts, options = {}) {
       const contentPanel = document.getElementById('assistant-content');
-      if (!verdicts || verdicts.length === 0) {
-        contentPanel.innerHTML = '<div style="padding:20px; text-align:center;">No consistency issues found.</div>';
+      const rows = Array.isArray(verdicts) ? verdicts : [];
+      state.lastVerdicts = rows;
+
+      const showOk = Boolean(state.showOkVerdicts);
+      const visible = showOk
+        ? rows
+        : rows.filter((item) => String(item?.verdict || 'UNKNOWN') !== 'OK');
+      if (visible.length === 0) {
+        contentPanel.innerHTML = showOk
+          ? '<div style="padding:20px; text-align:center;">No consistency verdicts found.</div>'
+          : '<div style="padding:20px; text-align:center;">No VIOLATE/UNKNOWN verdicts found.</div>';
         return;
       }
 
       let html = '';
-      verdicts.forEach((v, idx) => {
+      if (options && options.background) {
+        html += '<div style="padding:8px 10px; font-size:0.8rem; color:#64748b;">Background check updated changed segments.</div>';
+      }
+      visible.forEach((v, idx) => {
         const verdict = String(v.verdict || 'UNKNOWN');
-        const severityClass = verdict === 'VIOLATE' ? 'error' : 'info';
+        const severityClass = verdict === 'VIOLATE' ? 'error' : (verdict === 'UNKNOWN' ? 'unknown' : 'info');
         const title = verdictLabel(verdict);
         const claimText = (typeof v.claim_text === 'string' && v.claim_text.trim()) ? v.claim_text : 'N/A';
+        const unknownReasonsRaw = Array.isArray(v.unknown_reasons) ? v.unknown_reasons : [];
+        const unknownReasons = unknownReasonsRaw
+          .map((item) => String(item || '').trim())
+          .filter((item) => item.length > 0);
+        const unknownReasonText = unknownReasons.length > 0
+          ? unknownReasons.join(', ')
+          : 'Insufficient evidence or ambiguity';
         const reliability = Number(v.reliability_overall || 0);
         const segmentSpan = (v && typeof v.segment_span === 'object') ? v.segment_span : {};
         const spanStart = Number.isInteger(segmentSpan.start) ? segmentSpan.start : null;
@@ -1589,6 +1805,7 @@
                     <div style="font-size:0.78rem; color:#666; margin-bottom:8px;">
                       verdict: ${escapeHtml(verdict)} | reliability: ${Number.isFinite(reliability) ? reliability.toFixed(2) : '-'} | span: ${escapeHtml(spanLabel)}
                     </div>
+                    ${verdict === 'UNKNOWN' ? `<div style="font-size:0.78rem; color:#64748b; margin-bottom:8px;">reason: ${escapeHtml(unknownReasonText)}</div>` : ''}
                     <div style="display:flex; gap:8px; margin-bottom:8px;">
                       <button class="btn btn-secondary jump-claim" data-claim="${escapeHtml(claimText)}" data-span-start="${spanStart !== null ? spanStart : ''}" data-span-end="${spanEnd !== null ? spanEnd : ''}">Jump to text</button>
                       <button class="btn btn-secondary load-verdict-detail" data-vid="${escapeHtml(vid)}" data-target="${escapeHtml(detailId)}" ${vid ? '' : 'disabled'}>Load evidence</button>
@@ -1634,12 +1851,16 @@
         const claimFingerprint = typeof res.claim_fingerprint === 'string' ? res.claim_fingerprint : '-';
         const whitelisted = Boolean(res.whitelisted);
         const ignored = Boolean(res.ignored);
+        const unknownReasons = Array.isArray(res.unknown_reasons)
+          ? res.unknown_reasons.map((item) => String(item || '').trim()).filter((item) => item.length > 0)
+          : [];
 
         let html = `
           <div style="margin-bottom:8px; padding:8px; background:#f8fafc; border-radius:6px;">
             <div><strong>whitelisted:</strong> ${whitelisted}</div>
             <div><strong>ignored:</strong> ${ignored}</div>
             <div><strong>claim_fingerprint:</strong> ${escapeHtml(claimFingerprint)}</div>
+            <div><strong>unknown_reasons:</strong> ${escapeHtml(unknownReasons.length > 0 ? unknownReasons.join(', ') : '-')}</div>
           </div>
         `;
 
@@ -1761,10 +1982,10 @@
       document.getElementById('export-modal').classList.remove('active');
     }
     async function handleExport() {
-      if (!state.currentDocId) return alert("문서를 열어주세요");
+      if (!state.currentDocId) return alert("臾몄꽌瑜??댁뼱二쇱꽭??);
       const format = document.querySelector('input[name="export-fmt"]:checked').value;
 
-      showLoading("파일 준비 중...");
+      showLoading("?뚯씪 以鍮?以?..");
       try {
         const res = await api('/jobs', 'POST', {
           type: 'EXPORT',
@@ -1795,7 +2016,7 @@
           link.click();
           document.body.removeChild(link);
         } else {
-          alert("내보내기 완료 (다운로드 URL 없음)");
+          alert("?대낫?닿린 ?꾨즺 (?ㅼ슫濡쒕뱶 URL ?놁쓬)");
         }
 
         hideLoading();
@@ -1803,19 +2024,19 @@
       } catch (e) {
         hideLoading();
         console.error(e);
-        alert("내보내기 실패: " + e.message);
+        alert("?대낫?닿린 ?ㅽ뙣: " + e.message);
       }
     }
 
     async function createNewChapter() {
-      const chapterName = prompt("새 챕터(그룹) 이름을 입력하세요:");
+      const chapterName = prompt("??梨뺥꽣(洹몃９) ?대쫫???낅젰?섏꽭??");
       if (!chapterName) return;
 
-      showLoading("챕터 생성 중...");
+      showLoading("梨뺥꽣 ?앹꽦 以?..");
       try {
         // Create a placeholder doc for this chapter
         const res = await api(`/projects/${state.projectId}/documents`, 'POST', {
-          title: `${chapterName} - 서막`,
+          title: `${chapterName} - ?쒕쭑`,
           type: 'EPISODE',
           content: '',
           metadata: { group: chapterName, order: 0, episode_no: 1 }
@@ -1825,7 +2046,7 @@
         loadDoc(res.document.doc_id);
       } catch (e) {
         hideLoading();
-        alert("챕터 생성 실패");
+        alert("梨뺥꽣 ?앹꽦 ?ㅽ뙣");
         console.error(e);
       }
     }
@@ -1887,7 +2108,7 @@
 
       let targetGroup = targetGroupName;
       if (!targetGroup) {
-        targetGroup = (targetDoc.metadata && targetDoc.metadata.group) || "미분류";
+        targetGroup = (targetDoc.metadata && targetDoc.metadata.group) || "誘몃텇瑜?;
       }
 
       // Flexible Sorting: Check Drop Position (Before or After)
@@ -1901,7 +2122,7 @@
 
       // Get Group Docs sorted
       const groupDocs = Object.values(state.docs).filter(d => {
-        const g = (d.metadata && d.metadata.group) || "미분류";
+        const g = (d.metadata && d.metadata.group) || "誘몃텇瑜?;
         return g === targetGroup;
       }).sort((a, b) => (a.metadata?.order || 0) - (b.metadata?.order || 0));
 
@@ -1954,7 +2175,7 @@
       // Move to this group, append to end (order = max + 10)
 
       const groupDocs = Object.values(state.docs).filter(d => {
-        const g = (d.metadata && d.metadata.group) || "미분류";
+        const g = (d.metadata && d.metadata.group) || "誘몃텇瑜?;
         return g === targetGroupName;
       });
 

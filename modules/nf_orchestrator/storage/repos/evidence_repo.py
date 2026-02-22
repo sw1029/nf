@@ -49,6 +49,16 @@ def _row_to_evidence(row: Any) -> Evidence:
 
 def _row_to_verdict(row: Any) -> VerdictLog:
     breakdown = json.loads(row["breakdown_json"])
+    unknown_reasons_raw = "[]"
+    if hasattr(row, "keys") and "unknown_reasons_json" in row.keys():
+        unknown_reasons_raw = row["unknown_reasons_json"] or "[]"
+    try:
+        unknown_reasons_list = json.loads(unknown_reasons_raw) if isinstance(unknown_reasons_raw, str) else []
+    except json.JSONDecodeError:
+        unknown_reasons_list = []
+    if not isinstance(unknown_reasons_list, list):
+        unknown_reasons_list = []
+    unknown_reasons = tuple(str(item) for item in unknown_reasons_list if isinstance(item, str))
     return VerdictLog(
         vid=row["vid"],
         project_id=row["project_id"],
@@ -67,6 +77,7 @@ def _row_to_verdict(row: Any) -> VerdictLog:
         ),
         whitelist_applied=bool(row["whitelist_applied"]),
         created_at=row["created_at"],
+        unknown_reasons=unknown_reasons,
     )
 
 
@@ -163,15 +174,24 @@ def list_evidence(
 
 def create_verdict_log(conn, verdict: VerdictLog, *, commit: bool = True) -> VerdictLog:
     claim_fingerprint = _fingerprint(verdict.claim_text)
+    breakdown_json = json.dumps(
+        {
+            "fts_strength": verdict.breakdown.fts_strength,
+            "evidence_count": verdict.breakdown.evidence_count,
+            "confirmed_evidence": verdict.breakdown.confirmed_evidence,
+            "model_score": verdict.breakdown.model_score,
+        }
+    )
+    unknown_reasons_json = json.dumps([str(item) for item in (verdict.unknown_reasons or ())], ensure_ascii=False)
     try:
         conn.execute(
             """
             INSERT INTO verdict_log (
                 vid, project_id, input_doc_id, input_snapshot_id, schema_ver,
                 segment_start, segment_end, claim_text, claim_fingerprint, verdict, reliability_overall,
-                breakdown_json, whitelist_applied, created_at
+                breakdown_json, whitelist_applied, created_at, unknown_reasons_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 verdict.vid,
@@ -185,51 +205,66 @@ def create_verdict_log(conn, verdict: VerdictLog, *, commit: bool = True) -> Ver
                 claim_fingerprint,
                 verdict.verdict.value,
                 verdict.reliability_overall,
-                json.dumps(
-                    {
-                        "fts_strength": verdict.breakdown.fts_strength,
-                        "evidence_count": verdict.breakdown.evidence_count,
-                        "confirmed_evidence": verdict.breakdown.confirmed_evidence,
-                        "model_score": verdict.breakdown.model_score,
-                    }
-                ),
+                breakdown_json,
                 1 if verdict.whitelist_applied else 0,
                 verdict.created_at,
+                unknown_reasons_json,
             ),
         )
     except sqlite3.OperationalError:
-        conn.execute(
-            """
-            INSERT INTO verdict_log (
-                vid, project_id, input_doc_id, input_snapshot_id, schema_ver,
-                segment_start, segment_end, claim_text, verdict, reliability_overall,
-                breakdown_json, whitelist_applied, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                verdict.vid,
-                verdict.project_id,
-                verdict.input_doc_id,
-                verdict.input_snapshot_id,
-                verdict.schema_ver,
-                verdict.segment_span.start,
-                verdict.segment_span.end,
-                verdict.claim_text,
-                verdict.verdict.value,
-                verdict.reliability_overall,
-                json.dumps(
-                    {
-                        "fts_strength": verdict.breakdown.fts_strength,
-                        "evidence_count": verdict.breakdown.evidence_count,
-                        "confirmed_evidence": verdict.breakdown.confirmed_evidence,
-                        "model_score": verdict.breakdown.model_score,
-                    }
+        try:
+            conn.execute(
+                """
+                INSERT INTO verdict_log (
+                    vid, project_id, input_doc_id, input_snapshot_id, schema_ver,
+                    segment_start, segment_end, claim_text, claim_fingerprint, verdict, reliability_overall,
+                    breakdown_json, whitelist_applied, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    verdict.vid,
+                    verdict.project_id,
+                    verdict.input_doc_id,
+                    verdict.input_snapshot_id,
+                    verdict.schema_ver,
+                    verdict.segment_span.start,
+                    verdict.segment_span.end,
+                    verdict.claim_text,
+                    claim_fingerprint,
+                    verdict.verdict.value,
+                    verdict.reliability_overall,
+                    breakdown_json,
+                    1 if verdict.whitelist_applied else 0,
+                    verdict.created_at,
                 ),
-                1 if verdict.whitelist_applied else 0,
-                verdict.created_at,
-            ),
-        )
+            )
+        except sqlite3.OperationalError:
+            conn.execute(
+                """
+                INSERT INTO verdict_log (
+                    vid, project_id, input_doc_id, input_snapshot_id, schema_ver,
+                    segment_start, segment_end, claim_text, verdict, reliability_overall,
+                    breakdown_json, whitelist_applied, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    verdict.vid,
+                    verdict.project_id,
+                    verdict.input_doc_id,
+                    verdict.input_snapshot_id,
+                    verdict.schema_ver,
+                    verdict.segment_span.start,
+                    verdict.segment_span.end,
+                    verdict.claim_text,
+                    verdict.verdict.value,
+                    verdict.reliability_overall,
+                    breakdown_json,
+                    1 if verdict.whitelist_applied else 0,
+                    verdict.created_at,
+                ),
+            )
     if commit:
         conn.commit()
     return verdict

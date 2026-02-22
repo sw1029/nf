@@ -13,6 +13,8 @@ from modules.nf_consistency.contracts import ConsistencyRequest
 from modules.nf_consistency.extractors import ExtractionPipeline, normalize_extraction_profile
 from modules.nf_consistency.extractors.contracts import ExtractionMapping as ExtractorMapping
 from modules.nf_model_gateway.gateway import select_model
+from modules.nf_model_gateway.local.nli_model import infer_nli_distribution
+from modules.nf_model_gateway.local.reranker_model import rerank_results
 from modules.nf_orchestrator.storage import db, docstore
 from modules.nf_orchestrator.storage.repos import (
     document_repo,
@@ -45,11 +47,14 @@ _DEFAULT_SELF_EVIDENCE_SCOPE = "range"
 _DEFAULT_GRAPH_DOC_CAP = 200
 _DEFAULT_LAYER3_MIN_FTS_FOR_PROMOTION = 0.25
 _DEFAULT_LAYER3_MAX_CLAIM_CHARS = 260
-_DEFAULT_LAYER3_OK_THRESHOLD = 0.88
+_DEFAULT_LAYER3_OK_THRESHOLD = 0.92
+_DEFAULT_LAYER3_CONTRADICT_THRESHOLD = 0.85
+_DEFAULT_GRAPH_MODE = "off"
 _CANDIDATE_K = 12
 _FINAL_K = 3
 _VECTOR_REFILL_MIN = 6
-_NLI_RERANK_TOP_N = 8
+_LAYER3_RERANK_TOP_N = 12
+_LAYER3_NLI_TOP_K = 3
 _RETRIEVAL_CACHE_SIZE = 256
 _UNKNOWN_REASON_NO_EVIDENCE = "NO_EVIDENCE"
 _UNKNOWN_REASON_AMBIGUOUS_ENTITY = "AMBIGUOUS_ENTITY"
@@ -772,7 +777,36 @@ def _resolve_graph_expand_options(req: ConsistencyRequest) -> tuple[bool, int, i
     return enabled, max_hops, max(1, doc_cap)
 
 
-def _resolve_layer3_promotion_options(req: ConsistencyRequest) -> tuple[bool, float, int, float]:
+def _resolve_graph_mode(req: ConsistencyRequest, *, legacy_enabled: bool) -> str:
+    mode_raw = req.get("graph_mode")
+    if isinstance(mode_raw, str):
+        mode = mode_raw.strip().lower()
+        if mode in {"off", "manual", "auto"}:
+            return mode
+    return "manual" if legacy_enabled else _DEFAULT_GRAPH_MODE
+
+
+def _has_graph_seed_signal(*, filters: dict[str, object], slots: dict[str, object]) -> bool:
+    if any(filters.get(key) is not None for key in ("entity_id", "time_key", "timeline_idx")):
+        return True
+    for slot_key in slots:
+        if slot_key in {"time", "place", "relation"}:
+            return True
+    return False
+
+
+def _has_graph_ambiguity_signal(results: list[dict[str, Any]]) -> bool:
+    if len(results) < 4:
+        return True
+    scores = sorted((_base_retrieval_score(row) for row in results), reverse=True)
+    if not scores:
+        return True
+    top1 = scores[0]
+    top2 = scores[1] if len(scores) > 1 else 0.0
+    return top1 < 0.30 or (top1 - top2) < 0.07
+
+
+def _resolve_layer3_promotion_options(req: ConsistencyRequest) -> tuple[bool, float, int, float, float]:
     enabled = bool(req.get("layer3_verdict_promotion", False))
 
     min_fts_raw = req.get("layer3_min_fts_for_promotion")
@@ -796,7 +830,18 @@ def _resolve_layer3_promotion_options(req: ConsistencyRequest) -> tuple[bool, fl
         ok_threshold = _DEFAULT_LAYER3_OK_THRESHOLD
     ok_threshold = _clamp01(ok_threshold)
 
-    return enabled, min_fts, max_claim_chars, ok_threshold
+    contradict_threshold_raw = req.get("layer3_contradict_threshold")
+    try:
+        contradict_threshold = (
+            float(contradict_threshold_raw)
+            if contradict_threshold_raw is not None
+            else _DEFAULT_LAYER3_CONTRADICT_THRESHOLD
+        )
+    except (TypeError, ValueError):
+        contradict_threshold = _DEFAULT_LAYER3_CONTRADICT_THRESHOLD
+    contradict_threshold = _clamp01(contradict_threshold)
+
+    return enabled, min_fts, max_claim_chars, ok_threshold, contradict_threshold
 
 
 def _spans_overlap(start_a: int, end_a: int, start_b: int, end_b: int) -> bool:
@@ -855,9 +900,15 @@ def _rerank_results_for_consistency(
     graph_doc_distances: dict[str, int],
     gateway: Any,
     enable_model: bool,
-) -> tuple[list[dict[str, Any]], float]:
+    settings: Any,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not results:
-        return [], 0.0
+        return [], {
+            "entail_score": 0.0,
+            "contradict_score": 0.0,
+            "rerank_applied": False,
+            "model_fallback_count": 0,
+        }
 
     scored: list[tuple[dict[str, Any], float]] = []
     for idx, row in enumerate(results):
@@ -876,33 +927,81 @@ def _rerank_results_for_consistency(
         scored.append((row, score))
 
     scored.sort(key=lambda item: item[1], reverse=True)
-    max_nli = 0.0
-    if enable_model and gateway is not None:
-        nli_scores: dict[str, float] = {}
-        for row, _cheap_score in scored[:_NLI_RERANK_TOP_N]:
-            identity = _result_identity(row)
-            try:
-                nli_value = gateway.nli_score(
-                    {
-                        "claim_text": claim_text,
-                        "evidence": _bundle_result_rows([row]),
-                    }
-                )
-                nli_score = max(0.0, min(1.0, float(nli_value)))
-            except Exception:  # noqa: BLE001
-                nli_score = 0.0
-            nli_scores[identity] = nli_score
-            if nli_score > max_nli:
-                max_nli = nli_score
+    rerank_applied = False
+    model_fallback_count = 0
+    if enable_model and bool(getattr(settings, "enable_local_reranker", False)):
+        top_rows = [row for row, _score in scored[:_LAYER3_RERANK_TOP_N]]
+        try:
+            rerank_pairs, fallback_used = rerank_results(
+                claim_text,
+                top_rows,
+                enabled=True,
+                model_id=str(getattr(settings, "local_reranker_model_id", "")),
+            )
+            if fallback_used:
+                model_fallback_count += 1
+            if rerank_pairs:
+                rerank_applied = True
+                rerank_bonus: dict[str, float] = {}
+                for idx, rerank_score in rerank_pairs:
+                    if idx < 0 or idx >= len(top_rows):
+                        continue
+                    rerank_bonus[_result_identity(top_rows[idx])] = 0.25 * float(rerank_score)
+                rescored: list[tuple[dict[str, Any], float]] = []
+                for row, cheap_score in scored:
+                    rescored.append((row, cheap_score + rerank_bonus.get(_result_identity(row), 0.0)))
+                scored = rescored
+                scored.sort(key=lambda item: item[1], reverse=True)
+        except Exception:  # noqa: BLE001
+            model_fallback_count += 1
 
-        rescored: list[tuple[dict[str, Any], float]] = []
-        for row, cheap_score in scored:
-            nli_bonus = 0.2 * nli_scores.get(_result_identity(row), 0.0)
-            rescored.append((row, cheap_score + nli_bonus))
-        scored = rescored
-        scored.sort(key=lambda item: item[1], reverse=True)
+    entail_score = 0.0
+    contradict_score = 0.0
+    if enable_model:
+        top_rows = [row for row, _score in scored[:_LAYER3_NLI_TOP_K]]
+        evidence_rows = _bundle_result_rows(top_rows)
+        snippets = []
+        for item in evidence_rows:
+            snippet = str(item.get("snippet_text", "") or "")
+            if snippet:
+                snippets.append(snippet)
+        premise = "\n".join(snippets[:_LAYER3_NLI_TOP_K])
+        if premise:
+            if bool(getattr(settings, "enable_local_nli", False)):
+                try:
+                    scores = infer_nli_distribution(
+                        premise,
+                        claim_text,
+                        enabled=True,
+                        model_id=str(getattr(settings, "local_nli_model_id", "")),
+                    )
+                    entail_score = _clamp01(float(scores.get("entail", 0.0)))
+                    contradict_score = _clamp01(float(scores.get("contradict", 0.0)))
+                    if bool(scores.get("fallback_used")):
+                        model_fallback_count += 1
+                except Exception:  # noqa: BLE001
+                    model_fallback_count += 1
+            if entail_score <= 0.0 and gateway is not None:
+                try:
+                    entail_score = _clamp01(
+                        float(
+                            gateway.nli_score(
+                                {
+                                    "claim_text": claim_text,
+                                    "evidence": evidence_rows,
+                                }
+                            )
+                        )
+                    )
+                except Exception:  # noqa: BLE001
+                    model_fallback_count += 1
 
-    return [row for row, _score in scored], max_nli
+    return [row for row, _score in scored], {
+        "entail_score": entail_score,
+        "contradict_score": contradict_score,
+        "rerank_applied": rerank_applied,
+        "model_fallback_count": model_fallback_count,
+    }
 
 
 def _filter_self_evidence_results(
@@ -1054,9 +1153,14 @@ class ConsistencyEngineImpl:
         evidence_link_policy, evidence_link_cap = _resolve_evidence_link_options(req)
         exclude_self_evidence, self_evidence_scope = _resolve_self_evidence_options(req)
         graph_expand_enabled, graph_max_hops, graph_doc_cap = _resolve_graph_expand_options(req)
-        layer3_promotion_enabled, layer3_min_fts, layer3_max_claim_chars, layer3_ok_threshold = (
-            _resolve_layer3_promotion_options(req)
-        )
+        graph_mode = _resolve_graph_mode(req, legacy_enabled=graph_expand_enabled)
+        (
+            layer3_promotion_enabled,
+            layer3_min_fts,
+            layer3_max_claim_chars,
+            layer3_ok_threshold,
+            layer3_contradict_threshold,
+        ) = _resolve_layer3_promotion_options(req)
         retrieval_filters = _normalize_consistency_filters(req.get("filters"))
         metadata_filter_requested = bool(retrieval_filters)
         stats_raw = req.get("stats")
@@ -1076,10 +1180,15 @@ class ConsistencyEngineImpl:
             req_stats.setdefault("graph_expand_applied_count", 0)
             req_stats.setdefault("graph_expand_candidate_docs", 0)
             req_stats.setdefault("graph_expand_refill_results", 0)
+            req_stats.setdefault("graph_auto_trigger_count", 0)
+            req_stats.setdefault("graph_auto_skip_count", 0)
             req_stats.setdefault("unknown_reason_counts", {})
             req_stats.setdefault("evidence_confidence_sum", 0.0)
             req_stats.setdefault("decision_confidence_sum", 0.0)
             req_stats.setdefault("layer3_promoted_ok_count", 0)
+            req_stats.setdefault("layer3_rerank_applied_count", 0)
+            req_stats.setdefault("layer3_model_fallback_count", 0)
+            req_stats["graph_mode"] = graph_mode
 
         if not isinstance(project_id, str) or not isinstance(doc_id, str) or not isinstance(snapshot_id, str):
             raise RuntimeError("invalid consistency request")
@@ -1205,7 +1314,12 @@ class ConsistencyEngineImpl:
                 claim_abs_start = claim_start + offset
                 claim_abs_end = claim_end + offset
                 retrieval_query = segment_text or claim_text
-                cache_key = _claim_cache_key(retrieval_query, filters=retrieval_filters)
+                cache_filters = dict(retrieval_filters)
+                if graph_mode == "auto":
+                    slot_key_hint = claim.get("slot_key")
+                    if isinstance(slot_key_hint, str) and slot_key_hint:
+                        cache_filters["_slot_key"] = slot_key_hint
+                cache_key = _claim_cache_key(retrieval_query, filters=cache_filters)
                 cached_results = retrieval_cache.get(cache_key)
                 if cached_results is not None:
                     retrieval_cache.move_to_end(cache_key)
@@ -1244,7 +1358,17 @@ class ConsistencyEngineImpl:
                             vector_results,
                             limit=_CANDIDATE_K * 3,
                         )
-                    if graph_expand_enabled:
+                    graph_expand_for_claim = False
+                    if graph_mode == "manual":
+                        graph_expand_for_claim = True
+                    elif graph_mode == "auto":
+                        seed_signal = _has_graph_seed_signal(filters=retrieval_filters, slots=slots)
+                        ambiguity_signal = _has_graph_ambiguity_signal(candidate_results)
+                        graph_expand_for_claim = seed_signal and ambiguity_signal
+                        if req_stats is not None:
+                            stat_key = "graph_auto_trigger_count" if graph_expand_for_claim else "graph_auto_skip_count"
+                            req_stats[stat_key] = int(req_stats.get(stat_key, 0)) + 1
+                    if graph_expand_for_claim:
                         candidate_doc_ids, graph_meta = expand_candidate_docs_with_graph(
                             conn,
                             project_id=project_id,
@@ -1310,13 +1434,14 @@ class ConsistencyEngineImpl:
                         req_stats["self_evidence_filtered_count"] = int(
                             req_stats.get("self_evidence_filtered_count", 0)
                         ) + filtered_count
-                reranked_results, rerank_model_score = _rerank_results_for_consistency(
+                reranked_results, rerank_meta = _rerank_results_for_consistency(
                     results=candidate_results,
                     claim_text=claim_text,
                     filters=retrieval_filters,
                     graph_doc_distances=graph_doc_distances,
                     gateway=gateway,
                     enable_model=bool(settings.enable_layer3_model),
+                    settings=settings,
                 )
                 results = reranked_results[:_FINAL_K]
                 if req_stats is not None:
@@ -1328,6 +1453,11 @@ class ConsistencyEngineImpl:
                     )
                     req_stats["shards_loaded"] = int(req_stats.get("shards_loaded", 0)) + int(
                         retrieval_stats.get("shards_loaded", 0)
+                    )
+                    if bool(rerank_meta.get("rerank_applied")):
+                        req_stats["layer3_rerank_applied_count"] = int(req_stats.get("layer3_rerank_applied_count", 0)) + 1
+                    req_stats["layer3_model_fallback_count"] = int(req_stats.get("layer3_model_fallback_count", 0)) + int(
+                        rerank_meta.get("model_fallback_count", 0) or 0
                     )
 
                 evidences = []
@@ -1395,8 +1525,13 @@ class ConsistencyEngineImpl:
 
                 fts_strength = float(results[0]["score"]) if results else 0.0
                 promotion_fts_strength = _base_retrieval_score(results[0]) if results else 0.0
-                model_score = rerank_model_score if settings.enable_layer3_model else 0.0
+                model_score = float(rerank_meta.get("entail_score", 0.0)) if settings.enable_layer3_model else 0.0
+                contradict_score = (
+                    float(rerank_meta.get("contradict_score", 0.0)) if settings.enable_layer3_model else 0.0
+                )
                 confirmed_evidence_count = len([e for e in evidences if e.confirmed])
+                if verdict is Verdict.UNKNOWN and contradict_score >= layer3_contradict_threshold:
+                    unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
 
                 if (
                     verdict is Verdict.UNKNOWN
@@ -1407,6 +1542,7 @@ class ConsistencyEngineImpl:
                     and promotion_fts_strength >= layer3_min_fts
                     and len(claim_text) <= layer3_max_claim_chars
                     and model_score >= layer3_ok_threshold
+                    and contradict_score < layer3_contradict_threshold
                 ):
                     verdict = Verdict.OK
                     unknown_reasons.clear()
@@ -1457,6 +1593,7 @@ class ConsistencyEngineImpl:
                     breakdown=breakdown,
                     whitelist_applied=whitelist_applied,
                     created_at=_now_ts(),
+                    unknown_reasons=tuple(sorted(unknown_reasons)),
                 )
                 evidence_repo.create_verdict_log(conn, verdict_log, commit=False)
                 links = _build_verdict_links(

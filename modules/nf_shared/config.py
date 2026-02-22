@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -12,8 +12,13 @@ from typing import Any, Mapping, get_type_hints
 class Settings:
     enable_remote_api: bool = False
     enable_layer3_model: bool = False
-    enable_local_generator: bool = False  # 차순위(분기)
+    enable_local_nli: bool = False
+    enable_local_reranker: bool = False
+    enable_local_generator: bool = False  # 李⑥닚??遺꾧린)
     enable_debug_web_ui: bool = False
+
+    local_nli_model_id: str = 'nli-lite-v1'
+    local_reranker_model_id: str = 'reranker-lite-v1'
 
     sync_retrieval_mode: str = "FTS_ONLY"
     vector_index_mode: str = "SHARDED"
@@ -24,7 +29,7 @@ class Settings:
 
     evidence_required_for_model_output: bool = True
     implicit_fact_auto_approve: bool = False
-    explicit_fact_auto_approve: bool = False  # 차순위(선택)
+    explicit_fact_auto_approve: bool = False  # 李⑥닚???좏깮)
     debug_web_ui_token: str = ""
 
 
@@ -69,16 +74,16 @@ def _load_file(path: Path) -> dict[str, Any]:
     if path.suffix.lower() == ".json":
         with path.open("r", encoding="utf-8") as fp:
             return json.load(fp)
-    raise ValueError(f"지원하지 않는 설정 형식: {path}")
+    raise ValueError(f"吏?먰븯吏 ?딅뒗 ?ㅼ젙 ?뺤떇: {path}")
 
 
 def load_config(path: Path | str | None = None, *, env: Mapping[str, str] | None = None) -> Settings:
     """
-    기본값 + 선택 파일 + 환경변수 오버라이드로 설정을 로드한다.
+    湲곕낯媛?+ ?좏깮 ?뚯씪 + ?섍꼍蹂???ㅻ쾭?쇱씠?쒕줈 ?ㅼ젙??濡쒕뱶?쒕떎.
 
-    파일 탐색 순서:
-    1) 명시 경로(제공된 경우)
-    2) DEFAULT_CONFIG_PATHS 중 최초로 존재하는 경로
+    ?뚯씪 ?먯깋 ?쒖꽌:
+    1) 紐낆떆 寃쎈줈(?쒓났??寃쎌슦)
+    2) DEFAULT_CONFIG_PATHS 以?理쒖큹濡?議댁옱?섎뒗 寃쎈줈
     """
     env_map: Mapping[str, str] = env or os.environ
 
@@ -109,3 +114,4 @@ def load_config(path: Path | str | None = None, *, env: Mapping[str, str] | None
             merged[field.name] = _coerce(target_type, merged[field.name])
 
     return Settings(**merged)
+
