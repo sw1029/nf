@@ -1393,7 +1393,31 @@ def _handle_consistency(ctx: WorkerContext) -> None:
 
     req["preflight"] = preflight
     req.setdefault("schema_scope", preflight["schema_scope"])
-    req["extraction"] = _parse_extraction_profile(ctx.params if isinstance(ctx.params, dict) else None)
+    params = ctx.params if isinstance(ctx.params, dict) else {}
+    req["extraction"] = _parse_extraction_profile(params)
+    consistency_params = params.get("consistency")
+    if isinstance(consistency_params, dict):
+        evidence_link_policy = consistency_params.get("evidence_link_policy")
+        if isinstance(evidence_link_policy, str):
+            req["evidence_link_policy"] = evidence_link_policy
+        evidence_link_cap = consistency_params.get("evidence_link_cap")
+        if isinstance(evidence_link_cap, int):
+            req["evidence_link_cap"] = evidence_link_cap
+        exclude_self_evidence = consistency_params.get("exclude_self_evidence")
+        if isinstance(exclude_self_evidence, bool):
+            req["exclude_self_evidence"] = exclude_self_evidence
+        self_evidence_scope = consistency_params.get("self_evidence_scope")
+        if isinstance(self_evidence_scope, str):
+            req["self_evidence_scope"] = self_evidence_scope
+        graph_expand_enabled = consistency_params.get("graph_expand_enabled")
+        if isinstance(graph_expand_enabled, bool):
+            req["graph_expand_enabled"] = graph_expand_enabled
+        graph_max_hops = consistency_params.get("graph_max_hops")
+        if isinstance(graph_max_hops, int):
+            req["graph_max_hops"] = graph_max_hops
+        graph_doc_cap = consistency_params.get("graph_doc_cap")
+        if isinstance(graph_doc_cap, int):
+            req["graph_doc_cap"] = graph_doc_cap
     req_stats: dict[str, Any] = {}
     req["stats"] = req_stats
     verdicts = engine.run(req)

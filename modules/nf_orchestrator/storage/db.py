@@ -369,6 +369,7 @@ def _initialize(conn: sqlite3.Connection) -> None:
     _ensure_columns(conn, "documents", "metadata_json", "metadata_json TEXT")
     _ensure_columns(conn, "verdict_log", "claim_fingerprint", "claim_fingerprint TEXT")
     _ensure_indexes(conn)
+    _drop_redundant_indexes(conn)
     _backfill_verdict_log_claim_fingerprints(conn)
     conn.commit()
 
@@ -387,7 +388,6 @@ def _ensure_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_schema_facts_project_schema_layer_status ON schema_facts(project_id, schema_ver, layer, status)",
         "CREATE INDEX IF NOT EXISTS idx_evidence_project_doc_snapshot ON evidence(project_id, doc_id, snapshot_id)",
         "CREATE INDEX IF NOT EXISTS idx_verdict_log_project_doc_created ON verdict_log(project_id, input_doc_id, created_at)",
-        "CREATE INDEX IF NOT EXISTS idx_verdict_evidence_vid ON verdict_evidence_link(vid)",
         "CREATE INDEX IF NOT EXISTS idx_entity_mention_lookup ON entity_mention_span(project_id, doc_id, entity_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_time_anchor_lookup ON time_anchor(project_id, doc_id, time_key, timeline_idx, status)",
         "CREATE INDEX IF NOT EXISTS idx_whitelist_lookup ON whitelist_item(project_id, claim_fingerprint, scope)",
@@ -396,6 +396,14 @@ def _ensure_indexes(conn: sqlite3.Connection) -> None:
     )
     for stmt in index_statements:
         conn.execute(stmt)
+
+
+def _drop_redundant_indexes(conn: sqlite3.Connection) -> None:
+    # PK(vid, eid, role) already provides a left-prefix index on vid.
+    try:
+        conn.execute("DROP INDEX IF EXISTS idx_verdict_evidence_vid")
+    except sqlite3.OperationalError:
+        return
 
 
 def _ensure_columns(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:

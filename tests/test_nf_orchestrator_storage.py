@@ -1,9 +1,11 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 from modules.nf_orchestrator.services.job_service import JobServiceImpl
 from modules.nf_orchestrator.services.project_service import ProjectServiceImpl
+from modules.nf_orchestrator.storage import db as storage_db
 from modules.nf_shared.protocol.dtos import JobEventLevel, JobType
 
 
@@ -46,3 +48,26 @@ def test_job_service_events(tmp_path: Path) -> None:
 
     follow_up = service.list_events(job.job_id, after_seq=last_seq)
     assert any(event.level == JobEventLevel.WARN for _, event in follow_up)
+
+
+@pytest.mark.unit
+def test_db_initializer_drops_redundant_verdict_evidence_index(tmp_path: Path) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS verdict_evidence_link (
+                vid TEXT NOT NULL,
+                eid TEXT NOT NULL,
+                role TEXT NOT NULL,
+                PRIMARY KEY (vid, eid, role)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_verdict_evidence_vid ON verdict_evidence_link(vid)")
+        conn.commit()
+
+    with storage_db.connect(db_path) as conn:
+        rows = conn.execute("PRAGMA index_list('verdict_evidence_link')").fetchall()
+        indexes = {str(row["name"]) for row in rows}
+    assert "idx_verdict_evidence_vid" not in indexes

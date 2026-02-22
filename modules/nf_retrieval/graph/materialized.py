@@ -79,6 +79,28 @@ def build_project_graph(conn: sqlite3.Connection, project_id: str) -> dict[str, 
             _append_set(timeline_doc_ids, timeline_key, doc_id)
             _append_set(doc_timelines, doc_id, timeline_key)
 
+    timeline_rows = conn.execute(
+        """
+        SELECT source_doc_id, time_key, timeline_idx
+        FROM timeline_event
+        WHERE project_id = ? AND status != 'REJECTED'
+        """,
+        (project_id,),
+    ).fetchall()
+    for row in timeline_rows:
+        doc_id = str(row["source_doc_id"] or "")
+        if not doc_id:
+            continue
+        time_key = str(row["time_key"] or "")
+        if time_key:
+            _append_set(time_doc_ids, time_key, doc_id)
+            _append_set(doc_times, doc_id, time_key)
+        timeline_idx = row["timeline_idx"]
+        if timeline_idx is not None:
+            timeline_key = str(int(timeline_idx))
+            _append_set(timeline_doc_ids, timeline_key, doc_id)
+            _append_set(doc_timelines, doc_id, timeline_key)
+
     entity_rows = conn.execute(
         """
         SELECT entity_id, canonical_name
@@ -164,4 +186,3 @@ def load_project_graph(project_id: str) -> dict[str, Any] | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
-

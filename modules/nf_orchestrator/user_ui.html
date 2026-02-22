@@ -1564,7 +1564,7 @@
     function renderVerdicts(verdicts) {
       const contentPanel = document.getElementById('assistant-content');
       if (!verdicts || verdicts.length === 0) {
-        contentPanel.innerHTML = '<div style="padding:20px; text-align:center;">발견된 문제 없음 (완벽합니다!)</div>';
+        contentPanel.innerHTML = '<div style="padding:20px; text-align:center;">No consistency issues found.</div>';
         return;
       }
 
@@ -1573,7 +1573,7 @@
         const verdict = String(v.verdict || 'UNKNOWN');
         const severityClass = verdict === 'VIOLATE' ? 'error' : 'info';
         const title = verdictLabel(verdict);
-        const claimText = (typeof v.claim_text === 'string' && v.claim_text.trim()) ? v.claim_text : '내용 없음';
+        const claimText = (typeof v.claim_text === 'string' && v.claim_text.trim()) ? v.claim_text : 'N/A';
         const reliability = Number(v.reliability_overall || 0);
         const segmentSpan = (v && typeof v.segment_span === 'object') ? v.segment_span : {};
         const spanStart = Number.isInteger(segmentSpan.start) ? segmentSpan.start : null;
@@ -1587,11 +1587,11 @@
                     <strong>${escapeHtml(title)}</strong>
                     <p style="font-size:0.9rem; margin:5px 0;">${escapeHtml(claimText)}</p>
                     <div style="font-size:0.78rem; color:#666; margin-bottom:8px;">
-                      판정: ${escapeHtml(verdict)} | 신뢰도: ${Number.isFinite(reliability) ? reliability.toFixed(2) : '-'} | 구간: ${escapeHtml(spanLabel)}
+                      verdict: ${escapeHtml(verdict)} | reliability: ${Number.isFinite(reliability) ? reliability.toFixed(2) : '-'} | span: ${escapeHtml(spanLabel)}
                     </div>
                     <div style="display:flex; gap:8px; margin-bottom:8px;">
-                      <button class="btn btn-secondary jump-claim" data-claim="${escapeHtml(claimText)}">본문에서 찾기</button>
-                      <button class="btn btn-secondary load-verdict-detail" data-vid="${escapeHtml(vid)}" data-target="${escapeHtml(detailId)}" ${vid ? '' : 'disabled'}>근거 보기</button>
+                      <button class="btn btn-secondary jump-claim" data-claim="${escapeHtml(claimText)}" data-span-start="${spanStart !== null ? spanStart : ''}" data-span-end="${spanEnd !== null ? spanEnd : ''}">Jump to text</button>
+                      <button class="btn btn-secondary load-verdict-detail" data-vid="${escapeHtml(vid)}" data-target="${escapeHtml(detailId)}" ${vid ? '' : 'disabled'}>Load evidence</button>
                     </div>
                     <div id="${escapeHtml(detailId)}" style="font-size:0.8rem; color:#555;"></div>
                 </div>
@@ -1603,7 +1603,15 @@
         node.addEventListener('click', (event) => {
           event.stopPropagation();
           const quote = node.getAttribute('data-claim') || '';
-          highlightText(quote);
+          const rawStart = node.getAttribute('data-span-start');
+          const rawEnd = node.getAttribute('data-span-end');
+          const spanStart = (rawStart !== null && rawStart !== '' && Number.isFinite(Number(rawStart)))
+            ? Number(rawStart)
+            : null;
+          const spanEnd = (rawEnd !== null && rawEnd !== '' && Number.isFinite(Number(rawEnd)))
+            ? Number(rawEnd)
+            : null;
+          jumpToVerdictSegment(spanStart, spanEnd, quote);
         });
       });
       contentPanel.querySelectorAll('.load-verdict-detail').forEach((node) => {
@@ -1619,21 +1627,32 @@
     async function loadVerdictDetail(vid, targetId) {
       const target = document.getElementById(targetId);
       if (!target || !vid || !state.projectId) return;
-      target.innerHTML = '<span style="color:#888;">근거 불러오는 중...</span>';
+      target.innerHTML = '<span style="color:#888;">Loading evidence...</span>';
       try {
         const res = await api(`/query/verdicts/${encodeURIComponent(vid)}?project_id=${encodeURIComponent(state.projectId)}`);
         const evidenceItems = Array.isArray(res.evidence) ? res.evidence : [];
+        const claimFingerprint = typeof res.claim_fingerprint === 'string' ? res.claim_fingerprint : '-';
+        const whitelisted = Boolean(res.whitelisted);
+        const ignored = Boolean(res.ignored);
+
+        let html = `
+          <div style="margin-bottom:8px; padding:8px; background:#f8fafc; border-radius:6px;">
+            <div><strong>whitelisted:</strong> ${whitelisted}</div>
+            <div><strong>ignored:</strong> ${ignored}</div>
+            <div><strong>claim_fingerprint:</strong> ${escapeHtml(claimFingerprint)}</div>
+          </div>
+        `;
+
         if (evidenceItems.length === 0) {
-          target.innerHTML = '<span style="color:#888;">연결된 근거가 없습니다.</span>';
+          target.innerHTML = `${html}<span style="color:#888;">No linked evidence.</span>`;
           return;
         }
-        let html = '';
         evidenceItems.forEach((item) => {
           const ev = (item && typeof item.evidence === 'object') ? item.evidence : {};
           const role = String(item.role || '-');
           const docId = String(ev.doc_id || '-');
           const tagPath = String(ev.tag_path || '-');
-          const snippet = String(ev.snippet_text || '(스니펫 없음)');
+          const snippet = String(ev.snippet_text || '(no snippet)');
           html += `
             <div style="margin-bottom:6px; padding:6px 8px; background:#f8fafc; border-radius:6px;">
               <div style="font-weight:600;">${escapeHtml(role)}</div>
@@ -1645,21 +1664,93 @@
         });
         target.innerHTML = html;
       } catch (e) {
-        target.innerHTML = `<span style="color:red;">근거 조회 실패: ${escapeHtml(e.message || String(e))}</span>`;
+        target.innerHTML = `<span style="color:red;">Failed to load evidence: ${escapeHtml(e.message || String(e))}</span>`;
       }
     }
 
-    function highlightText(quote) {
-      if (!quote) return;
-      console.log("Highlight:", quote);
-      // Bonus: Select text in editor
-      const editor = document.getElementById('editor');
-      const text = editor.innerText;
-      const idx = text.indexOf(quote);
-      if (idx >= 0) {
-        // Since contenteditable is messy with ranges, just alert for now or implement robust find later.
-        alert("문장에서 발견: " + quote.substring(0, 20) + "...");
+    function _collectEditorTextNodes(editor) {
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null);
+      const nodes = [];
+      let node = walker.nextNode();
+      while (node) {
+        const value = node.nodeValue || '';
+        if (value.length > 0) {
+          nodes.push(node);
+        }
+        node = walker.nextNode();
       }
+      return nodes;
+    }
+
+    function _positionForOffset(textNodes, absoluteOffset) {
+      if (!textNodes.length) return null;
+      let consumed = 0;
+      for (const node of textNodes) {
+        const value = node.nodeValue || '';
+        const nextConsumed = consumed + value.length;
+        if (absoluteOffset <= nextConsumed) {
+          return {
+            node,
+            offset: Math.max(0, Math.min(value.length, absoluteOffset - consumed)),
+          };
+        }
+        consumed = nextConsumed;
+      }
+      const tail = textNodes[textNodes.length - 1];
+      return { node: tail, offset: (tail.nodeValue || '').length };
+    }
+
+    function highlightSpan(spanStart, spanEnd) {
+      const editor = document.getElementById('editor');
+      if (!editor) return false;
+      if (!Number.isInteger(spanStart) || !Number.isInteger(spanEnd)) return false;
+      if (spanStart < 0 || spanEnd <= spanStart) return false;
+
+      const text = editor.textContent || '';
+      if (spanStart >= text.length) return false;
+      const clampedEnd = Math.min(spanEnd, text.length);
+      if (clampedEnd <= spanStart) return false;
+
+      const textNodes = _collectEditorTextNodes(editor);
+      if (!textNodes.length) return false;
+      const startPos = _positionForOffset(textNodes, spanStart);
+      const endPos = _positionForOffset(textNodes, clampedEnd);
+      if (!startPos || !endPos) return false;
+
+      const range = document.createRange();
+      range.setStart(startPos.node, startPos.offset);
+      range.setEnd(endPos.node, endPos.offset);
+
+      const sel = window.getSelection();
+      if (!sel) return false;
+      sel.removeAllRanges();
+      sel.addRange(range);
+
+      const anchor = startPos.node.parentElement || editor;
+      if (anchor && typeof anchor.scrollIntoView === 'function') {
+        anchor.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      editor.focus();
+      return true;
+    }
+
+    function jumpToVerdictSegment(spanStart, spanEnd, quote) {
+      if (highlightSpan(spanStart, spanEnd)) {
+        return true;
+      }
+      return highlightText(quote);
+    }
+
+    function highlightText(quote) {
+      if (!quote) return false;
+      const editor = document.getElementById('editor');
+      if (!editor) return false;
+      const text = editor.textContent || '';
+      const idx = text.indexOf(quote);
+      if (idx < 0) {
+        return false;
+      }
+      return highlightSpan(idx, idx + quote.length);
     }
 
     // --- Export ---

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import concurrent.futures
@@ -354,6 +354,8 @@ def run_pipeline_once(
     graph_enabled: bool,
     graph_max_hops: int,
     graph_rerank_weight: float,
+    consistency_evidence_link_policy: str,
+    consistency_evidence_link_cap: int,
     seed: int,
     run_label: str,
 ) -> BenchRunResult:
@@ -416,6 +418,12 @@ def run_pipeline_once(
     )
 
     sample_doc_ids = _pick_consistency_targets(doc_ids, sample_count=consistency_samples, seed=seed)
+    consistency_params = {
+        "consistency": {
+            "evidence_link_policy": consistency_evidence_link_policy,
+            "evidence_link_cap": consistency_evidence_link_cap,
+        }
+    }
     consistency_tasks = [
         {
             "base_url": base_url,
@@ -432,6 +440,7 @@ def run_pipeline_once(
                 },
                 "schema_scope": "explicit_only",
             },
+            "params": consistency_params,
             "timeout_sec": 7200.0,
         }
         for doc_id in sample_doc_ids
@@ -590,6 +599,12 @@ def main() -> int:
     parser.add_argument("--graph-enabled", action="store_true")
     parser.add_argument("--graph-max-hops", type=int, default=1)
     parser.add_argument("--graph-rerank-weight", type=float, default=0.25)
+    parser.add_argument(
+        "--consistency-evidence-link-policy",
+        choices=("full", "cap", "contradict_only"),
+        default="full",
+    )
+    parser.add_argument("--consistency-evidence-link-cap", type=int, default=20)
     parser.add_argument("--worker-procs", type=int, default=int(os.environ.get("NF_WORKER_PROCS", "1")))
     parser.add_argument("--max-heavy-jobs", type=int, default=int(os.environ.get("NF_MAX_HEAVY_JOBS", "1")))
     args = parser.parse_args()
@@ -608,6 +623,8 @@ def main() -> int:
         raise SystemExit("--graph-max-hops must be 1 or 2")
     if not (0.0 <= args.graph_rerank_weight <= 0.5):
         raise SystemExit("--graph-rerank-weight must be between 0.0 and 0.5")
+    if args.consistency_evidence_link_cap < 1:
+        raise SystemExit("--consistency-evidence-link-cap must be >= 1")
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -625,6 +642,8 @@ def main() -> int:
             graph_enabled=args.graph_enabled,
             graph_max_hops=args.graph_max_hops,
             graph_rerank_weight=args.graph_rerank_weight,
+            consistency_evidence_link_policy=args.consistency_evidence_link_policy,
+            consistency_evidence_link_cap=args.consistency_evidence_link_cap,
             seed=args.seed,
             run_label="throughput",
         )
@@ -644,6 +663,8 @@ def main() -> int:
                     graph_enabled=args.graph_enabled,
                     graph_max_hops=args.graph_max_hops,
                     graph_rerank_weight=args.graph_rerank_weight,
+                    consistency_evidence_link_policy=args.consistency_evidence_link_policy,
+                    consistency_evidence_link_cap=args.consistency_evidence_link_cap,
                     seed=args.seed,
                     run_label=f"repro-{idx + 1}",
                 )
@@ -683,6 +704,8 @@ def main() -> int:
             "graph_enabled": args.graph_enabled,
             "graph_max_hops": args.graph_max_hops,
             "graph_rerank_weight": args.graph_rerank_weight,
+            "consistency_evidence_link_policy": args.consistency_evidence_link_policy,
+            "consistency_evidence_link_cap": args.consistency_evidence_link_cap,
         },
         extra={
             "base_url": args.base_url,
@@ -708,6 +731,8 @@ def main() -> int:
             "max_heavy_jobs": args.max_heavy_jobs,
             "ingest_parallelism": args.ingest_parallelism,
             "consistency_parallelism": args.consistency_parallelism,
+            "consistency_evidence_link_policy": args.consistency_evidence_link_policy,
+            "consistency_evidence_link_cap": args.consistency_evidence_link_cap,
         },
         "graph": {
             "enabled": bool(args.graph_enabled),
@@ -744,6 +769,8 @@ def main() -> int:
         f"- profile: `{args.profile}`",
         f"- ingest_parallelism: `{args.ingest_parallelism}`",
         f"- consistency_parallelism: `{args.consistency_parallelism}`",
+        f"- consistency_evidence_link_policy: `{args.consistency_evidence_link_policy}`",
+        f"- consistency_evidence_link_cap: `{args.consistency_evidence_link_cap}`",
         f"- doc_count: `{main_run.doc_count}`",
         f"- ingest_p95_ms: `{main_run.timings_ms.get('ingest_p95', 0.0):.2f}`",
         f"- consistency_p95_ms: `{main_run.timings_ms.get('consistency_p95', 0.0):.2f}`",

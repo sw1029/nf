@@ -11,6 +11,10 @@ class ConsistencyPreflight(TypedDict, total=False):
     schema_scope: Literal["latest_approved", "explicit_only"]
 
 
+ConsistencyEvidenceLinkPolicy = Literal["full", "cap", "contradict_only"]
+ConsistencySelfEvidenceScope = Literal["range", "doc"]
+
+
 class ConsistencyRequest(TypedDict, total=False):
     project_id: str
     input_doc_id: str
@@ -22,6 +26,13 @@ class ConsistencyRequest(TypedDict, total=False):
     filters: dict
     stats: dict
     extraction: dict
+    evidence_link_policy: ConsistencyEvidenceLinkPolicy
+    evidence_link_cap: int
+    exclude_self_evidence: bool
+    self_evidence_scope: ConsistencySelfEvidenceScope
+    graph_expand_enabled: bool
+    graph_max_hops: int
+    graph_doc_cap: int
 
 
 class ConsistencyEngine(Protocol):

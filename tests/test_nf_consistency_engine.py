@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from modules.nf_consistency import engine as consistency_engine
 from modules.nf_consistency.engine import ConsistencyEngineImpl
 from modules.nf_orchestrator.storage import db, docstore
 from modules.nf_orchestrator.storage.repos import document_repo, evidence_repo, ignore_repo, schema_repo
@@ -14,6 +15,7 @@ from modules.nf_schema.chunking import build_chunks
 from modules.nf_shared.protocol.dtos import (
     DocumentType,
     EvidenceMatchType,
+    EvidenceRole,
     FactSource,
     FactStatus,
     SchemaFact,
@@ -312,3 +314,110 @@ def test_consistency_engine_detects_natural_language_age_violation_and_links_sch
         item["role"] == "CONTRADICT" and item["evidence"].doc_id == setting_doc_id
         for item in linked
     )
+
+
+class _DummyEvidence:
+    def __init__(self, eid: str) -> None:
+        self.eid = eid
+
+
+@pytest.mark.unit
+def test_build_verdict_links_cap_limits_total_links() -> None:
+    links = consistency_engine._build_verdict_links(
+        verdict_id="vid-1",
+        evidences=[_DummyEvidence("e1"), _DummyEvidence("e2"), _DummyEvidence("e3")],
+        fact_links=[("f1", EvidenceRole.CONTRADICT), ("f2", EvidenceRole.SUPPORT)],
+        policy="cap",
+        cap=2,
+    )
+    assert len(links) == 2
+    assert [item.eid for item in links] == ["e1", "e2"]
+
+
+@pytest.mark.unit
+def test_build_verdict_links_contradict_only_filters_non_contradict_roles() -> None:
+    links = consistency_engine._build_verdict_links(
+        verdict_id="vid-2",
+        evidences=[_DummyEvidence("e1"), _DummyEvidence("e2")],
+        fact_links=[
+            ("f1", EvidenceRole.SUPPORT),
+            ("f2", EvidenceRole.CONTRADICT),
+            ("f3", EvidenceRole.CONTRADICT),
+        ],
+        policy="contradict_only",
+        cap=10,
+    )
+    assert [item.eid for item in links] == ["f2", "f3"]
+    assert all(item.role is EvidenceRole.CONTRADICT for item in links)
+
+
+@pytest.mark.unit
+def test_resolve_evidence_link_options_invalid_values_fallback_to_defaults() -> None:
+    policy, cap = consistency_engine._resolve_evidence_link_options(
+        {"evidence_link_policy": "invalid", "evidence_link_cap": 0}
+    )
+    assert policy == "full"
+    assert cap == 1
+
+
+@pytest.mark.unit
+def test_resolve_self_evidence_options_defaults() -> None:
+    exclude, scope = consistency_engine._resolve_self_evidence_options({})
+    assert exclude is True
+    assert scope == "range"
+
+
+@pytest.mark.unit
+def test_filter_self_evidence_results_range_scope_filters_overlap_only() -> None:
+    results = [
+        {
+            "score": 0.1,
+            "evidence": {"doc_id": "doc-1", "span_start": 10, "span_end": 20, "chunk_id": "c1"},
+        },
+        {
+            "score": 0.2,
+            "evidence": {"doc_id": "doc-1", "span_start": 25, "span_end": 30, "chunk_id": "c2"},
+        },
+        {
+            "score": 0.3,
+            "evidence": {"doc_id": "doc-2", "span_start": 12, "span_end": 18, "chunk_id": "c3"},
+        },
+    ]
+    kept, removed = consistency_engine._filter_self_evidence_results(
+        results,
+        input_doc_id="doc-1",
+        scope="range",
+        claim_abs_start=12,
+        claim_abs_end=18,
+        range_start=None,
+        range_end=None,
+    )
+    assert removed == 1
+    kept_chunks = [item["evidence"]["chunk_id"] for item in kept]
+    assert kept_chunks == ["c2", "c3"]
+
+
+@pytest.mark.unit
+def test_filter_self_evidence_results_doc_scope_filters_same_doc() -> None:
+    results = [
+        {
+            "score": 0.1,
+            "evidence": {"doc_id": "doc-1", "span_start": 10, "span_end": 20, "chunk_id": "c1"},
+        },
+        {
+            "score": 0.2,
+            "evidence": {"doc_id": "doc-2", "span_start": 25, "span_end": 30, "chunk_id": "c2"},
+        },
+    ]
+    kept, removed = consistency_engine._filter_self_evidence_results(
+        results,
+        input_doc_id="doc-1",
+        scope="doc",
+        claim_abs_start=12,
+        claim_abs_end=18,
+        range_start=None,
+        range_end=None,
+    )
+    assert removed == 1
+    assert len(kept) == 1
+    assert kept[0]["evidence"]["doc_id"] == "doc-2"

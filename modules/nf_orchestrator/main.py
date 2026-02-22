@@ -1379,6 +1379,68 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
     def _validate_job_params(self, job_type: JobType, params: dict[str, Any]) -> None:
         if job_type not in {JobType.INGEST, JobType.CONSISTENCY}:
             return
+        if job_type == JobType.CONSISTENCY:
+            consistency_raw = params.get("consistency")
+            if consistency_raw is not None:
+                if not isinstance(consistency_raw, dict):
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "params.consistency must be an object")
+                policy_raw = consistency_raw.get("evidence_link_policy")
+                if policy_raw is not None:
+                    if not isinstance(policy_raw, str) or policy_raw not in {"full", "cap", "contradict_only"}:
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.evidence_link_policy is invalid",
+                        )
+                cap_raw = consistency_raw.get("evidence_link_cap")
+                if cap_raw is not None:
+                    if not isinstance(cap_raw, int):
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.evidence_link_cap must be integer",
+                        )
+                    if cap_raw < 1:
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.evidence_link_cap must be >= 1",
+                        )
+                exclude_self_raw = consistency_raw.get("exclude_self_evidence")
+                if exclude_self_raw is not None and not isinstance(exclude_self_raw, bool):
+                    raise AppError(
+                        ErrorCode.VALIDATION_ERROR,
+                        "params.consistency.exclude_self_evidence must be boolean",
+                    )
+                self_scope_raw = consistency_raw.get("self_evidence_scope")
+                if self_scope_raw is not None:
+                    if not isinstance(self_scope_raw, str) or self_scope_raw not in {"range", "doc"}:
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.self_evidence_scope is invalid",
+                        )
+                graph_expand_raw = consistency_raw.get("graph_expand_enabled")
+                if graph_expand_raw is not None and not isinstance(graph_expand_raw, bool):
+                    raise AppError(
+                        ErrorCode.VALIDATION_ERROR,
+                        "params.consistency.graph_expand_enabled must be boolean",
+                    )
+                graph_hops_raw = consistency_raw.get("graph_max_hops")
+                if graph_hops_raw is not None:
+                    if not isinstance(graph_hops_raw, int) or graph_hops_raw not in {1, 2}:
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.graph_max_hops must be 1 or 2",
+                        )
+                graph_cap_raw = consistency_raw.get("graph_doc_cap")
+                if graph_cap_raw is not None:
+                    if not isinstance(graph_cap_raw, int):
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.graph_doc_cap must be integer",
+                        )
+                    if graph_cap_raw < 1:
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.graph_doc_cap must be >= 1",
+                        )
         extraction_raw = params.get("extraction")
         if extraction_raw is None:
             return

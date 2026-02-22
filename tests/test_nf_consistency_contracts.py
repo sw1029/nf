@@ -17,6 +17,13 @@ def test_consistency_request_typed_dict_fields() -> None:
         "filters",
         "extraction",
         "stats",
+        "evidence_link_policy",
+        "evidence_link_cap",
+        "exclude_self_evidence",
+        "self_evidence_scope",
+        "graph_expand_enabled",
+        "graph_max_hops",
+        "graph_doc_cap",
     }
 
 

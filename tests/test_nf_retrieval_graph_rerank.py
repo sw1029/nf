@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from modules.nf_orchestrator.storage import db
-from modules.nf_retrieval.graph.rerank import rerank_results_with_graph
+from modules.nf_retrieval.graph.rerank import expand_candidate_docs_with_graph, rerank_results_with_graph
 
 
 def _ts() -> str:
@@ -105,3 +105,47 @@ def test_graph_rerank_skips_when_no_seed(tmp_path: Path) -> None:
     assert meta.get("expanded_docs") == []
     assert int(meta.get("boosted_results", -1)) == 0
     assert reranked == results
+
+
+@pytest.mark.unit
+def test_expand_candidate_docs_with_graph_includes_timeline_event_sources(tmp_path: Path) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+
+    with db.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO timeline_event (
+                timeline_event_id, project_id, timeline_idx, label, time_key,
+                source_doc_id, source_snapshot_id, span_start, span_end, status, created_by, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                project_id,
+                1,
+                "event",
+                "T-001",
+                "doc-timeline",
+                "snap-1",
+                0,
+                10,
+                "APPROVED",
+                "AUTO",
+                _ts(),
+            ),
+        )
+        conn.commit()
+
+        candidates, meta = expand_candidate_docs_with_graph(
+            conn,
+            project_id=project_id,
+            query="",
+            filters={"time_key": "T-001"},
+            max_hops=1,
+            doc_cap=20,
+        )
+
+    assert meta["applied"] is True
+    assert "doc-timeline" in candidates

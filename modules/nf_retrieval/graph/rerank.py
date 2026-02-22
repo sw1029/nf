@@ -87,6 +87,67 @@ def _expand_docs(graph: dict[str, Any], seeds: set[str], max_hops: int) -> dict[
     return distance
 
 
+def expand_candidate_docs_with_graph(
+    conn: sqlite3.Connection,
+    *,
+    project_id: str,
+    query: str,
+    filters: dict[str, Any],
+    max_hops: int = 1,
+    doc_cap: int = 200,
+) -> tuple[list[str], dict[str, Any]]:
+    max_hops = 1 if max_hops < 1 else min(2, max_hops)
+    doc_cap = max(1, int(doc_cap))
+
+    graph = load_project_graph(project_id)
+    if graph is None:
+        graph = build_project_graph(conn, project_id)
+
+    seeds = _collect_seed_docs(graph, query, filters)
+    if not seeds:
+        return [], {
+            "applied": False,
+            "reason": "no_seeds",
+            "seed_docs": [],
+            "expanded_docs": [],
+            "seed_doc_count": 0,
+            "expanded_doc_count": 0,
+            "candidate_doc_count": 0,
+            "max_hops": max_hops,
+            "doc_cap": doc_cap,
+        }
+
+    distances = _expand_docs(graph, seeds, max_hops=max_hops)
+    if not distances:
+        return [], {
+            "applied": False,
+            "reason": "no_reachable_docs",
+            "seed_docs": sorted(seeds),
+            "expanded_docs": [],
+            "seed_doc_count": len(seeds),
+            "expanded_doc_count": 0,
+            "candidate_doc_count": 0,
+            "max_hops": max_hops,
+            "doc_cap": doc_cap,
+        }
+
+    ordered = sorted(distances.items(), key=lambda item: (item[1], item[0]))
+    candidate_doc_ids = [doc_id for doc_id, _distance in ordered[:doc_cap]]
+    seed_docs = sorted(seeds)
+    expanded_docs = sorted(distances.keys())
+    return candidate_doc_ids, {
+        "applied": True,
+        "reason": "",
+        "seed_docs": seed_docs,
+        "expanded_docs": expanded_docs,
+        "seed_doc_count": len(seed_docs),
+        "expanded_doc_count": len(expanded_docs),
+        "candidate_doc_count": len(candidate_doc_ids),
+        "max_hops": max_hops,
+        "doc_cap": doc_cap,
+    }
+
+
 def rerank_results_with_graph(
     conn: sqlite3.Connection,
     *,

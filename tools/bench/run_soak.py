@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import concurrent.futures
@@ -7,6 +7,7 @@ import os
 import random
 import sqlite3
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -48,6 +49,25 @@ _NETWORK_ERROR_HINTS = (
     "urlopen error",
     "network_error",
 )
+
+
+def _is_cancelled(cancel_event: threading.Event | None) -> bool:
+    return cancel_event.is_set() if cancel_event is not None else False
+
+
+def _sleep_with_cancel(seconds: float, *, cancel_event: threading.Event | None = None, tick_sec: float = 0.1) -> None:
+    delay = max(0.0, float(seconds))
+    if delay <= 0.0:
+        return
+    if cancel_event is None:
+        time.sleep(delay)
+        return
+    deadline = time.perf_counter() + delay
+    while time.perf_counter() < deadline:
+        if _is_cancelled(cancel_event):
+            return
+        remaining = deadline - time.perf_counter()
+        time.sleep(min(max(0.01, tick_sec), max(0.0, remaining)))
 
 
 def parse_ts(text: str | None) -> datetime | None:
@@ -161,9 +181,22 @@ class ProgressReporter:
             self._bar.close()
 
 
-def wait_for_job(client: ApiClient, job_id: str, *, poll_sec: float = 0.5, timeout_sec: float = 7200.0) -> JobRun:
+def wait_for_job(
+    client: ApiClient,
+    job_id: str,
+    *,
+    poll_sec: float = 0.5,
+    timeout_sec: float = 7200.0,
+    cancel_event: threading.Event | None = None,
+) -> JobRun:
     start = time.perf_counter()
     while True:
+        if _is_cancelled(cancel_event):
+            return JobRun(
+                job_id=job_id,
+                status="CANCELED_BY_INTERRUPT",
+                elapsed_ms=(time.perf_counter() - start) * 1000.0,
+            )
         res = client.get(f"/jobs/{parse.quote(job_id)}")
         job = res.get("job") or {}
         status = str(job.get("status") or "")
@@ -171,7 +204,7 @@ def wait_for_job(client: ApiClient, job_id: str, *, poll_sec: float = 0.5, timeo
             return JobRun(job_id=job_id, status=status, elapsed_ms=(time.perf_counter() - start) * 1000.0)
         if (time.perf_counter() - start) > timeout_sec:
             return JobRun(job_id=job_id, status="TIMEOUT", elapsed_ms=(time.perf_counter() - start) * 1000.0)
-        time.sleep(poll_sec)
+        _sleep_with_cancel(poll_sec, cancel_event=cancel_event)
 
 
 def submit_and_wait(
@@ -182,6 +215,7 @@ def submit_and_wait(
     inputs: dict[str, Any],
     params: dict[str, Any] | None = None,
     timeout_sec: float = 7200.0,
+    cancel_event: threading.Event | None = None,
 ) -> JobRun:
     created = client.post(
         "/jobs",
@@ -195,7 +229,7 @@ def submit_and_wait(
     job_id = str((created.get("job") or {}).get("job_id"))
     if not job_id:
         raise RuntimeError(f"failed to submit job: {job_type}")
-    run = wait_for_job(client, job_id, timeout_sec=timeout_sec)
+    run = wait_for_job(client, job_id, timeout_sec=timeout_sec, cancel_event=cancel_event)
     run.job_type = job_type
     return run
 
@@ -321,9 +355,12 @@ def wait_for_consistency_slot(
     max_outstanding: int,
     max_wait_sec: float = 60.0,
     poll_sec: float = 0.25,
+    cancel_event: threading.Event | None = None,
 ) -> float:
     start = time.perf_counter()
     while True:
+        if _is_cancelled(cancel_event):
+            return (time.perf_counter() - start) * 1000.0
         try:
             running, queued = get_job_type_pressure(db_path, "CONSISTENCY")
         except sqlite3.Error:
@@ -333,7 +370,7 @@ def wait_for_consistency_slot(
             return (time.perf_counter() - start) * 1000.0
         if (time.perf_counter() - start) >= max_wait_sec:
             return (time.perf_counter() - start) * 1000.0
-        time.sleep(max(0.05, poll_sec))
+        _sleep_with_cancel(max(0.05, poll_sec), cancel_event=cancel_event)
 
 
 def create_project_and_doc(client: ApiClient, *, project_name: str, seed_text: str, profile: str) -> tuple[str, str]:
@@ -373,6 +410,17 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
     graph_enabled = bool(task.get("graph_enabled", False))
     graph_max_hops = max(1, min(2, int(task.get("graph_max_hops", 1))))
     graph_rerank_weight = max(0.0, min(0.5, float(task.get("graph_rerank_weight", 0.25))))
+    consistency_evidence_link_policy = str(task.get("consistency_evidence_link_policy", "full")).strip().lower()
+    if consistency_evidence_link_policy not in {"full", "cap", "contradict_only"}:
+        consistency_evidence_link_policy = "full"
+    try:
+        consistency_evidence_link_cap = int(task.get("consistency_evidence_link_cap", 20))
+    except (TypeError, ValueError):
+        consistency_evidence_link_cap = 20
+    consistency_evidence_link_cap = max(1, consistency_evidence_link_cap)
+    cancel_event = task.get("cancel_event")
+    if not isinstance(cancel_event, threading.Event):
+        cancel_event = None
 
     rng = random.Random(seed + (stream_id * 9973))
     run_started = now_ts()
@@ -495,8 +543,12 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
         nonlocal policy_violations, submit_retries, adaptive_delay_sec, network_errors, unexpected_errors
         attempt = 0
         while True:
+            if _is_cancelled(cancel_event):
+                return JobRun(job_id="", status="CANCELED_BY_INTERRUPT", elapsed_ms=0.0, job_type=job_type)
             if adaptive_throttle and adaptive_delay_sec > 0:
-                time.sleep(adaptive_delay_sec)
+                _sleep_with_cancel(adaptive_delay_sec, cancel_event=cancel_event)
+                if _is_cancelled(cancel_event):
+                    return JobRun(job_id="", status="CANCELED_BY_INTERRUPT", elapsed_ms=0.0, job_type=job_type)
             try:
                 run = submit_and_wait(
                     client,
@@ -505,6 +557,7 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
                     inputs=inputs,
                     params=params,
                     timeout_sec=timeout_sec,
+                    cancel_event=cancel_event,
                 )
                 if adaptive_throttle and adaptive_delay_sec > 0:
                     adaptive_delay_sec = max(0.0, adaptive_delay_sec * 0.7)
@@ -519,7 +572,9 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
                     submit_retries += 1
                     backoff = min(policy_retry_max_sec, policy_retry_base_sec * (2**attempt))
                     jitter = rng.uniform(0.0, min(0.25, backoff * 0.25))
-                    time.sleep(backoff + jitter)
+                    _sleep_with_cancel(backoff + jitter, cancel_event=cancel_event)
+                    if _is_cancelled(cancel_event):
+                        return JobRun(job_id="", status="CANCELED_BY_INTERRUPT", elapsed_ms=0.0, job_type=job_type)
                     if adaptive_throttle:
                         adaptive_delay_sec = min(policy_retry_max_sec, max(adaptive_delay_sec, backoff))
                     attempt += 1
@@ -545,11 +600,11 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
         if run is None:
             failed_jobs += 1
             return None
-        if run.status != "SUCCEEDED":
+        if run.status not in {"SUCCEEDED", "CANCELED_BY_INTERRUPT"}:
             failed_jobs += 1
         return run
 
-    while time.perf_counter() < deadline:
+    while time.perf_counter() < deadline and not _is_cancelled(cancel_event):
         cycles += 1
         marker = _build_marker(cycles, rng=rng)
         try:
@@ -561,16 +616,16 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
             )
         except Exception as exc:  # noqa: BLE001
             record_error("doc_update", exc)
-            time.sleep(max(0.0, sleep_sec))
+            _sleep_with_cancel(max(0.0, sleep_sec), cancel_event=cancel_event)
             continue
 
         ingest = run_stage(job_type="INGEST", inputs={"doc_id": doc_id}, timeout_sec=600.0)
-        if ingest is None:
-            time.sleep(max(0.0, sleep_sec))
+        if ingest is None or ingest.status == "CANCELED_BY_INTERRUPT":
+            _sleep_with_cancel(max(0.0, sleep_sec), cancel_event=cancel_event)
             continue
         index_fts = run_stage(job_type="INDEX_FTS", inputs={"scope": doc_id}, timeout_sec=600.0)
-        if index_fts is None:
-            time.sleep(max(0.0, sleep_sec))
+        if index_fts is None or index_fts.status == "CANCELED_BY_INTERRUPT":
+            _sleep_with_cancel(max(0.0, sleep_sec), cancel_event=cancel_event)
             continue
         if adaptive_throttle and streams > max_heavy_jobs:
             max_outstanding = max_heavy_jobs + 1
@@ -578,7 +633,10 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
                 db_path,
                 max_heavy_jobs=max_heavy_jobs,
                 max_outstanding=max_outstanding,
+                cancel_event=cancel_event,
             )
+            if _is_cancelled(cancel_event):
+                break
         consistency = run_stage(
             job_type="CONSISTENCY",
             inputs={
@@ -592,10 +650,16 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
                 },
                 "schema_scope": "explicit_only",
             },
+            params={
+                "consistency": {
+                    "evidence_link_policy": consistency_evidence_link_policy,
+                    "evidence_link_cap": consistency_evidence_link_cap,
+                }
+            },
             timeout_sec=1200.0,
         )
-        if consistency is None:
-            time.sleep(max(0.0, sleep_sec))
+        if consistency is None or consistency.status == "CANCELED_BY_INTERRUPT":
+            _sleep_with_cancel(max(0.0, sleep_sec), cancel_event=cancel_event)
             continue
         retrieve_vec = run_stage(
             job_type="RETRIEVE_VEC",
@@ -613,8 +677,8 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
             },
             timeout_sec=1200.0,
         )
-        if retrieve_vec is None:
-            time.sleep(max(0.0, sleep_sec))
+        if retrieve_vec is None or retrieve_vec.status == "CANCELED_BY_INTERRUPT":
+            _sleep_with_cancel(max(0.0, sleep_sec), cancel_event=cancel_event)
             continue
 
         try:
@@ -664,7 +728,7 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
                     if bool(graph_meta.get("applied")):
                         graph_jobs_applied += 1
 
-        time.sleep(max(0.0, sleep_sec))
+        _sleep_with_cancel(max(0.0, sleep_sec), cancel_event=cancel_event)
 
     run_elapsed_ms = (time.perf_counter() - run_start_perf) * 1000.0
     failed_ratio = (failed_jobs / total_jobs) if total_jobs else 0.0
@@ -691,6 +755,7 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
         "failed_ratio_lt_1pct": failed_ratio < 0.01,
         "queue_lag_p95_lt_60s": queue_lag_all_p95 < 60000.0,
     }
+    stream_interrupted = _is_cancelled(cancel_event)
 
     return {
         "stream_id": stream_id,
@@ -732,6 +797,8 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
         "semantic": semantic_payload,
         "semantic_hash": sha256_obj(normalize_semantic(semantic_payload)),
         "errors": errors,
+        "interrupted": stream_interrupted,
+        "interrupt_reason": "keyboard_interrupt" if stream_interrupted else None,
     }
 
 
@@ -852,10 +919,17 @@ def _run_parallel_once(
     graph_enabled: bool,
     graph_max_hops: int,
     graph_rerank_weight: float,
+    consistency_evidence_link_policy: str,
+    consistency_evidence_link_cap: int,
 ) -> dict[str, Any]:
     run_started = now_ts()
     run_start_perf = time.perf_counter()
     reporter = ProgressReporter(total_seconds=max(1.0, hours * 3600.0), enabled=show_progress)
+    interrupted = False
+    interrupt_reason: str | None = None
+    cancel_event: threading.Event | None = None
+    if parallel_mode == "thread":
+        cancel_event = threading.Event()
 
     tasks = [
         {
@@ -877,6 +951,9 @@ def _run_parallel_once(
             "graph_enabled": graph_enabled,
             "graph_max_hops": graph_max_hops,
             "graph_rerank_weight": graph_rerank_weight,
+            "consistency_evidence_link_policy": consistency_evidence_link_policy,
+            "consistency_evidence_link_cap": consistency_evidence_link_cap,
+            "cancel_event": cancel_event,
         }
         for stream_id in range(1, streams + 1)
     ]
@@ -888,19 +965,63 @@ def _run_parallel_once(
         executor_cls = concurrent.futures.ThreadPoolExecutor
 
     stream_results: list[dict[str, Any]] = []
-    with executor_cls(max_workers=streams) as executor:
+    executor = executor_cls(max_workers=streams)
+    futures: list[concurrent.futures.Future] = []
+    done_count = 0
+    try:
         futures = [executor.submit(_stream_worker, task) for task in tasks]
-        try:
-            while True:
+        while True:
+            done_count = sum(1 for fut in futures if fut.done())
+            reporter.update(time.perf_counter() - run_start_perf, done=done_count, streams=streams)
+            if done_count >= len(futures):
+                break
+            try:
+                _sleep_with_cancel(0.5, cancel_event=cancel_event)
+            except KeyboardInterrupt:
+                interrupted = True
+                interrupt_reason = "keyboard_interrupt"
+                if cancel_event is not None:
+                    cancel_event.set()
+                break
+
+        if interrupted:
+            grace_deadline = time.perf_counter() + 5.0
+            while time.perf_counter() < grace_deadline:
                 done_count = sum(1 for fut in futures if fut.done())
                 reporter.update(time.perf_counter() - run_start_perf, done=done_count, streams=streams)
                 if done_count >= len(futures):
                     break
-                time.sleep(0.5)
-            for fut in futures:
+                _sleep_with_cancel(0.2, cancel_event=cancel_event)
+
+        for fut in futures:
+            if not fut.done():
+                fut.cancel()
+                continue
+            try:
                 stream_results.append(fut.result())
+            except KeyboardInterrupt:
+                interrupted = True
+                interrupt_reason = "keyboard_interrupt"
+                if cancel_event is not None:
+                    cancel_event.set()
+            except Exception:  # noqa: BLE001
+                if interrupted:
+                    continue
+                raise
+    except KeyboardInterrupt:
+        interrupted = True
+        interrupt_reason = "keyboard_interrupt"
+        if cancel_event is not None:
+            cancel_event.set()
+    finally:
+        try:
+            if interrupted:
+                executor.shutdown(wait=False, cancel_futures=True)
+            else:
+                executor.shutdown(wait=True, cancel_futures=False)
         finally:
-            reporter.update(time.perf_counter() - run_start_perf, done=len(futures), streams=streams)
+            done_count = sum(1 for fut in futures if fut.done()) if futures else 0
+            reporter.update(time.perf_counter() - run_start_perf, done=done_count, streams=streams)
             reporter.close()
 
     aggregate = _aggregate_streams(stream_results, hours=hours)
@@ -921,6 +1042,11 @@ def _run_parallel_once(
         "progress_backend": reporter.backend,
         "semantic_hash": aggregate["semantic_hash"],
         "metrics_hash": aggregate["metrics_hash"],
+        "interrupted": interrupted,
+        "interrupt_reason": interrupt_reason,
+        "partial": interrupted,
+        "streams_expected": streams,
+        "streams_completed": len(stream_results),
     }
 
 
@@ -958,6 +1084,12 @@ def main() -> int:
     parser.add_argument("--graph-enabled", action="store_true")
     parser.add_argument("--graph-max-hops", type=int, default=1)
     parser.add_argument("--graph-rerank-weight", type=float, default=0.25)
+    parser.add_argument(
+        "--consistency-evidence-link-policy",
+        choices=("full", "cap", "contradict_only"),
+        default="full",
+    )
+    parser.add_argument("--consistency-evidence-link-cap", type=int, default=20)
     parser.add_argument("--worker-procs", type=int, default=int(os.environ.get("NF_WORKER_PROCS", "1")))
     parser.add_argument("--max-heavy-jobs", type=int, default=int(os.environ.get("NF_MAX_HEAVY_JOBS", "1")))
     parser.add_argument("--policy-retry-max", type=int, default=5)
@@ -974,6 +1106,18 @@ def main() -> int:
         action="store_false",
         dest="adaptive_throttle",
         help="Disable adaptive throttling.",
+    )
+    parser.add_argument(
+        "--on-interrupt",
+        choices=("write_partial", "fail"),
+        default="write_partial",
+        help="Behavior when interrupted by user (Ctrl+C).",
+    )
+    parser.add_argument(
+        "--interrupt-exit-code",
+        type=int,
+        default=130,
+        help="Exit code used when interrupted.",
     )
     args = parser.parse_args()
 
@@ -993,6 +1137,10 @@ def main() -> int:
         raise SystemExit("--graph-max-hops must be 1 or 2")
     if not (0.0 <= args.graph_rerank_weight <= 0.5):
         raise SystemExit("--graph-rerank-weight must be between 0.0 and 0.5")
+    if args.consistency_evidence_link_cap < 1:
+        raise SystemExit("--consistency-evidence-link-cap must be >= 1")
+    if args.interrupt_exit_code < 0 or args.interrupt_exit_code > 255:
+        raise SystemExit("--interrupt-exit-code must be between 0 and 255")
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1017,9 +1165,15 @@ def main() -> int:
         "graph_enabled": args.graph_enabled,
         "graph_max_hops": args.graph_max_hops,
         "graph_rerank_weight": args.graph_rerank_weight,
+        "consistency_evidence_link_policy": args.consistency_evidence_link_policy,
+        "consistency_evidence_link_cap": args.consistency_evidence_link_cap,
+        "on_interrupt": args.on_interrupt,
+        "interrupt_exit_code": args.interrupt_exit_code,
     }
 
     throughput_run: dict[str, Any] | None = None
+    interrupted = False
+    interrupt_reason: str | None = None
     if args.profile in {"throughput", "dual"}:
         throughput_run = _run_parallel_once(
             base_url=args.base_url,
@@ -1041,37 +1195,51 @@ def main() -> int:
             graph_enabled=args.graph_enabled,
             graph_max_hops=args.graph_max_hops,
             graph_rerank_weight=args.graph_rerank_weight,
+            consistency_evidence_link_policy=args.consistency_evidence_link_policy,
+            consistency_evidence_link_cap=args.consistency_evidence_link_cap,
         )
+        if bool(throughput_run.get("interrupted")):
+            interrupted = True
+            interrupt_reason = str(throughput_run.get("interrupt_reason") or "keyboard_interrupt")
 
     repro_runs: list[dict[str, Any]] = []
-    if args.profile in {"repro", "dual"}:
+    if args.profile in {"repro", "dual"} and not interrupted:
         repro_hours = args.hours if args.profile == "repro" else max(0.001, args.repro_hours)
         for idx in range(args.repro_runs):
-            repro_runs.append(
-                _run_parallel_once(
-                    base_url=args.base_url,
-                    db_path=args.db_path,
-                    hours=repro_hours,
-                    project_name=args.project_name,
-                    sleep_sec=args.sleep_sec,
-                    streams=args.streams,
-                    parallel_mode=args.parallel_mode,
-                    seed=args.seed,
-                    profile="repro",
-                    run_label=f"repro-{idx + 1}",
-                    show_progress=False,
-                    policy_retry_max=args.policy_retry_max,
-                    policy_retry_base_sec=args.policy_retry_base_sec,
-                    policy_retry_max_sec=args.policy_retry_max_sec,
-                    adaptive_throttle=args.adaptive_throttle,
-                    max_heavy_jobs=args.max_heavy_jobs,
-                    graph_enabled=args.graph_enabled,
-                    graph_max_hops=args.graph_max_hops,
-                    graph_rerank_weight=args.graph_rerank_weight,
-                )
+            repro_run = _run_parallel_once(
+                base_url=args.base_url,
+                db_path=args.db_path,
+                hours=repro_hours,
+                project_name=args.project_name,
+                sleep_sec=args.sleep_sec,
+                streams=args.streams,
+                parallel_mode=args.parallel_mode,
+                seed=args.seed,
+                profile="repro",
+                run_label=f"repro-{idx + 1}",
+                show_progress=False,
+                policy_retry_max=args.policy_retry_max,
+                policy_retry_base_sec=args.policy_retry_base_sec,
+                policy_retry_max_sec=args.policy_retry_max_sec,
+                adaptive_throttle=args.adaptive_throttle,
+                max_heavy_jobs=args.max_heavy_jobs,
+                graph_enabled=args.graph_enabled,
+                graph_max_hops=args.graph_max_hops,
+                graph_rerank_weight=args.graph_rerank_weight,
+                consistency_evidence_link_policy=args.consistency_evidence_link_policy,
+                consistency_evidence_link_cap=args.consistency_evidence_link_cap,
             )
+            repro_runs.append(repro_run)
+            if bool(repro_run.get("interrupted")):
+                interrupted = True
+                interrupt_reason = str(repro_run.get("interrupt_reason") or "keyboard_interrupt")
+                break
 
-    main_run = throughput_run or repro_runs[0]
+    main_run = throughput_run
+    if main_run is None and repro_runs:
+        main_run = repro_runs[0]
+    if main_run is None:
+        raise SystemExit("no soak run result produced")
     aggregate = main_run["aggregate"]
 
     repro_semantic_hashes = [run["semantic_hash"] for run in repro_runs]
@@ -1131,6 +1299,8 @@ def main() -> int:
             "policy_retry_base_sec": args.policy_retry_base_sec,
             "policy_retry_max_sec": args.policy_retry_max_sec,
             "adaptive_throttle": args.adaptive_throttle,
+            "consistency_evidence_link_policy": args.consistency_evidence_link_policy,
+            "consistency_evidence_link_cap": args.consistency_evidence_link_cap,
         },
         "graph": {
             "enabled": bool(args.graph_enabled),
@@ -1148,11 +1318,28 @@ def main() -> int:
             "run_manifest": run_manifest,
             "diff_artifact": str(diff_path) if diff_path is not None else None,
         },
+        "interrupted": interrupted,
+        "interrupt_reason": interrupt_reason,
+        "partial": interrupted,
         "runs": {
             "throughput": throughput_run,
             "repro": repro_runs,
         },
     }
+
+    if interrupted and args.on_interrupt == "fail":
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "interrupted": True,
+                    "interrupt_reason": interrupt_reason,
+                    "policy": args.on_interrupt,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return args.interrupt_exit_code
 
     out_path = out_dir / f"soak_{stamp}.json"
     out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1163,6 +1350,11 @@ def main() -> int:
         f"- profile: `{args.profile}`",
         f"- streams: `{args.streams}`",
         f"- parallel_mode: `{args.parallel_mode}`",
+        f"- consistency_evidence_link_policy: `{args.consistency_evidence_link_policy}`",
+        f"- consistency_evidence_link_cap: `{args.consistency_evidence_link_cap}`",
+        f"- interrupted: `{interrupted}`",
+        f"- interrupt_reason: `{interrupt_reason}`",
+        f"- partial: `{result['partial']}`",
         f"- throughput_cycles_per_hour: `{aggregate['throughput_cycles_per_hour']:.4f}`",
         f"- failed_ratio: `{aggregate['failed_ratio']:.6f}`",
         f"- queue_lag_all_p95_ms: `{aggregate['timings_ms']['queue_lag_all_p95']:.2f}`",
@@ -1180,7 +1372,21 @@ def main() -> int:
         f"- diff_artifact: `{result['repro']['diff_artifact']}`",
     ]
     summary_path.write_text("\n".join(summary_lines), encoding="utf-8")
-    print(json.dumps({"ok": True, "output": str(out_path), "summary": str(summary_path)}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "ok": not interrupted,
+                "output": str(out_path),
+                "summary": str(summary_path),
+                "interrupted": interrupted,
+                "interrupt_reason": interrupt_reason,
+                "partial": bool(result["partial"]),
+            },
+            ensure_ascii=False,
+        )
+    )
+    if interrupted:
+        return args.interrupt_exit_code
     return 0
 
 
