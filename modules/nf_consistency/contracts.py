@@ -15,6 +15,25 @@ ConsistencyEvidenceLinkPolicy = Literal["full", "cap", "contradict_only"]
 ConsistencySelfEvidenceScope = Literal["range", "doc"]
 
 
+class ConsistencyVerifierOptions(TypedDict, total=False):
+    mode: Literal["off", "conservative_nli"]
+    promote_ok_threshold: float
+    contradict_alert_threshold: float
+    max_claim_chars: int
+
+
+class ConsistencyTriageOptions(TypedDict, total=False):
+    mode: Literal["off", "embedding_anomaly"]
+    anomaly_threshold: float
+    max_segments_per_run: int
+
+
+class ConsistencyVerificationLoopOptions(TypedDict, total=False):
+    enabled: bool
+    max_rounds: int
+    round_timeout_ms: int
+
+
 class ConsistencyRequest(TypedDict, total=False):
     project_id: str
     input_doc_id: str
@@ -39,6 +58,9 @@ class ConsistencyRequest(TypedDict, total=False):
     layer3_max_claim_chars: int
     layer3_ok_threshold: float
     layer3_contradict_threshold: float
+    verifier: ConsistencyVerifierOptions
+    triage: ConsistencyTriageOptions
+    verification_loop: ConsistencyVerificationLoopOptions
 
 
 class ConsistencyEngine(Protocol):

@@ -611,6 +611,30 @@ def list_schema_facts(
     return [_row_to_schema_fact(row) for row in rows]
 
 
+def list_schema_facts_by_evidence_ids(
+    conn,
+    project_id: str,
+    evidence_ids: list[str],
+    *,
+    status: FactStatus | None = None,
+) -> list[SchemaFact]:
+    cleaned_ids = sorted({eid.strip() for eid in evidence_ids if isinstance(eid, str) and eid.strip()})
+    if not cleaned_ids:
+        return []
+    rows: list[Any] = []
+    chunk_size = 200
+    for start in range(0, len(cleaned_ids), chunk_size):
+        chunk = cleaned_ids[start : start + chunk_size]
+        placeholders = ",".join(["?"] * len(chunk))
+        query = f"SELECT * FROM schema_facts WHERE project_id = ? AND evidence_eid IN ({placeholders})"
+        params: list[Any] = [project_id, *chunk]
+        if status is not None:
+            query += " AND status = ?"
+            params.append(status.value)
+        rows.extend(conn.execute(query, params).fetchall())
+    return [_row_to_schema_fact(row) for row in rows]
+
+
 def get_schema_fact(conn, fact_id: str) -> SchemaFact | None:
     row = conn.execute("SELECT * FROM schema_facts WHERE fact_id = ?", (fact_id,)).fetchone()
     if row is None:

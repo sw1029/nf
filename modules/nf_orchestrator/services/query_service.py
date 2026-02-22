@@ -3,10 +3,10 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 from modules.nf_orchestrator.storage import db
-from modules.nf_orchestrator.storage.repos import evidence_repo, ignore_repo, whitelist_repo
+from modules.nf_orchestrator.storage.repos import evidence_repo, ignore_repo, schema_repo, whitelist_repo
 from modules.nf_retrieval.contracts import RetrievalRequest, RetrievalResult
 from modules.nf_retrieval.fts.fts_index import fts_search
-from modules.nf_shared.protocol.dtos import Evidence, EvidenceMatchType, VerdictLog
+from modules.nf_shared.protocol.dtos import Evidence, EvidenceMatchType, FactStatus, VerdictLog
 
 
 class QueryServiceImpl:
@@ -57,6 +57,43 @@ class QueryServiceImpl:
             if verdict is None or verdict.project_id != project_id:
                 return None
             evidence_items = evidence_repo.list_verdict_evidence(conn, vid)
+            links = evidence_repo.list_verdict_links(conn, vid)
+            eids: list[str] = []
+            eid_roles: dict[str, list[str]] = {}
+            for link in links:
+                eid = str(link.eid or "").strip()
+                if not eid:
+                    continue
+                eids.append(eid)
+                roles = eid_roles.setdefault(eid, [])
+                role_value = link.role.value
+                if role_value not in roles:
+                    roles.append(role_value)
+            fact_paths: list[dict[str, object]] = []
+            if eids:
+                schema_facts = schema_repo.list_schema_facts_by_evidence_ids(
+                    conn,
+                    project_id,
+                    eids,
+                    status=FactStatus.APPROVED,
+                )
+                dedup: set[tuple[str, str, str | None]] = set()
+                for fact in schema_facts:
+                    roles = eid_roles.get(fact.evidence_eid, [])
+                    for role in roles:
+                        key = (role, fact.tag_path, fact.entity_id)
+                        if key in dedup:
+                            continue
+                        dedup.add(key)
+                        fact_paths.append(
+                            {
+                                "role": role,
+                                "tag_path": fact.tag_path,
+                                "entity_id": fact.entity_id,
+                                "source": "schema_fact",
+                            }
+                        )
+                fact_paths.sort(key=lambda item: (str(item.get("role", "")), str(item.get("tag_path", ""))))
             fingerprint = evidence_repo.get_claim_fingerprint(conn, vid)
             if not fingerprint:
                 digest = hashlib.sha256(verdict.claim_text.strip().encode("utf-8")).hexdigest()
@@ -71,4 +108,5 @@ class QueryServiceImpl:
                 "whitelisted": whitelisted,
                 "ignored": ignored,
                 "unknown_reasons": list(verdict.unknown_reasons),
+                "fact_paths": fact_paths,
             }

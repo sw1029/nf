@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ko">
 
 <head>
@@ -350,6 +350,51 @@
       background: #f8fafc;
     }
 
+    .assistant-advanced {
+      margin-top: 10px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: #f8fafc;
+    }
+
+    .assistant-advanced summary {
+      cursor: pointer;
+      font-size: 0.82rem;
+      color: #475569;
+      font-weight: 600;
+    }
+
+    .assistant-advanced .row {
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .assistant-advanced label {
+      font-size: 0.75rem;
+      color: #64748b;
+    }
+
+    .assistant-advanced input,
+    .assistant-advanced select {
+      width: 100%;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 5px 6px;
+      font-size: 0.78rem;
+      background: #fff;
+    }
+
+    ::highlight(nf-violate) {
+      background-color: rgba(231, 76, 60, 0.22);
+    }
+
+    ::highlight(nf-unknown) {
+      background-color: rgba(148, 163, 184, 0.26);
+    }
+
     /* Episode Context Menu Button */
     .menu-btn {
       padding: 4px;
@@ -525,6 +570,57 @@
         <label style="display:block; margin-top:8px; font-size:0.8rem; color:#64748b; cursor:pointer;">
           <input id="toggle-show-ok" type="checkbox" style="margin-right:6px;"> Show OK verdicts
         </label>
+        <details class="assistant-advanced">
+          <summary>Advanced Consistency Options</summary>
+          <div class="row">
+            <label for="consistency-filter-entity">Filter: entity_id</label>
+            <input id="consistency-filter-entity" type="text" placeholder="entity_id">
+          </div>
+          <div class="row">
+            <label for="consistency-filter-time">Filter: time_key</label>
+            <input id="consistency-filter-time" type="text" placeholder="time_key">
+          </div>
+          <div class="row">
+            <label for="consistency-filter-timeline">Filter: timeline_idx</label>
+            <input id="consistency-filter-timeline" type="number" min="0" step="1" placeholder="timeline_idx">
+          </div>
+          <div class="row">
+            <label for="consistency-graph-mode">Graph mode</label>
+            <select id="consistency-graph-mode">
+              <option value="off">off</option>
+              <option value="manual">manual</option>
+              <option value="auto">auto</option>
+            </select>
+          </div>
+          <div class="row">
+            <label for="consistency-layer3-promotion">Layer3 promotion</label>
+            <select id="consistency-layer3-promotion">
+              <option value="off">off</option>
+              <option value="on">on</option>
+            </select>
+          </div>
+          <div class="row">
+            <label for="consistency-verifier-mode">Verifier mode</label>
+            <select id="consistency-verifier-mode">
+              <option value="off">off</option>
+              <option value="conservative_nli">conservative_nli</option>
+            </select>
+          </div>
+          <div class="row">
+            <label for="consistency-triage-mode">Triage mode</label>
+            <select id="consistency-triage-mode">
+              <option value="off">off</option>
+              <option value="embedding_anomaly">embedding_anomaly</option>
+            </select>
+          </div>
+          <div class="row">
+            <label for="consistency-loop-enabled">Verification loop</label>
+            <select id="consistency-loop-enabled">
+              <option value="off">off</option>
+              <option value="on">on</option>
+            </select>
+          </div>
+        </details>
       </div>
 
       <div id="assistant-content" class="list-container">
@@ -589,6 +685,18 @@
       lastSegmentFingerprints: [],
       lastVerdicts: [],
       showOkVerdicts: false,
+      consistencyOptions: {
+        filters: {
+          entity_id: '',
+          time_key: '',
+          timeline_idx: '',
+        },
+        graph_mode: 'off',
+        layer3_promotion: false,
+        verifier_mode: 'off',
+        triage_mode: 'off',
+        verification_loop: false,
+      },
       editorConfig: {
         fontSize: '1.1rem',
         lineHeight: '1.8',
@@ -692,11 +800,151 @@
       return startA < endB && startB < endA;
     }
 
+    function _readConsistencyOptionsFromUi() {
+      const entityInput = document.getElementById('consistency-filter-entity');
+      const timeInput = document.getElementById('consistency-filter-time');
+      const timelineInput = document.getElementById('consistency-filter-timeline');
+      const graphModeInput = document.getElementById('consistency-graph-mode');
+      const layer3Input = document.getElementById('consistency-layer3-promotion');
+      const verifierInput = document.getElementById('consistency-verifier-mode');
+      const triageInput = document.getElementById('consistency-triage-mode');
+      const loopInput = document.getElementById('consistency-loop-enabled');
+
+      const filters = {};
+      const entityId = (entityInput && typeof entityInput.value === 'string') ? entityInput.value.trim() : '';
+      const timeKey = (timeInput && typeof timeInput.value === 'string') ? timeInput.value.trim() : '';
+      const timelineRaw = (timelineInput && typeof timelineInput.value === 'string') ? timelineInput.value.trim() : '';
+      if (entityId) filters.entity_id = entityId;
+      if (timeKey) filters.time_key = timeKey;
+      if (timelineRaw !== '' && Number.isFinite(Number(timelineRaw))) {
+        filters.timeline_idx = Math.max(0, Math.floor(Number(timelineRaw)));
+      }
+
+      const graphMode = (graphModeInput && typeof graphModeInput.value === 'string')
+        ? graphModeInput.value
+        : 'off';
+      const layer3Promotion = layer3Input ? layer3Input.value === 'on' : false;
+      const verifierMode = (verifierInput && typeof verifierInput.value === 'string')
+        ? verifierInput.value
+        : 'off';
+      const triageMode = (triageInput && typeof triageInput.value === 'string')
+        ? triageInput.value
+        : 'off';
+      const verificationLoop = loopInput ? loopInput.value === 'on' : false;
+
+      state.consistencyOptions = {
+        filters: {
+          entity_id: entityId,
+          time_key: timeKey,
+          timeline_idx: timelineRaw,
+        },
+        graph_mode: graphMode,
+        layer3_promotion: layer3Promotion,
+        verifier_mode: verifierMode,
+        triage_mode: triageMode,
+        verification_loop: verificationLoop,
+      };
+
+      const consistencyParams = {
+        graph_mode: graphMode,
+        graph_expand_enabled: graphMode !== 'off',
+        layer3_verdict_promotion: layer3Promotion,
+        verifier: {
+          mode: verifierMode,
+          promote_ok_threshold: 0.95,
+          contradict_alert_threshold: 0.70,
+          max_claim_chars: 220,
+        },
+        triage: {
+          mode: triageMode,
+          anomaly_threshold: 0.65,
+          max_segments_per_run: 8,
+        },
+        verification_loop: {
+          enabled: verificationLoop,
+          max_rounds: 2,
+          round_timeout_ms: 250,
+        },
+      };
+
+      return {
+        filters,
+        params: {
+          consistency: consistencyParams,
+        },
+      };
+    }
+
+    function _buildConsistencyJobPayload(docId, range, preflight) {
+      const options = _readConsistencyOptionsFromUi();
+      return {
+        type: 'CONSISTENCY',
+        project_id: state.projectId,
+        inputs: {
+          input_doc_id: docId,
+          input_snapshot_id: 'latest',
+          range,
+          preflight,
+          schema_scope: 'explicit_only',
+          filters: options.filters,
+        },
+        params: options.params,
+      };
+    }
+
+    function clearInlineVerdictHighlights() {
+      if (!window.CSS || !CSS.highlights) return;
+      CSS.highlights.delete('nf-violate');
+      CSS.highlights.delete('nf-unknown');
+    }
+
+    function renderInlineVerdictHighlights(verdicts) {
+      if (!window.CSS || !CSS.highlights || typeof window.Highlight !== 'function') return;
+      clearInlineVerdictHighlights();
+      const editor = document.getElementById('editor');
+      if (!editor) return;
+      const text = editor.textContent || '';
+      if (!text) return;
+
+      const textNodes = _collectEditorTextNodes(editor);
+      if (!textNodes.length) return;
+
+      const violateRanges = [];
+      const unknownRanges = [];
+      const rows = Array.isArray(verdicts) ? verdicts : [];
+      rows.forEach((item) => {
+        const verdict = String(item?.verdict || 'UNKNOWN');
+        if (verdict !== 'VIOLATE' && verdict !== 'UNKNOWN') return;
+        const span = (item && typeof item.segment_span === 'object') ? item.segment_span : {};
+        const start = Number.isInteger(span.start) ? span.start : null;
+        const end = Number.isInteger(span.end) ? span.end : null;
+        if (start === null || end === null || end <= start || start < 0 || start >= text.length) return;
+        const clampedEnd = Math.min(end, text.length);
+        if (clampedEnd <= start) return;
+        const startPos = _positionForOffset(textNodes, start);
+        const endPos = _positionForOffset(textNodes, clampedEnd);
+        if (!startPos || !endPos) return;
+        const range = document.createRange();
+        range.setStart(startPos.node, startPos.offset);
+        range.setEnd(endPos.node, endPos.offset);
+        if (verdict === 'VIOLATE') violateRanges.push(range);
+        else unknownRanges.push(range);
+      });
+
+      if (violateRanges.length > 0) {
+        CSS.highlights.set('nf-violate', new Highlight(...violateRanges));
+      }
+      if (unknownRanges.length > 0) {
+        CSS.highlights.set('nf-unknown', new Highlight(...unknownRanges));
+      }
+    }
+
     // ... (Config Management omitted, stays same) ...
 
     // --- Editor Input Handler ---
     function handleInput() {
       state.isDirty = true;
+      clearInlineVerdictHighlights();
       document.getElementById('save-status').innerText = "??λ릺吏 ?딆쓬";
       document.getElementById('save-status').style.color = "#e67e22";
 
@@ -833,6 +1081,16 @@
             renderVerdicts(state.lastVerdicts || []);
           });
         }
+        const graphModeInput = document.getElementById('consistency-graph-mode');
+        if (graphModeInput) graphModeInput.value = state.consistencyOptions.graph_mode || 'off';
+        const layer3Input = document.getElementById('consistency-layer3-promotion');
+        if (layer3Input) layer3Input.value = state.consistencyOptions.layer3_promotion ? 'on' : 'off';
+        const verifierInput = document.getElementById('consistency-verifier-mode');
+        if (verifierInput) verifierInput.value = state.consistencyOptions.verifier_mode || 'off';
+        const triageInput = document.getElementById('consistency-triage-mode');
+        if (triageInput) triageInput.value = state.consistencyOptions.triage_mode || 'off';
+        const loopInput = document.getElementById('consistency-loop-enabled');
+        if (loopInput) loopInput.value = state.consistencyOptions.verification_loop ? 'on' : 'off';
 
         if (data.projects && Object.keys(data.projects).length > 0) {
           select.innerHTML = '<option value="">?좏깮?섏꽭??/option>';
@@ -1476,6 +1734,7 @@
         state.pendingConsistencySegments = [];
         state.lastSegmentFingerprints = _segmentTextForConsistency(loadedContent);
         state.lastVerdicts = [];
+        clearInlineVerdictHighlights();
         document.getElementById('save-status').innerText = "??λ맖";
         document.getElementById('save-status').style.color = "#aaa";
 
@@ -1588,24 +1847,16 @@
       state.backgroundConsistencyRunning = true;
       try {
         for (const segment of pending) {
-          const res = await api('/jobs', 'POST', {
-            type: 'CONSISTENCY',
-            project_id: state.projectId,
-            inputs: {
-              input_doc_id: docId,
-              input_snapshot_id: 'latest',
-              range: {
-                start: segment.start,
-                end: segment.end
-              },
-              preflight: {
-                ensure_ingest: false,
-                ensure_index_fts: false,
-                schema_scope: 'explicit_only'
-              },
+          const payload = _buildConsistencyJobPayload(
+            docId,
+            { start: segment.start, end: segment.end },
+            {
+              ensure_ingest: false,
+              ensure_index_fts: false,
               schema_scope: 'explicit_only'
             }
-          });
+          );
+          const res = await api('/jobs', 'POST', payload);
           await waitForJob(res.job.job_id);
         }
 
@@ -1715,24 +1966,19 @@
 
       try {
         // 1. Submit Job
-        const res = await api('/jobs', 'POST', {
-          type: 'CONSISTENCY',
-          project_id: state.projectId,
-          inputs: {
-            input_doc_id: state.currentDocId,
-            input_snapshot_id: 'latest',
-            range: {
-              start: 0,
-              end: Math.max(1, (document.getElementById('editor').innerText || '').length)
-            },
-            preflight: {
-              ensure_ingest: true,
-              ensure_index_fts: true,
-              schema_scope: 'explicit_only'
-            },
+        const payload = _buildConsistencyJobPayload(
+          state.currentDocId,
+          {
+            start: 0,
+            end: Math.max(1, (document.getElementById('editor').innerText || '').length)
+          },
+          {
+            ensure_ingest: true,
+            ensure_index_fts: true,
             schema_scope: 'explicit_only'
           }
-        });
+        );
+        const res = await api('/jobs', 'POST', payload);
 
         const jobId = res.job.job_id;
 
@@ -1768,6 +2014,7 @@
         ? rows
         : rows.filter((item) => String(item?.verdict || 'UNKNOWN') !== 'OK');
       if (visible.length === 0) {
+        clearInlineVerdictHighlights();
         contentPanel.innerHTML = showOk
           ? '<div style="padding:20px; text-align:center;">No consistency verdicts found.</div>'
           : '<div style="padding:20px; text-align:center;">No VIOLATE/UNKNOWN verdicts found.</div>';
@@ -1809,6 +2056,8 @@
                     <div style="display:flex; gap:8px; margin-bottom:8px;">
                       <button class="btn btn-secondary jump-claim" data-claim="${escapeHtml(claimText)}" data-span-start="${spanStart !== null ? spanStart : ''}" data-span-end="${spanEnd !== null ? spanEnd : ''}">Jump to text</button>
                       <button class="btn btn-secondary load-verdict-detail" data-vid="${escapeHtml(vid)}" data-target="${escapeHtml(detailId)}" ${vid ? '' : 'disabled'}>Load evidence</button>
+                      <button class="btn btn-secondary verdict-whitelist" data-claim="${escapeHtml(claimText)}">Whitelist</button>
+                      <button class="btn btn-secondary verdict-ignore" data-claim="${escapeHtml(claimText)}">Ignore</button>
                     </div>
                     <div id="${escapeHtml(detailId)}" style="font-size:0.8rem; color:#555;"></div>
                 </div>
@@ -1816,6 +2065,7 @@
       });
 
       contentPanel.innerHTML = html;
+      renderInlineVerdictHighlights(visible);
       contentPanel.querySelectorAll('.jump-claim').forEach((node) => {
         node.addEventListener('click', (event) => {
           event.stopPropagation();
@@ -1839,6 +2089,60 @@
           await loadVerdictDetail(vid, targetId);
         });
       });
+      contentPanel.querySelectorAll('.verdict-whitelist').forEach((node) => {
+        node.addEventListener('click', async (event) => {
+          event.stopPropagation();
+          const claimText = node.getAttribute('data-claim') || '';
+          await markVerdictAsWhitelisted(claimText);
+        });
+      });
+      contentPanel.querySelectorAll('.verdict-ignore').forEach((node) => {
+        node.addEventListener('click', async (event) => {
+          event.stopPropagation();
+          const claimText = node.getAttribute('data-claim') || '';
+          await markVerdictAsIgnored(claimText);
+        });
+      });
+    }
+
+    async function refreshVerdictsForCurrentDoc(options = {}) {
+      if (!state.projectId || !state.currentDocId) return;
+      const res = await api('/query/verdicts', 'POST', {
+        project_id: state.projectId,
+        input_doc_id: state.currentDocId
+      });
+      renderVerdicts(Array.isArray(res.verdicts) ? res.verdicts : [], options);
+    }
+
+    async function markVerdictAsWhitelisted(claimText) {
+      if (!state.projectId || !state.currentDocId || !claimText) return;
+      try {
+        await api(`/projects/${encodeURIComponent(state.projectId)}/whitelist`, 'POST', {
+          claim_text: claimText,
+          scope: state.currentDocId,
+          note: 'user_ui_verdict_action'
+        });
+        await refreshVerdictsForCurrentDoc();
+      } catch (e) {
+        console.error('failed to whitelist verdict', e);
+        alert(`Failed to whitelist: ${e.message}`);
+      }
+    }
+
+    async function markVerdictAsIgnored(claimText) {
+      if (!state.projectId || !state.currentDocId || !claimText) return;
+      try {
+        await api(`/projects/${encodeURIComponent(state.projectId)}/ignore`, 'POST', {
+          claim_text: claimText,
+          scope: state.currentDocId,
+          kind: 'CONSISTENCY',
+          note: 'user_ui_verdict_action'
+        });
+        await refreshVerdictsForCurrentDoc();
+      } catch (e) {
+        console.error('failed to ignore verdict', e);
+        alert(`Failed to ignore: ${e.message}`);
+      }
     }
 
     async function loadVerdictDetail(vid, targetId) {
@@ -1847,22 +2151,59 @@
       target.innerHTML = '<span style="color:#888;">Loading evidence...</span>';
       try {
         const res = await api(`/query/verdicts/${encodeURIComponent(vid)}?project_id=${encodeURIComponent(state.projectId)}`);
-        const evidenceItems = Array.isArray(res.evidence) ? res.evidence : [];
+        const evidenceItemsRaw = Array.isArray(res.evidence) ? res.evidence : [];
+        const evidenceItems = [...evidenceItemsRaw].sort((lhs, rhs) => {
+          const leftRole = String(lhs?.role || '');
+          const rightRole = String(rhs?.role || '');
+          const leftRank = leftRole === 'CONTRADICT' ? 0 : 1;
+          const rightRank = rightRole === 'CONTRADICT' ? 0 : 1;
+          if (leftRank !== rightRank) return leftRank - rightRank;
+          return leftRole.localeCompare(rightRole);
+        });
         const claimFingerprint = typeof res.claim_fingerprint === 'string' ? res.claim_fingerprint : '-';
         const whitelisted = Boolean(res.whitelisted);
         const ignored = Boolean(res.ignored);
         const unknownReasons = Array.isArray(res.unknown_reasons)
           ? res.unknown_reasons.map((item) => String(item || '').trim()).filter((item) => item.length > 0)
           : [];
+        const factPaths = Array.isArray(res.fact_paths) ? res.fact_paths : [];
+        const contradictCount = evidenceItems.filter((item) => String(item?.role || '') === 'CONTRADICT').length;
+        const verdictInfo = (res && typeof res.verdict === 'object') ? res.verdict : {};
+        const verdictType = String(verdictInfo.verdict || 'UNKNOWN');
 
         let html = `
           <div style="margin-bottom:8px; padding:8px; background:#f8fafc; border-radius:6px;">
             <div><strong>whitelisted:</strong> ${whitelisted}</div>
             <div><strong>ignored:</strong> ${ignored}</div>
+            <div><strong>verdict:</strong> ${escapeHtml(verdictType)}</div>
             <div><strong>claim_fingerprint:</strong> ${escapeHtml(claimFingerprint)}</div>
             <div><strong>unknown_reasons:</strong> ${escapeHtml(unknownReasons.length > 0 ? unknownReasons.join(', ') : '-')}</div>
+            <div><strong>contradict_evidence_count:</strong> ${contradictCount}</div>
           </div>
         `;
+        if (verdictType === 'VIOLATE' && contradictCount <= 0) {
+          html += `
+            <div style="margin-bottom:8px; padding:8px; border-radius:6px; background:#fff7ed; color:#9a3412;">
+              CONTRADICT evidence link missing: verdict may be downgraded to UNKNOWN by engine policy.
+            </div>
+          `;
+        }
+
+        if (factPaths.length > 0) {
+          html += '<div style="margin-bottom:8px;"><strong>fact_paths</strong></div>';
+          factPaths.forEach((pathItem) => {
+            const role = String(pathItem?.role || '-');
+            const tagPath = String(pathItem?.tag_path || '-');
+            const entityId = String(pathItem?.entity_id || '-');
+            html += `
+              <div style="margin-bottom:6px; padding:6px 8px; background:#eff6ff; border-radius:6px;">
+                <div style="font-weight:600;">${escapeHtml(role)}</div>
+                <div>tag_path: ${escapeHtml(tagPath)}</div>
+                <div>entity_id: ${escapeHtml(entityId)}</div>
+              </div>
+            `;
+          });
+        }
 
         if (evidenceItems.length === 0) {
           target.innerHTML = `${html}<span style="color:#888;">No linked evidence.</span>`;

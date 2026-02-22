@@ -199,6 +199,22 @@ def test_consistency_worker_forwards_layer3_promotion_options(
                 "layer3_ok_threshold": 0.91,
                 "layer3_contradict_threshold": 0.86,
                 "graph_mode": "auto",
+                "verifier": {
+                    "mode": "conservative_nli",
+                    "promote_ok_threshold": 0.95,
+                    "contradict_alert_threshold": 0.70,
+                    "max_claim_chars": 220,
+                },
+                "triage": {
+                    "mode": "embedding_anomaly",
+                    "anomaly_threshold": 0.66,
+                    "max_segments_per_run": 6,
+                },
+                "verification_loop": {
+                    "enabled": True,
+                    "max_rounds": 2,
+                    "round_timeout_ms": 250,
+                },
             }
         },
         db_path=db_path,
@@ -211,3 +227,19 @@ def test_consistency_worker_forwards_layer3_promotion_options(
     assert float(captured_req.get("layer3_ok_threshold", 0.0)) == pytest.approx(0.91)
     assert float(captured_req.get("layer3_contradict_threshold", 0.0)) == pytest.approx(0.86)
     assert captured_req.get("graph_mode") == "auto"
+    verifier_req = captured_req.get("verifier")
+    assert isinstance(verifier_req, dict)
+    assert verifier_req.get("mode") == "conservative_nli"
+    assert float(verifier_req.get("promote_ok_threshold", 0.0)) == pytest.approx(0.95)
+    assert float(verifier_req.get("contradict_alert_threshold", 0.0)) == pytest.approx(0.70)
+    assert int(verifier_req.get("max_claim_chars", 0)) == 220
+    triage_req = captured_req.get("triage")
+    assert isinstance(triage_req, dict)
+    assert triage_req.get("mode") == "embedding_anomaly"
+    assert float(triage_req.get("anomaly_threshold", 0.0)) == pytest.approx(0.66)
+    assert int(triage_req.get("max_segments_per_run", 0)) == 6
+    verification_loop_req = captured_req.get("verification_loop")
+    assert isinstance(verification_loop_req, dict)
+    assert verification_loop_req.get("enabled") is True
+    assert int(verification_loop_req.get("max_rounds", 0)) == 2
+    assert int(verification_loop_req.get("round_timeout_ms", 0)) == 250

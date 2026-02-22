@@ -44,3 +44,33 @@ def test_user_ui_has_background_consistency_hooks() -> None:
     assert "scheduleBackgroundConsistencyCheck" in html
     assert "runBackgroundConsistencyCheck" in html
     assert "toggle-show-ok" in html
+
+
+@pytest.mark.unit
+def test_user_ui_exposes_advanced_consistency_controls() -> None:
+    html = Path("modules/nf_orchestrator/user_ui.html").read_text(encoding="utf-8")
+    assert "consistency-filter-entity" in html
+    assert "consistency-filter-time" in html
+    assert "consistency-filter-timeline" in html
+    assert "consistency-graph-mode" in html
+    assert "consistency-layer3-promotion" in html
+    assert "consistency-verifier-mode" in html
+    assert "consistency-triage-mode" in html
+    assert "consistency-loop-enabled" in html
+
+
+@pytest.mark.unit
+def test_user_ui_supports_whitelist_ignore_and_inline_highlight() -> None:
+    html = Path("modules/nf_orchestrator/user_ui.html").read_text(encoding="utf-8")
+    assert "markVerdictAsWhitelisted" in html
+    assert "markVerdictAsIgnored" in html
+    assert "renderInlineVerdictHighlights" in html
+    assert "::highlight(nf-violate)" in html
+    assert "::highlight(nf-unknown)" in html
+
+
+@pytest.mark.unit
+def test_user_ui_verdict_detail_renders_fact_paths() -> None:
+    html = Path("modules/nf_orchestrator/user_ui.html").read_text(encoding="utf-8")
+    assert "fact_paths" in html
+    assert "CONTRADICT evidence link missing" in html

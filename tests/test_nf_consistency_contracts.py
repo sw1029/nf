@@ -30,6 +30,9 @@ def test_consistency_request_typed_dict_fields() -> None:
         "layer3_max_claim_chars",
         "layer3_ok_threshold",
         "layer3_contradict_threshold",
+        "verifier",
+        "triage",
+        "verification_loop",
     }
 
 

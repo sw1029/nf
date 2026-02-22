@@ -1502,6 +1502,128 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                             ErrorCode.VALIDATION_ERROR,
                             "params.consistency.layer3_contradict_threshold must be between 0 and 1",
                         )
+                verifier_raw = consistency_raw.get("verifier")
+                if verifier_raw is not None:
+                    if not isinstance(verifier_raw, dict):
+                        raise AppError(ErrorCode.VALIDATION_ERROR, "params.consistency.verifier must be an object")
+                    verifier_mode_raw = verifier_raw.get("mode")
+                    if verifier_mode_raw is not None:
+                        if not isinstance(verifier_mode_raw, str) or verifier_mode_raw not in {
+                            "off",
+                            "conservative_nli",
+                        }:
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.verifier.mode must be off or conservative_nli",
+                            )
+                    verifier_promote_raw = verifier_raw.get("promote_ok_threshold")
+                    if verifier_promote_raw is not None:
+                        if not isinstance(verifier_promote_raw, (int, float)):
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.verifier.promote_ok_threshold must be number",
+                            )
+                        if not 0.0 <= float(verifier_promote_raw) <= 1.0:
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.verifier.promote_ok_threshold must be between 0 and 1",
+                            )
+                    verifier_contradict_raw = verifier_raw.get("contradict_alert_threshold")
+                    if verifier_contradict_raw is not None:
+                        if not isinstance(verifier_contradict_raw, (int, float)):
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.verifier.contradict_alert_threshold must be number",
+                            )
+                        if not 0.0 <= float(verifier_contradict_raw) <= 1.0:
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.verifier.contradict_alert_threshold must be between 0 and 1",
+                            )
+                    verifier_claim_chars_raw = verifier_raw.get("max_claim_chars")
+                    if verifier_claim_chars_raw is not None:
+                        if not isinstance(verifier_claim_chars_raw, int):
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.verifier.max_claim_chars must be integer",
+                            )
+                        if verifier_claim_chars_raw < 1:
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.verifier.max_claim_chars must be >= 1",
+                            )
+                triage_raw = consistency_raw.get("triage")
+                if triage_raw is not None:
+                    if not isinstance(triage_raw, dict):
+                        raise AppError(ErrorCode.VALIDATION_ERROR, "params.consistency.triage must be an object")
+                    triage_mode_raw = triage_raw.get("mode")
+                    if triage_mode_raw is not None:
+                        if not isinstance(triage_mode_raw, str) or triage_mode_raw not in {"off", "embedding_anomaly"}:
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.triage.mode must be off or embedding_anomaly",
+                            )
+                    triage_threshold_raw = triage_raw.get("anomaly_threshold")
+                    if triage_threshold_raw is not None:
+                        if not isinstance(triage_threshold_raw, (int, float)):
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.triage.anomaly_threshold must be number",
+                            )
+                        if not 0.0 <= float(triage_threshold_raw) <= 1.0:
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.triage.anomaly_threshold must be between 0 and 1",
+                            )
+                    triage_max_segments_raw = triage_raw.get("max_segments_per_run")
+                    if triage_max_segments_raw is not None:
+                        if not isinstance(triage_max_segments_raw, int):
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.triage.max_segments_per_run must be integer",
+                            )
+                        if triage_max_segments_raw < 1:
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.triage.max_segments_per_run must be >= 1",
+                            )
+                verification_loop_raw = consistency_raw.get("verification_loop")
+                if verification_loop_raw is not None:
+                    if not isinstance(verification_loop_raw, dict):
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.verification_loop must be an object",
+                        )
+                    verification_enabled_raw = verification_loop_raw.get("enabled")
+                    if verification_enabled_raw is not None and not isinstance(verification_enabled_raw, bool):
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.verification_loop.enabled must be boolean",
+                        )
+                    verification_rounds_raw = verification_loop_raw.get("max_rounds")
+                    if verification_rounds_raw is not None:
+                        if not isinstance(verification_rounds_raw, int):
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.verification_loop.max_rounds must be integer",
+                            )
+                        if verification_rounds_raw < 1:
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.verification_loop.max_rounds must be >= 1",
+                            )
+                    verification_timeout_raw = verification_loop_raw.get("round_timeout_ms")
+                    if verification_timeout_raw is not None:
+                        if not isinstance(verification_timeout_raw, int):
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.verification_loop.round_timeout_ms must be integer",
+                            )
+                        if verification_timeout_raw < 1:
+                            raise AppError(
+                                ErrorCode.VALIDATION_ERROR,
+                                "params.consistency.verification_loop.round_timeout_ms must be >= 1",
+                            )
         extraction_raw = params.get("extraction")
         if extraction_raw is None:
             return

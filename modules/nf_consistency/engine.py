@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 import unicodedata
 import uuid
 from collections import OrderedDict
@@ -49,6 +50,17 @@ _DEFAULT_LAYER3_MIN_FTS_FOR_PROMOTION = 0.25
 _DEFAULT_LAYER3_MAX_CLAIM_CHARS = 260
 _DEFAULT_LAYER3_OK_THRESHOLD = 0.92
 _DEFAULT_LAYER3_CONTRADICT_THRESHOLD = 0.85
+_DEFAULT_VERIFIER_MODE = "off"
+_DEFAULT_VERIFIER_PROMOTE_OK_THRESHOLD = 0.95
+_DEFAULT_VERIFIER_CONTRADICT_ALERT_THRESHOLD = 0.70
+_DEFAULT_VERIFIER_MAX_CLAIM_CHARS = 220
+_DEFAULT_TRIAGE_MODE = "off"
+_DEFAULT_TRIAGE_ANOMALY_THRESHOLD = 0.65
+_DEFAULT_TRIAGE_MAX_SEGMENTS_PER_RUN = 8
+_DEFAULT_VERIFICATION_LOOP_ENABLED = False
+_DEFAULT_VERIFICATION_LOOP_MAX_ROUNDS = 2
+_DEFAULT_VERIFICATION_LOOP_ROUND_TIMEOUT_MS = 250
+_DEFAULT_CLAIM_CONFIDENCE_MIN = 0.20
 _DEFAULT_GRAPH_MODE = "off"
 _CANDIDATE_K = 12
 _FINAL_K = 3
@@ -60,6 +72,7 @@ _UNKNOWN_REASON_NO_EVIDENCE = "NO_EVIDENCE"
 _UNKNOWN_REASON_AMBIGUOUS_ENTITY = "AMBIGUOUS_ENTITY"
 _UNKNOWN_REASON_SLOT_UNCOMPARABLE = "SLOT_UNCOMPARABLE"
 _UNKNOWN_REASON_CONFLICTING_EVIDENCE = "CONFLICTING_EVIDENCE"
+_HASHED_EMBEDDING_DIM = 96
 
 _STRING_SLOT_KEYS = {"time", "place", "relation", "affiliation", "job", "talent"}
 _SLOT_KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -844,6 +857,225 @@ def _resolve_layer3_promotion_options(req: ConsistencyRequest) -> tuple[bool, fl
     return enabled, min_fts, max_claim_chars, ok_threshold, contradict_threshold
 
 
+def _resolve_verifier_options(req: ConsistencyRequest) -> tuple[str, float, float, int]:
+    raw = req.get("verifier")
+    options = raw if isinstance(raw, dict) else {}
+    mode_raw = options.get("mode")
+    mode = str(mode_raw).strip().lower() if isinstance(mode_raw, str) else _DEFAULT_VERIFIER_MODE
+    if mode not in {"off", "conservative_nli"}:
+        mode = _DEFAULT_VERIFIER_MODE
+
+    promote_raw = options.get("promote_ok_threshold")
+    try:
+        promote_ok_threshold = (
+            float(promote_raw)
+            if promote_raw is not None
+            else _DEFAULT_VERIFIER_PROMOTE_OK_THRESHOLD
+        )
+    except (TypeError, ValueError):
+        promote_ok_threshold = _DEFAULT_VERIFIER_PROMOTE_OK_THRESHOLD
+    promote_ok_threshold = _clamp01(promote_ok_threshold)
+
+    contradict_raw = options.get("contradict_alert_threshold")
+    try:
+        contradict_alert_threshold = (
+            float(contradict_raw)
+            if contradict_raw is not None
+            else _DEFAULT_VERIFIER_CONTRADICT_ALERT_THRESHOLD
+        )
+    except (TypeError, ValueError):
+        contradict_alert_threshold = _DEFAULT_VERIFIER_CONTRADICT_ALERT_THRESHOLD
+    contradict_alert_threshold = _clamp01(contradict_alert_threshold)
+
+    max_claim_chars_raw = options.get("max_claim_chars")
+    try:
+        max_claim_chars = int(max_claim_chars_raw) if max_claim_chars_raw is not None else _DEFAULT_VERIFIER_MAX_CLAIM_CHARS
+    except (TypeError, ValueError):
+        max_claim_chars = _DEFAULT_VERIFIER_MAX_CLAIM_CHARS
+    max_claim_chars = max(1, max_claim_chars)
+    return mode, promote_ok_threshold, contradict_alert_threshold, max_claim_chars
+
+
+def _resolve_triage_options(req: ConsistencyRequest) -> tuple[str, float, int]:
+    raw = req.get("triage")
+    options = raw if isinstance(raw, dict) else {}
+    mode_raw = options.get("mode")
+    mode = str(mode_raw).strip().lower() if isinstance(mode_raw, str) else _DEFAULT_TRIAGE_MODE
+    if mode not in {"off", "embedding_anomaly"}:
+        mode = _DEFAULT_TRIAGE_MODE
+
+    threshold_raw = options.get("anomaly_threshold")
+    try:
+        threshold = float(threshold_raw) if threshold_raw is not None else _DEFAULT_TRIAGE_ANOMALY_THRESHOLD
+    except (TypeError, ValueError):
+        threshold = _DEFAULT_TRIAGE_ANOMALY_THRESHOLD
+    threshold = _clamp01(threshold)
+
+    max_segments_raw = options.get("max_segments_per_run")
+    try:
+        max_segments = int(max_segments_raw) if max_segments_raw is not None else _DEFAULT_TRIAGE_MAX_SEGMENTS_PER_RUN
+    except (TypeError, ValueError):
+        max_segments = _DEFAULT_TRIAGE_MAX_SEGMENTS_PER_RUN
+    max_segments = max(1, max_segments)
+    return mode, threshold, max_segments
+
+
+def _resolve_verification_loop_options(req: ConsistencyRequest) -> tuple[bool, int, int]:
+    raw = req.get("verification_loop")
+    options = raw if isinstance(raw, dict) else {}
+
+    enabled_raw = options.get("enabled")
+    enabled = bool(enabled_raw) if enabled_raw is not None else _DEFAULT_VERIFICATION_LOOP_ENABLED
+
+    max_rounds_raw = options.get("max_rounds")
+    try:
+        max_rounds = int(max_rounds_raw) if max_rounds_raw is not None else _DEFAULT_VERIFICATION_LOOP_MAX_ROUNDS
+    except (TypeError, ValueError):
+        max_rounds = _DEFAULT_VERIFICATION_LOOP_MAX_ROUNDS
+    max_rounds = max(1, max_rounds)
+
+    timeout_raw = options.get("round_timeout_ms")
+    try:
+        round_timeout_ms = (
+            int(timeout_raw)
+            if timeout_raw is not None
+            else _DEFAULT_VERIFICATION_LOOP_ROUND_TIMEOUT_MS
+        )
+    except (TypeError, ValueError):
+        round_timeout_ms = _DEFAULT_VERIFICATION_LOOP_ROUND_TIMEOUT_MS
+    round_timeout_ms = max(1, round_timeout_ms)
+    return enabled, max_rounds, round_timeout_ms
+
+
+def _tokenize_for_embedding(text: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKC", text or "").lower()
+    tokens = re.findall(r"[0-9a-z\uac00-\ud7a3]+", normalized)
+    if tokens:
+        return tokens
+    compact = normalized.strip()
+    return [compact] if compact else []
+
+
+def _vectorize_text_embedding(text: str, *, dim: int = _HASHED_EMBEDDING_DIM) -> list[float]:
+    vec = [0.0 for _ in range(dim)]
+    tokens = _tokenize_for_embedding(text)
+    if not tokens:
+        return vec
+    for token in tokens:
+        digest = hashlib.sha1(token.encode("utf-8")).digest()
+        idx = int.from_bytes(digest[0:2], "big") % dim
+        sign = 1.0 if (digest[2] % 2 == 0) else -1.0
+        vec[idx] += sign
+    norm = sum(value * value for value in vec) ** 0.5
+    if norm <= 0:
+        return vec
+    return [value / norm for value in vec]
+
+
+def _average_vectors(vectors: list[list[float]]) -> list[float]:
+    if not vectors:
+        return []
+    dim = len(vectors[0])
+    out = [0.0 for _ in range(dim)]
+    for vec in vectors:
+        if len(vec) != dim:
+            continue
+        for idx, value in enumerate(vec):
+            out[idx] += value
+    denom = float(max(1, len(vectors)))
+    averaged = [value / denom for value in out]
+    norm = sum(value * value for value in averaged) ** 0.5
+    if norm <= 0:
+        return averaged
+    return [value / norm for value in averaged]
+
+
+def _cosine_similarity(lhs: list[float], rhs: list[float]) -> float:
+    if not lhs or not rhs or len(lhs) != len(rhs):
+        return 0.0
+    dot = 0.0
+    for left, right in zip(lhs, rhs):
+        dot += left * right
+    return _clamp01((dot + 1.0) * 0.5)
+
+
+def _build_world_memory_embedding(*, facts: list, entities: list, aliases: list) -> list[float]:
+    memory_texts: list[str] = []
+    for fact in facts:
+        tag_path = str(getattr(fact, "tag_path", "") or "")
+        value = str(getattr(fact, "value", "") or "")
+        chunk = f"{tag_path} {value}".strip()
+        if chunk:
+            memory_texts.append(chunk)
+    for entity in entities:
+        canonical_name = str(getattr(entity, "canonical_name", "") or "")
+        if canonical_name:
+            memory_texts.append(canonical_name)
+    for alias in aliases:
+        alias_text = str(getattr(alias, "alias_text", "") or "")
+        if alias_text:
+            memory_texts.append(alias_text)
+    vectors = [_vectorize_text_embedding(text) for text in memory_texts if text]
+    return _average_vectors(vectors)
+
+
+def _select_claims_by_triage(
+    claims: list[dict[str, Any]],
+    *,
+    mode: str,
+    anomaly_threshold: float,
+    max_segments_per_run: int,
+    world_memory_embedding: list[float],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if mode != "embedding_anomaly":
+        return claims, {
+            "mode": "off",
+            "total_claims": len(claims),
+            "selected_claims": len(claims),
+            "skipped_claims": 0,
+        }
+    if not claims:
+        return claims, {
+            "mode": "embedding_anomaly",
+            "total_claims": 0,
+            "selected_claims": 0,
+            "skipped_claims": 0,
+        }
+
+    scored: list[tuple[dict[str, Any], float]] = []
+    for claim in claims:
+        claim_text = str(claim.get("segment_text") or claim.get("claim_text") or "")
+        claim_embedding = _vectorize_text_embedding(claim_text)
+        similarity = _cosine_similarity(claim_embedding, world_memory_embedding)
+        anomaly_score = _clamp01(1.0 - similarity)
+        scored.append((claim, anomaly_score))
+    scored.sort(key=lambda item: item[1], reverse=True)
+
+    selected: list[dict[str, Any]] = []
+    for claim, anomaly_score in scored:
+        if anomaly_score < anomaly_threshold:
+            continue
+        selected.append(claim)
+        if len(selected) >= max_segments_per_run:
+            break
+
+    if not selected and scored:
+        selected.append(scored[0][0])
+    if len(selected) > max_segments_per_run:
+        selected = selected[:max_segments_per_run]
+
+    selected_keys = {id(item) for item in selected}
+    return selected, {
+        "mode": "embedding_anomaly",
+        "total_claims": len(claims),
+        "selected_claims": len(selected),
+        "skipped_claims": max(0, len(claims) - len(selected)),
+        "anomaly_threshold": float(anomaly_threshold),
+        "max_segments_per_run": int(max_segments_per_run),
+        "fallback_selected": bool(scored and len(selected) == 1 and id(scored[0][0]) in selected_keys),
+    }
+
+
 def _spans_overlap(start_a: int, end_a: int, start_b: int, end_b: int) -> bool:
     return start_a < end_b and start_b < end_a
 
@@ -1161,6 +1393,25 @@ class ConsistencyEngineImpl:
             layer3_ok_threshold,
             layer3_contradict_threshold,
         ) = _resolve_layer3_promotion_options(req)
+        (
+            verifier_mode,
+            verifier_promote_ok_threshold,
+            verifier_contradict_alert_threshold,
+            verifier_max_claim_chars,
+        ) = _resolve_verifier_options(req)
+        triage_mode, triage_anomaly_threshold, triage_max_segments_per_run = _resolve_triage_options(req)
+        (
+            verification_loop_enabled,
+            verification_loop_max_rounds,
+            verification_loop_round_timeout_ms,
+        ) = _resolve_verification_loop_options(req)
+        verifier_ok_threshold = verifier_promote_ok_threshold if verifier_mode == "conservative_nli" else layer3_ok_threshold
+        verifier_contradict_threshold = (
+            verifier_contradict_alert_threshold
+            if verifier_mode == "conservative_nli"
+            else layer3_contradict_threshold
+        )
+        verifier_claim_char_limit = verifier_max_claim_chars if verifier_mode == "conservative_nli" else layer3_max_claim_chars
         retrieval_filters = _normalize_consistency_filters(req.get("filters"))
         metadata_filter_requested = bool(retrieval_filters)
         stats_raw = req.get("stats")
@@ -1188,6 +1439,13 @@ class ConsistencyEngineImpl:
             req_stats.setdefault("layer3_promoted_ok_count", 0)
             req_stats.setdefault("layer3_rerank_applied_count", 0)
             req_stats.setdefault("layer3_model_fallback_count", 0)
+            req_stats.setdefault("claims_skipped_low_confidence", 0)
+            req_stats.setdefault("triage_skipped_claims", 0)
+            req_stats.setdefault("verification_loop_trigger_count", 0)
+            req_stats.setdefault("verification_loop_rounds_total", 0)
+            req_stats.setdefault("verification_loop_timeout_count", 0)
+            req_stats["verifier_mode"] = verifier_mode
+            req_stats["triage_mode"] = triage_mode
             req_stats["graph_mode"] = graph_mode
 
         if not isinstance(project_id, str) or not isinstance(doc_id, str) or not isinstance(snapshot_id, str):
@@ -1263,6 +1521,22 @@ class ConsistencyEngineImpl:
                     req_stats["avg_slot_confidence"] = float(req_stats.get("slot_candidate_conf_sum", 0.0)) / selected
             tag_defs = schema_repo.list_tag_defs(conn, project_id)
             fact_index = _build_fact_index(facts, tag_defs=tag_defs)
+            world_memory_embedding = _build_world_memory_embedding(facts=facts, entities=entities, aliases=aliases)
+            claims, triage_meta = _select_claims_by_triage(
+                claims,
+                mode=triage_mode,
+                anomaly_threshold=triage_anomaly_threshold,
+                max_segments_per_run=triage_max_segments_per_run,
+                world_memory_embedding=world_memory_embedding,
+            )
+            if req_stats is not None:
+                req_stats["triage_total_claims"] = int(triage_meta.get("total_claims", len(claims)))
+                req_stats["triage_selected_claims"] = int(triage_meta.get("selected_claims", len(claims)))
+                req_stats["triage_skipped_claims"] = int(triage_meta.get("skipped_claims", 0))
+                req_stats["triage_anomaly_threshold"] = float(triage_meta.get("anomaly_threshold", triage_anomaly_threshold))
+                req_stats["triage_max_segments_per_run"] = int(
+                    triage_meta.get("max_segments_per_run", triage_max_segments_per_run)
+                )
             excluded_self_fact_eids = _resolve_excluded_self_fact_eids(
                 conn,
                 facts=facts,
@@ -1279,8 +1553,18 @@ class ConsistencyEngineImpl:
                 claim_start = int(claim["claim_start"])
                 claim_end = int(claim["claim_end"])
                 slots = dict(claim.get("slots") or {})
+                slot_confidence = float(claim.get("slot_confidence", 0.0) or 0.0)
                 if req_stats is not None:
                     req_stats["claims_processed"] = int(req_stats.get("claims_processed", 0)) + 1
+                if (
+                    extraction_profile.get("mode") != "rule_only"
+                    and slot_confidence < _DEFAULT_CLAIM_CONFIDENCE_MIN
+                ):
+                    if req_stats is not None:
+                        req_stats["claims_skipped_low_confidence"] = int(
+                            req_stats.get("claims_skipped_low_confidence", 0)
+                        ) + 1
+                    continue
                 fingerprint = _fingerprint(claim_text)
                 segment_fingerprint = _fingerprint(segment_text)
                 if ignore_repo.is_ignored(
@@ -1444,21 +1728,257 @@ class ConsistencyEngineImpl:
                     settings=settings,
                 )
                 results = reranked_results[:_FINAL_K]
-                if req_stats is not None:
+                candidates = find_entity_candidates(segment_text, alias_index)
+                ambiguous = len(candidates) > 1
+                target_entity_id: str | None = None
+                if len(candidates) == 1:
+                    target_entity_id = next(iter(candidates))
+
+                def _accumulate_metrics(local_retrieval_stats: dict[str, Any], local_rerank_meta: dict[str, Any]) -> None:
+                    if req_stats is None:
+                        return
                     req_stats["chunks_processed"] = int(req_stats.get("chunks_processed", 0)) + int(
-                        retrieval_stats.get("chunks_processed", 0)
+                        local_retrieval_stats.get("chunks_processed", 0)
                     )
                     req_stats["rows_scanned"] = int(req_stats.get("rows_scanned", 0)) + int(
-                        retrieval_stats.get("rows_scanned", 0)
+                        local_retrieval_stats.get("rows_scanned", 0)
                     )
                     req_stats["shards_loaded"] = int(req_stats.get("shards_loaded", 0)) + int(
-                        retrieval_stats.get("shards_loaded", 0)
+                        local_retrieval_stats.get("shards_loaded", 0)
                     )
-                    if bool(rerank_meta.get("rerank_applied")):
+                    if bool(local_rerank_meta.get("rerank_applied")):
                         req_stats["layer3_rerank_applied_count"] = int(req_stats.get("layer3_rerank_applied_count", 0)) + 1
                     req_stats["layer3_model_fallback_count"] = int(req_stats.get("layer3_model_fallback_count", 0)) + int(
-                        rerank_meta.get("model_fallback_count", 0) or 0
+                        local_rerank_meta.get("model_fallback_count", 0) or 0
                     )
+
+                def _evaluate_current_results(
+                    current_results: list[dict[str, Any]],
+                    current_rerank_meta: dict[str, Any],
+                ) -> dict[str, Any]:
+                    verdict = Verdict.UNKNOWN
+                    unknown_reasons: set[str] = set()
+                    if not current_results:
+                        unknown_reasons.add(_UNKNOWN_REASON_NO_EVIDENCE)
+
+                    fact_links: list[tuple[str, EvidenceRole]] = []
+                    judge_meta = {
+                        "saw_ok": False,
+                        "saw_violate": False,
+                        "saw_uncomparable": False,
+                        "conflicting": False,
+                    }
+                    if fact_index:
+                        judged, fact_links, judge_meta = _judge_with_fact_index(
+                            slots,
+                            fact_index,
+                            target_entity_id=target_entity_id,
+                            evidence_link_policy=evidence_link_policy,
+                            evidence_link_cap=evidence_link_cap,
+                            comparison_cache=slot_compare_cache,
+                            excluded_fact_eids=excluded_self_fact_eids,
+                        )
+                        if judged is not None:
+                            verdict = judged
+                        if judge_meta.get("saw_uncomparable"):
+                            unknown_reasons.add(_UNKNOWN_REASON_SLOT_UNCOMPARABLE)
+                        if judge_meta.get("conflicting"):
+                            unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
+                    if ambiguous:
+                        verdict = Verdict.UNKNOWN
+                        unknown_reasons.add(_UNKNOWN_REASON_AMBIGUOUS_ENTITY)
+
+                    if verdict is Verdict.VIOLATE and not any(role is EvidenceRole.CONTRADICT for _, role in fact_links):
+                        verdict = Verdict.UNKNOWN
+                        unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
+
+                    fts_strength = float(current_results[0]["score"]) if current_results else 0.0
+                    promotion_fts_strength = _base_retrieval_score(current_results[0]) if current_results else 0.0
+                    model_score = (
+                        float(current_rerank_meta.get("entail_score", 0.0))
+                        if settings.enable_layer3_model
+                        else 0.0
+                    )
+                    contradict_score = (
+                        float(current_rerank_meta.get("contradict_score", 0.0))
+                        if settings.enable_layer3_model
+                        else 0.0
+                    )
+                    confirmed_evidence_count = len(
+                        [
+                            row
+                            for row in current_results
+                            if bool((row.get("evidence") or {}).get("confirmed", False))
+                        ]
+                    )
+
+                    if verdict is Verdict.UNKNOWN and contradict_score >= verifier_contradict_threshold:
+                        unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
+                    if (
+                        verdict is Verdict.OK
+                        and verifier_mode == "conservative_nli"
+                        and settings.enable_layer3_model
+                        and contradict_score >= verifier_contradict_threshold
+                    ):
+                        verdict = Verdict.UNKNOWN
+                        unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
+
+                    promotion_blocked = bool(
+                        ambiguous
+                        or judge_meta.get("saw_uncomparable")
+                        or judge_meta.get("conflicting")
+                        or (_UNKNOWN_REASON_AMBIGUOUS_ENTITY in unknown_reasons)
+                        or (_UNKNOWN_REASON_SLOT_UNCOMPARABLE in unknown_reasons)
+                        or (_UNKNOWN_REASON_CONFLICTING_EVIDENCE in unknown_reasons)
+                    )
+                    promoted = False
+                    if (
+                        verdict is Verdict.UNKNOWN
+                        and settings.enable_layer3_model
+                        and layer3_promotion_enabled
+                        and current_results
+                        and confirmed_evidence_count >= 2
+                        and not promotion_blocked
+                        and promotion_fts_strength >= layer3_min_fts
+                        and len(claim_text) <= verifier_claim_char_limit
+                        and model_score >= verifier_ok_threshold
+                        and contradict_score < verifier_contradict_threshold
+                    ):
+                        verdict = Verdict.OK
+                        unknown_reasons.clear()
+                        promoted = True
+
+                    if verdict is Verdict.UNKNOWN and not unknown_reasons:
+                        if current_results:
+                            unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
+                        else:
+                            unknown_reasons.add(_UNKNOWN_REASON_NO_EVIDENCE)
+                    if verdict is not Verdict.UNKNOWN:
+                        unknown_reasons.clear()
+
+                    return {
+                        "verdict": verdict,
+                        "unknown_reasons": unknown_reasons,
+                        "fact_links": fact_links,
+                        "judge_meta": judge_meta,
+                        "fts_strength": fts_strength,
+                        "promotion_fts_strength": promotion_fts_strength,
+                        "model_score": model_score,
+                        "contradict_score": contradict_score,
+                        "confirmed_evidence_count": confirmed_evidence_count,
+                        "promoted": promoted,
+                    }
+
+                _accumulate_metrics(retrieval_stats, rerank_meta)
+                evaluation = _evaluate_current_results(results, rerank_meta)
+
+                should_verify = (
+                    verification_loop_enabled
+                    and evaluation["verdict"] is Verdict.UNKNOWN
+                    and bool(
+                        evaluation["unknown_reasons"]
+                        & {_UNKNOWN_REASON_NO_EVIDENCE, _UNKNOWN_REASON_CONFLICTING_EVIDENCE}
+                    )
+                )
+                if should_verify:
+                    if req_stats is not None:
+                        req_stats["verification_loop_trigger_count"] = int(
+                            req_stats.get("verification_loop_trigger_count", 0)
+                        ) + 1
+                    loop_started = time.perf_counter()
+                    for round_idx in range(verification_loop_max_rounds):
+                        elapsed_ms = (time.perf_counter() - loop_started) * 1000.0
+                        if elapsed_ms >= float(verification_loop_round_timeout_ms):
+                            if req_stats is not None:
+                                req_stats["verification_loop_timeout_count"] = int(
+                                    req_stats.get("verification_loop_timeout_count", 0)
+                                ) + 1
+                            break
+                        loop_query = claim_text if round_idx == 0 else f"{claim_text} {segment_text}".strip()
+                        loop_retrieval_stats: dict[str, Any] = {
+                            "chunks_processed": 0,
+                            "rows_scanned": 0,
+                            "shards_loaded": 0,
+                        }
+                        loop_req: dict[str, Any] = {
+                            "project_id": project_id,
+                            "query": loop_query,
+                            "filters": dict(retrieval_filters),
+                            "k": _CANDIDATE_K + (round_idx + 1) * 2,
+                            "stats": loop_retrieval_stats,
+                        }
+                        loop_results = fts_search(conn, loop_req)
+                        if (
+                            len(loop_results) < _VECTOR_REFILL_MIN
+                            and settings.vector_index_mode.upper() != "DISABLED"
+                            and not metadata_filter_requested
+                        ):
+                            if project_doc_ids_for_vector is None:
+                                project_docs = document_repo.list_documents(conn, project_id)
+                                project_doc_ids_for_vector = [item.doc_id for item in project_docs]
+                            loop_vector_filters = dict(retrieval_filters)
+                            loop_vector_filters["doc_ids"] = project_doc_ids_for_vector
+                            loop_vector_req: dict[str, Any] = {
+                                "project_id": project_id,
+                                "query": loop_query,
+                                "filters": loop_vector_filters,
+                                "k": _CANDIDATE_K,
+                                "stats": loop_retrieval_stats,
+                            }
+                            loop_vector_results = vector_search(loop_vector_req)
+                            loop_results = _merge_result_lists(
+                                loop_results,
+                                loop_vector_results,
+                                limit=_CANDIDATE_K * 3,
+                            )
+                        candidate_results = _merge_result_lists(candidate_results, loop_results, limit=_CANDIDATE_K * 4)
+                        if exclude_self_evidence:
+                            candidate_results, filtered_count = _filter_self_evidence_results(
+                                candidate_results,
+                                input_doc_id=doc_id,
+                                scope=self_evidence_scope,
+                                claim_abs_start=claim_abs_start,
+                                claim_abs_end=claim_abs_end,
+                                range_start=range_start,
+                                range_end=range_end,
+                            )
+                            if req_stats is not None and filtered_count > 0:
+                                req_stats["self_evidence_filtered_count"] = int(
+                                    req_stats.get("self_evidence_filtered_count", 0)
+                                ) + filtered_count
+                        reranked_results, rerank_meta = _rerank_results_for_consistency(
+                            results=candidate_results,
+                            claim_text=claim_text,
+                            filters=retrieval_filters,
+                            graph_doc_distances=graph_doc_distances,
+                            gateway=gateway,
+                            enable_model=bool(settings.enable_layer3_model),
+                            settings=settings,
+                        )
+                        results = reranked_results[:_FINAL_K]
+                        _accumulate_metrics(loop_retrieval_stats, rerank_meta)
+                        if req_stats is not None:
+                            req_stats["verification_loop_rounds_total"] = int(
+                                req_stats.get("verification_loop_rounds_total", 0)
+                            ) + 1
+                        evaluation = _evaluate_current_results(results, rerank_meta)
+                        if evaluation["verdict"] is not Verdict.UNKNOWN:
+                            break
+                        if not (
+                            evaluation["unknown_reasons"]
+                            & {_UNKNOWN_REASON_NO_EVIDENCE, _UNKNOWN_REASON_CONFLICTING_EVIDENCE}
+                        ):
+                            break
+
+                verdict = evaluation["verdict"]
+                unknown_reasons = set(evaluation["unknown_reasons"])
+                fact_links = list(evaluation["fact_links"])
+                fts_strength = float(evaluation["fts_strength"])
+                model_score = float(evaluation["model_score"])
+                confirmed_evidence_count = int(evaluation["confirmed_evidence_count"])
+                if bool(evaluation["promoted"]) and req_stats is not None:
+                    req_stats["layer3_promoted_ok_count"] = int(req_stats.get("layer3_promoted_ok_count", 0)) + 1
+                _add_unknown_reasons(req_stats, unknown_reasons)
 
                 evidences = []
                 for result in results:
@@ -1479,84 +1999,6 @@ class ConsistencyEngineImpl:
                     )
                     evidence_repo.create_evidence(conn, evidence, commit=False)
                     evidences.append(evidence)
-
-                verdict = Verdict.UNKNOWN
-                unknown_reasons: set[str] = set()
-                if not results:
-                    unknown_reasons.add(_UNKNOWN_REASON_NO_EVIDENCE)
-
-                candidates = find_entity_candidates(segment_text, alias_index)
-                ambiguous = len(candidates) > 1
-                target_entity_id: str | None = None
-                if len(candidates) == 1:
-                    target_entity_id = next(iter(candidates))
-
-                fact_links: list[tuple[str, EvidenceRole]] = []
-                judge_meta = {
-                    "saw_ok": False,
-                    "saw_violate": False,
-                    "saw_uncomparable": False,
-                    "conflicting": False,
-                }
-                if fact_index:
-                    judged, fact_links, judge_meta = _judge_with_fact_index(
-                        slots,
-                        fact_index,
-                        target_entity_id=target_entity_id,
-                        evidence_link_policy=evidence_link_policy,
-                        evidence_link_cap=evidence_link_cap,
-                        comparison_cache=slot_compare_cache,
-                        excluded_fact_eids=excluded_self_fact_eids,
-                    )
-                    if judged is not None:
-                        verdict = judged
-                    if judge_meta.get("saw_uncomparable"):
-                        unknown_reasons.add(_UNKNOWN_REASON_SLOT_UNCOMPARABLE)
-                    if judge_meta.get("conflicting"):
-                        unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
-                if ambiguous:
-                    verdict = Verdict.UNKNOWN
-                    unknown_reasons.add(_UNKNOWN_REASON_AMBIGUOUS_ENTITY)
-
-                # Enforce evidence contract: VIOLATE must keep CONTRADICT role.
-                if verdict is Verdict.VIOLATE and not any(role is EvidenceRole.CONTRADICT for _, role in fact_links):
-                    verdict = Verdict.UNKNOWN
-                    unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
-
-                fts_strength = float(results[0]["score"]) if results else 0.0
-                promotion_fts_strength = _base_retrieval_score(results[0]) if results else 0.0
-                model_score = float(rerank_meta.get("entail_score", 0.0)) if settings.enable_layer3_model else 0.0
-                contradict_score = (
-                    float(rerank_meta.get("contradict_score", 0.0)) if settings.enable_layer3_model else 0.0
-                )
-                confirmed_evidence_count = len([e for e in evidences if e.confirmed])
-                if verdict is Verdict.UNKNOWN and contradict_score >= layer3_contradict_threshold:
-                    unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
-
-                if (
-                    verdict is Verdict.UNKNOWN
-                    and settings.enable_layer3_model
-                    and layer3_promotion_enabled
-                    and evidences
-                    and confirmed_evidence_count > 0
-                    and promotion_fts_strength >= layer3_min_fts
-                    and len(claim_text) <= layer3_max_claim_chars
-                    and model_score >= layer3_ok_threshold
-                    and contradict_score < layer3_contradict_threshold
-                ):
-                    verdict = Verdict.OK
-                    unknown_reasons.clear()
-                    if req_stats is not None:
-                        req_stats["layer3_promoted_ok_count"] = int(req_stats.get("layer3_promoted_ok_count", 0)) + 1
-
-                if verdict is Verdict.UNKNOWN and not unknown_reasons:
-                    if results:
-                        unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
-                    else:
-                        unknown_reasons.add(_UNKNOWN_REASON_NO_EVIDENCE)
-                if verdict is not Verdict.UNKNOWN:
-                    unknown_reasons.clear()
-                _add_unknown_reasons(req_stats, unknown_reasons)
 
                 breakdown = ReliabilityBreakdown(
                     fts_strength=fts_strength,

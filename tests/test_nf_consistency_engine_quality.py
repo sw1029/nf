@@ -270,6 +270,45 @@ def _single_confirmed_fts_result(_conn, _req):  # noqa: ANN001
                 "match_type": "EXACT",
                 "confirmed": True,
             },
+        },
+        {
+            "source": "fts",
+            "score": 0.12,
+            "evidence": {
+                "doc_id": "doc-ref-2",
+                "snapshot_id": "snap-ref",
+                "chunk_id": "chunk-ref-2",
+                "section_path": "body",
+                "tag_path": "",
+                "snippet_text": "reference2",
+                "span_start": 0,
+                "span_end": 8,
+                "fts_score": 0.12,
+                "match_type": "EXACT",
+                "confirmed": True,
+            },
+        },
+    ]
+
+
+def _single_one_confirmed_fts_result(_conn, _req):  # noqa: ANN001
+    return [
+        {
+            "source": "fts",
+            "score": 0.1,
+            "evidence": {
+                "doc_id": "doc-ref",
+                "snapshot_id": "snap-ref",
+                "chunk_id": "chunk-ref",
+                "section_path": "body",
+                "tag_path": "",
+                "snippet_text": "reference",
+                "span_start": 0,
+                "span_end": 8,
+                "fts_score": 0.1,
+                "match_type": "EXACT",
+                "confirmed": True,
+            },
         }
     ]
 
@@ -313,6 +352,53 @@ def test_layer3_promotion_keeps_default_behavior_when_opt_in_disabled(
             "range": {"start": 0, "end": len(text)},
             "stats": stats,
             "layer3_verdict_promotion": False,
+        }
+    )
+
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict is Verdict.UNKNOWN
+    assert int(stats.get("layer3_promoted_ok_count", 0)) == 0
+
+
+@pytest.mark.unit
+def test_layer3_promotion_requires_at_least_two_confirmed_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "placeholder"
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    monkeypatch.setattr("modules.nf_consistency.engine._extract_claims", _single_claim)
+    monkeypatch.setattr("modules.nf_consistency.engine.fts_search", _single_one_confirmed_fts_result)
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.load_config",
+        lambda: Settings(enable_layer3_model=True, vector_index_mode="DISABLED"),
+    )
+    monkeypatch.setattr("modules.nf_consistency.engine.select_model", lambda purpose="consistency": _FixedGateway(0.99))
+
+    engine = ConsistencyEngineImpl(db_path=db_path)
+    stats: dict[str, object] = {}
+    verdicts = engine.run(
+        {
+            "project_id": project_id,
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "stats": stats,
+            "layer3_verdict_promotion": True,
         }
     )
 
@@ -413,3 +499,22 @@ def test_layer3_promotion_does_not_upgrade_when_model_score_is_low(
     assert len(verdicts) == 1
     assert verdicts[0].verdict is Verdict.UNKNOWN
     assert int(stats.get("layer3_promoted_ok_count", 0)) == 0
+
+
+@pytest.mark.unit
+def test_resolve_verifier_triage_and_loop_options_defaults() -> None:
+    verifier_mode, promote_th, contradict_th, max_chars = consistency_engine._resolve_verifier_options({})
+    assert verifier_mode == "off"
+    assert promote_th == pytest.approx(0.95)
+    assert contradict_th == pytest.approx(0.70)
+    assert max_chars == 220
+
+    triage_mode, anomaly_th, max_segments = consistency_engine._resolve_triage_options({})
+    assert triage_mode == "off"
+    assert anomaly_th == pytest.approx(0.65)
+    assert max_segments == 8
+
+    loop_enabled, loop_rounds, loop_timeout_ms = consistency_engine._resolve_verification_loop_options({})
+    assert loop_enabled is False
+    assert loop_rounds == 2
+    assert loop_timeout_ms == 250

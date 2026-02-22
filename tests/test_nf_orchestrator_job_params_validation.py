@@ -27,6 +27,22 @@ def test_validate_job_params_accepts_valid_consistency_options() -> None:
                 "layer3_max_claim_chars": 260,
                 "layer3_ok_threshold": 0.88,
                 "layer3_contradict_threshold": 0.85,
+                "verifier": {
+                    "mode": "conservative_nli",
+                    "promote_ok_threshold": 0.95,
+                    "contradict_alert_threshold": 0.70,
+                    "max_claim_chars": 220,
+                },
+                "triage": {
+                    "mode": "embedding_anomaly",
+                    "anomaly_threshold": 0.65,
+                    "max_segments_per_run": 8,
+                },
+                "verification_loop": {
+                    "enabled": False,
+                    "max_rounds": 2,
+                    "round_timeout_ms": 250,
+                },
             }
         },
     )
@@ -50,6 +66,58 @@ def test_validate_job_params_rejects_invalid_consistency_cap() -> None:
                 "consistency": {
                     "evidence_link_policy": "full",
                     "evidence_link_cap": 0,
+                }
+            },
+        )
+    assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
+
+
+@pytest.mark.unit
+def test_validate_job_params_rejects_invalid_verifier_options() -> None:
+    handler = object.__new__(OrchestratorHandler)
+    with pytest.raises(AppError) as exc_info:
+        handler._validate_job_params(
+            JobType.CONSISTENCY,
+            {
+                "consistency": {
+                    "verifier": {"mode": "maybe"},
+                }
+            },
+        )
+    assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
+
+    with pytest.raises(AppError) as exc_info:
+        handler._validate_job_params(
+            JobType.CONSISTENCY,
+            {
+                "consistency": {
+                    "verifier": {"promote_ok_threshold": 1.2},
+                }
+            },
+        )
+    assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
+
+
+@pytest.mark.unit
+def test_validate_job_params_rejects_invalid_triage_or_verification_loop_options() -> None:
+    handler = object.__new__(OrchestratorHandler)
+    with pytest.raises(AppError) as exc_info:
+        handler._validate_job_params(
+            JobType.CONSISTENCY,
+            {
+                "consistency": {
+                    "triage": {"mode": "always"},
+                }
+            },
+        )
+    assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
+
+    with pytest.raises(AppError) as exc_info:
+        handler._validate_job_params(
+            JobType.CONSISTENCY,
+            {
+                "consistency": {
+                    "verification_loop": {"enabled": True, "max_rounds": 0},
                 }
             },
         )

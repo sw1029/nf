@@ -1436,6 +1436,51 @@ def _handle_consistency(ctx: WorkerContext) -> None:
         layer3_contradict_threshold = consistency_params.get("layer3_contradict_threshold")
         if isinstance(layer3_contradict_threshold, (int, float)):
             req["layer3_contradict_threshold"] = float(layer3_contradict_threshold)
+        verifier = consistency_params.get("verifier")
+        if isinstance(verifier, dict):
+            verifier_req: dict[str, Any] = {}
+            verifier_mode = verifier.get("mode")
+            if isinstance(verifier_mode, str):
+                verifier_req["mode"] = verifier_mode
+            promote_ok_threshold = verifier.get("promote_ok_threshold")
+            if isinstance(promote_ok_threshold, (int, float)):
+                verifier_req["promote_ok_threshold"] = float(promote_ok_threshold)
+            contradict_alert_threshold = verifier.get("contradict_alert_threshold")
+            if isinstance(contradict_alert_threshold, (int, float)):
+                verifier_req["contradict_alert_threshold"] = float(contradict_alert_threshold)
+            max_claim_chars = verifier.get("max_claim_chars")
+            if isinstance(max_claim_chars, int):
+                verifier_req["max_claim_chars"] = max_claim_chars
+            if verifier_req:
+                req["verifier"] = verifier_req
+        triage = consistency_params.get("triage")
+        if isinstance(triage, dict):
+            triage_req: dict[str, Any] = {}
+            triage_mode = triage.get("mode")
+            if isinstance(triage_mode, str):
+                triage_req["mode"] = triage_mode
+            anomaly_threshold = triage.get("anomaly_threshold")
+            if isinstance(anomaly_threshold, (int, float)):
+                triage_req["anomaly_threshold"] = float(anomaly_threshold)
+            max_segments_per_run = triage.get("max_segments_per_run")
+            if isinstance(max_segments_per_run, int):
+                triage_req["max_segments_per_run"] = max_segments_per_run
+            if triage_req:
+                req["triage"] = triage_req
+        verification_loop = consistency_params.get("verification_loop")
+        if isinstance(verification_loop, dict):
+            verification_loop_req: dict[str, Any] = {}
+            verification_enabled = verification_loop.get("enabled")
+            if isinstance(verification_enabled, bool):
+                verification_loop_req["enabled"] = verification_enabled
+            verification_max_rounds = verification_loop.get("max_rounds")
+            if isinstance(verification_max_rounds, int):
+                verification_loop_req["max_rounds"] = verification_max_rounds
+            verification_round_timeout_ms = verification_loop.get("round_timeout_ms")
+            if isinstance(verification_round_timeout_ms, int):
+                verification_loop_req["round_timeout_ms"] = verification_round_timeout_ms
+            if verification_loop_req:
+                req["verification_loop"] = verification_loop_req
     req_stats: dict[str, Any] = {}
     req["stats"] = req_stats
     verdicts = engine.run(req)
