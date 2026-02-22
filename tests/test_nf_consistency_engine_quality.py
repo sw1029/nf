@@ -9,6 +9,7 @@ from modules.nf_consistency import engine as consistency_engine
 from modules.nf_consistency.engine import ConsistencyEngineImpl
 from modules.nf_orchestrator.storage import db, docstore
 from modules.nf_orchestrator.storage.repos import document_repo, evidence_repo
+from modules.nf_shared.config import Settings
 from modules.nf_shared.protocol.dtos import DocumentType, ReliabilityBreakdown, Verdict
 
 
@@ -73,6 +74,18 @@ def test_segment_text_splits_on_sentence_boundaries() -> None:
     assert [segment for _, _, segment in segments] == ["A.", "B!", "C?"]
 
 
+@pytest.mark.unit
+def test_segment_text_handles_decimal_ellipsis_and_quote_tail() -> None:
+    text = "Price is 3.14... \"Really?\" He nodded\u2026\nNext line."
+    segments = consistency_engine._segment_text(text)
+    assert [segment for _, _, segment in segments] == [
+        "Price is 3.14...",
+        "\"Really?\"",
+        "He nodded\u2026",
+        "Next line.",
+    ]
+
+
 @dataclass(frozen=True)
 class _FakeFact:
     evidence_eid: str
@@ -96,6 +109,25 @@ def test_judge_with_fact_index_downgrades_conflicting_evidence_to_unknown() -> N
     assert verdict is Verdict.UNKNOWN
     assert meta["conflicting"] is True
     assert len(links) == 2
+
+
+@pytest.mark.unit
+def test_judge_with_fact_index_excludes_self_fact_evidence_ids() -> None:
+    fact_index = {
+        ("age", consistency_engine._FACT_ALL_KEY): [
+            _FakeFact(evidence_eid="ev-self", value=10),
+            _FakeFact(evidence_eid="ev-setting", value=11),
+        ]
+    }
+    verdict, links, meta = consistency_engine._judge_with_fact_index(
+        {"age": 10},
+        fact_index,
+        target_entity_id=None,
+        excluded_fact_eids={"ev-self"},
+    )
+    assert verdict is Verdict.VIOLATE
+    assert meta["conflicting"] is False
+    assert links == [("ev-setting", consistency_engine.EvidenceRole.CONTRADICT)]
 
 
 @pytest.mark.unit
@@ -181,3 +213,196 @@ def test_consistency_two_stage_retrieval_can_surface_graph_boosted_candidate(
     with db.connect(db_path) as conn:
         evidences = evidence_repo.list_evidence(conn, project_id, doc_id="doc-boost")
     assert evidences, "graph-boosted candidate should survive rerank and final top-k"
+
+
+class _FixedGateway:
+    def __init__(self, score: float) -> None:
+        self._score = score
+
+    def nli_score(self, _bundle):  # noqa: ANN001
+        return self._score
+
+    def extract_slots_local(self, _bundle):  # noqa: ANN001
+        return []
+
+    def extract_slots_remote(self, _bundle):  # noqa: ANN001
+        return []
+
+
+def _single_claim(*_args, **_kwargs):  # noqa: ANN001
+    return [
+        {
+            "segment_start": 0,
+            "segment_end": 10,
+            "segment_text": "claim age",
+            "claim_start": 0,
+            "claim_end": 8,
+            "claim_text": "claim age",
+            "slots": {"age": 14},
+            "slot_key": "age",
+            "slot_confidence": 1.0,
+        }
+    ]
+
+
+def _single_confirmed_fts_result(_conn, _req):  # noqa: ANN001
+    return [
+        {
+            "source": "fts",
+            "score": 0.1,
+            "evidence": {
+                "doc_id": "doc-ref",
+                "snapshot_id": "snap-ref",
+                "chunk_id": "chunk-ref",
+                "section_path": "body",
+                "tag_path": "",
+                "snippet_text": "reference",
+                "span_start": 0,
+                "span_end": 8,
+                "fts_score": 0.1,
+                "match_type": "EXACT",
+                "confirmed": True,
+            },
+        }
+    ]
+
+
+@pytest.mark.unit
+def test_layer3_promotion_keeps_default_behavior_when_opt_in_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "placeholder"
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    monkeypatch.setattr("modules.nf_consistency.engine._extract_claims", _single_claim)
+    monkeypatch.setattr("modules.nf_consistency.engine.fts_search", _single_confirmed_fts_result)
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.load_config",
+        lambda: Settings(enable_layer3_model=True, vector_index_mode="DISABLED"),
+    )
+    monkeypatch.setattr("modules.nf_consistency.engine.select_model", lambda purpose="consistency": _FixedGateway(0.99))
+
+    engine = ConsistencyEngineImpl(db_path=db_path)
+    stats: dict[str, object] = {}
+    verdicts = engine.run(
+        {
+            "project_id": project_id,
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "stats": stats,
+            "layer3_verdict_promotion": False,
+        }
+    )
+
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict is Verdict.UNKNOWN
+    assert int(stats.get("layer3_promoted_ok_count", 0)) == 0
+
+
+@pytest.mark.unit
+def test_layer3_promotion_upgrades_unknown_to_ok_when_opted_in(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "placeholder"
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    monkeypatch.setattr("modules.nf_consistency.engine._extract_claims", _single_claim)
+    monkeypatch.setattr("modules.nf_consistency.engine.fts_search", _single_confirmed_fts_result)
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.load_config",
+        lambda: Settings(enable_layer3_model=True, vector_index_mode="DISABLED"),
+    )
+    monkeypatch.setattr("modules.nf_consistency.engine.select_model", lambda purpose="consistency": _FixedGateway(0.99))
+
+    engine = ConsistencyEngineImpl(db_path=db_path)
+    stats: dict[str, object] = {}
+    verdicts = engine.run(
+        {
+            "project_id": project_id,
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "stats": stats,
+            "layer3_verdict_promotion": True,
+        }
+    )
+
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict is Verdict.OK
+    assert int(stats.get("layer3_promoted_ok_count", 0)) == 1
+
+
+@pytest.mark.unit
+def test_layer3_promotion_does_not_upgrade_when_model_score_is_low(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "placeholder"
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    monkeypatch.setattr("modules.nf_consistency.engine._extract_claims", _single_claim)
+    monkeypatch.setattr("modules.nf_consistency.engine.fts_search", _single_confirmed_fts_result)
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.load_config",
+        lambda: Settings(enable_layer3_model=True, vector_index_mode="DISABLED"),
+    )
+    monkeypatch.setattr("modules.nf_consistency.engine.select_model", lambda purpose="consistency": _FixedGateway(0.2))
+
+    engine = ConsistencyEngineImpl(db_path=db_path)
+    stats: dict[str, object] = {}
+    verdicts = engine.run(
+        {
+            "project_id": project_id,
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "stats": stats,
+            "layer3_verdict_promotion": True,
+        }
+    )
+
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict is Verdict.UNKNOWN
+    assert int(stats.get("layer3_promoted_ok_count", 0)) == 0

@@ -1418,6 +1418,18 @@ def _handle_consistency(ctx: WorkerContext) -> None:
         graph_doc_cap = consistency_params.get("graph_doc_cap")
         if isinstance(graph_doc_cap, int):
             req["graph_doc_cap"] = graph_doc_cap
+        layer3_verdict_promotion = consistency_params.get("layer3_verdict_promotion")
+        if isinstance(layer3_verdict_promotion, bool):
+            req["layer3_verdict_promotion"] = layer3_verdict_promotion
+        layer3_min_fts_for_promotion = consistency_params.get("layer3_min_fts_for_promotion")
+        if isinstance(layer3_min_fts_for_promotion, (int, float)):
+            req["layer3_min_fts_for_promotion"] = float(layer3_min_fts_for_promotion)
+        layer3_max_claim_chars = consistency_params.get("layer3_max_claim_chars")
+        if isinstance(layer3_max_claim_chars, int):
+            req["layer3_max_claim_chars"] = layer3_max_claim_chars
+        layer3_ok_threshold = consistency_params.get("layer3_ok_threshold")
+        if isinstance(layer3_ok_threshold, (int, float)):
+            req["layer3_ok_threshold"] = float(layer3_ok_threshold)
     req_stats: dict[str, Any] = {}
     req["stats"] = req_stats
     verdicts = engine.run(req)

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
@@ -29,6 +29,7 @@ from modules.nf_shared.config import load_config
 from modules.nf_shared.protocol.dtos import (
     EvidenceMatchType,
     EvidenceRole,
+    FactSource,
     FactStatus,
     ReliabilityBreakdown,
     SchemaLayer,
@@ -42,6 +43,9 @@ _ALLOWED_EVIDENCE_LINK_POLICIES = {"full", "cap", "contradict_only"}
 _DEFAULT_EVIDENCE_LINK_CAP = 20
 _DEFAULT_SELF_EVIDENCE_SCOPE = "range"
 _DEFAULT_GRAPH_DOC_CAP = 200
+_DEFAULT_LAYER3_MIN_FTS_FOR_PROMOTION = 0.25
+_DEFAULT_LAYER3_MAX_CLAIM_CHARS = 260
+_DEFAULT_LAYER3_OK_THRESHOLD = 0.88
 _CANDIDATE_K = 12
 _FINAL_K = 3
 _VECTOR_REFILL_MIN = 6
@@ -70,13 +74,73 @@ _SCHEMA_TYPE_SLOT_KEYS: dict[str, str] = {
     "rel": "relation",
     "bool": "death",
 }
-_SENTENCE_END_CHARS = {".", "!", "?", "\n", "\u3002", "\uff01", "\uff1f"}
-_SENTENCE_TAIL_CHARS = {"'", '"', ")", "]", "}", "\u2019", "\u201d"}
+_SENTENCE_END_CHARS = {".", "!", "?", "\n", "\u3002", "\uff01", "\uff1f", "\u2026", "\uff0e"}
+_SENTENCE_TAIL_CHARS = {
+    ".",
+    "\u2026",
+    "'",
+    '"',
+    ")",
+    "]",
+    "}",
+    "\u2019",
+    "\u201d",
+    "\u300d",
+    "\u300f",
+    "\u300b",
+}
 _STRING_EQUIVALENTS = {
     "\uc655\uad81": "\uad81",
     "\uc775\uc77c": "\ub2e4\uc74c\ub0a0",
     "tomorrow": "nextday",
 }
+_KO_POSTPOSITIONS = (
+    "\uc73c\ub85c\uc11c",
+    "\uc73c\ub85c\uc368",
+    "\uc5d0\uac8c\uc11c",
+    "\ud55c\ud14c\uc11c",
+    "\uc5d0\uc11c\ub294",
+    "\uc73c\ub85c\ub294",
+    "\ub85c\ub294",
+    "\uc5d0\uac8c\ub294",
+    "\ud55c\ud14c\ub294",
+    "\uae4c\uc9c0",
+    "\ubd80\ud130",
+    "\uc5d0\uc11c",
+    "\uc5d0\uac8c",
+    "\ud55c\ud14c",
+    "\uc73c\ub85c",
+    "\uc640",
+    "\uacfc",
+    "\uc740",
+    "\ub294",
+    "\uc774",
+    "\uac00",
+    "\uc744",
+    "\ub97c",
+    "\uc5d0",
+    "\ub85c",
+    "\ub3c4",
+    "\ub9cc",
+    "\uaed8",
+)
+_KO_PLACE_SUFFIXES = (
+    "\ud2b9\ubcc4\uc790\uce58\uc2dc",
+    "\ud2b9\ubcc4\uc790\uce58\ub3c4",
+    "\ud2b9\ubcc4\uc2dc",
+    "\uad11\uc5ed\uc2dc",
+    "\uc790\uce58\uc2dc",
+    "\uc790\uce58\ub3c4",
+    "\uc2dc",
+    "\ub3c4",
+    "\uad70",
+    "\uad6c",
+    "\uc74d",
+    "\uba74",
+    "\ub3d9",
+)
+_SLOT_OK_SIMILARITY_THRESHOLD = 0.85
+_SLOT_VIOLATE_SIMILARITY_THRESHOLD = 0.25
 
 
 def _fingerprint(text: str) -> str:
@@ -115,6 +179,9 @@ def _segment_text(text: str) -> list[tuple[int, int, str]]:
     while idx < text_len:
         ch = text[idx]
         if ch not in _SENTENCE_END_CHARS:
+            idx += 1
+            continue
+        if ch == "." and 0 < idx < text_len - 1 and text[idx - 1].isdigit() and text[idx + 1].isdigit():
             idx += 1
             continue
         seg_end = idx
@@ -319,7 +386,16 @@ def _norm_text(value: object) -> str:
     return unicodedata.normalize("NFKC", str(value)).strip().lower()
 
 
-def _normalize_slot_text(value: object) -> str:
+def _strip_trailing_suffix_once(text: str, suffixes: tuple[str, ...]) -> str:
+    for suffix in sorted(suffixes, key=len, reverse=True):
+        if not suffix:
+            continue
+        if text.endswith(suffix) and len(text) > len(suffix):
+            return text[: -len(suffix)]
+    return text
+
+
+def _normalize_slot_text(value: object, *, slot_key: str | None = None) -> str:
     text = _norm_text(value)
     if not text:
         return ""
@@ -327,10 +403,13 @@ def _normalize_slot_text(value: object) -> str:
     compact = compact.replace("'", "").replace('"', "")
     for src, dst in _STRING_EQUIVALENTS.items():
         compact = compact.replace(src, dst)
+    compact = _strip_trailing_suffix_once(compact, _KO_POSTPOSITIONS)
+    if slot_key == "place":
+        compact = _strip_trailing_suffix_once(compact, _KO_PLACE_SUFFIXES)
     return compact
 
 
-def _tokenize_slot_text(value: object) -> set[str]:
+def _tokenize_slot_text(value: object, *, slot_key: str | None = None) -> set[str]:
     text = _norm_text(value)
     if not text:
         return set()
@@ -340,9 +419,21 @@ def _tokenize_slot_text(value: object) -> set[str]:
         if not token:
             continue
         reduced = re.sub(r"[^0-9a-zA-Z\uac00-\ud7a3]+", "", token)
+        reduced = _strip_trailing_suffix_once(reduced, _KO_POSTPOSITIONS)
+        if slot_key == "place":
+            reduced = _strip_trailing_suffix_once(reduced, _KO_PLACE_SUFFIXES)
         if reduced:
             cleaned.add(reduced)
     return cleaned
+
+
+def _token_overlap_similarity(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    overlap = left.intersection(right)
+    if not overlap:
+        return 0.0
+    return float(len(overlap)) / float(max(1, min(len(left), len(right))))
 
 
 def _coerce_int(value: object) -> int | None:
@@ -393,25 +484,37 @@ def _compare_slot(slot_key: str, claimed_value: object, fact_value: object) -> V
         return Verdict.OK if claimed == expected else Verdict.VIOLATE
 
     if slot_key in _STRING_SLOT_KEYS:
-        claimed = _normalize_slot_text(claimed_value)
-        expected = _normalize_slot_text(fact_value)
+        claimed = _normalize_slot_text(claimed_value, slot_key=slot_key)
+        expected = _normalize_slot_text(fact_value, slot_key=slot_key)
         if not claimed or not expected:
             return None
         if claimed == expected or claimed in expected or expected in claimed:
             return Verdict.OK
 
-        claimed_tokens = _tokenize_slot_text(claimed_value)
-        expected_tokens = _tokenize_slot_text(fact_value)
-        overlap = claimed_tokens.intersection(expected_tokens)
-        if overlap:
+        claimed_tokens = _tokenize_slot_text(claimed_value, slot_key=slot_key)
+        expected_tokens = _tokenize_slot_text(fact_value, slot_key=slot_key)
+        similarity = _token_overlap_similarity(claimed_tokens, expected_tokens)
+        if similarity >= _SLOT_OK_SIMILARITY_THRESHOLD:
             return Verdict.OK
-
-        if len(claimed_tokens) == 1 and len(expected_tokens) == 1:
-            return Verdict.VIOLATE
 
         claimed_num = _coerce_int(claimed_value)
         expected_num = _coerce_int(fact_value)
-        if claimed_num is not None and expected_num is not None and claimed_num != expected_num:
+        numeric_mismatch = claimed_num is not None and expected_num is not None and claimed_num != expected_num
+
+        if numeric_mismatch and similarity <= _SLOT_VIOLATE_SIMILARITY_THRESHOLD:
+            return Verdict.VIOLATE
+        if (
+            similarity <= _SLOT_VIOLATE_SIMILARITY_THRESHOLD
+            and len(claimed_tokens) == 1
+            and len(expected_tokens) == 1
+            and claimed_tokens != expected_tokens
+        ):
+            return Verdict.VIOLATE
+        if (
+            similarity <= _SLOT_VIOLATE_SIMILARITY_THRESHOLD
+            and not claimed_tokens.intersection(expected_tokens)
+            and (len(claimed_tokens) == 1 or len(expected_tokens) == 1)
+        ):
             return Verdict.VIOLATE
         return None
 
@@ -514,6 +617,41 @@ def _build_fact_index(
     return indexed
 
 
+def _resolve_excluded_self_fact_eids(
+    conn,
+    *,
+    facts: list,
+    input_doc_id: str,
+) -> set[str]:
+    if not input_doc_id:
+        return set()
+    candidate_eids = [
+        fact.evidence_eid
+        for fact in facts
+        if getattr(fact, "source", None) is FactSource.AUTO
+        and getattr(fact, "status", None) is FactStatus.PROPOSED
+        and isinstance(getattr(fact, "evidence_eid", None), str)
+        and fact.evidence_eid
+    ]
+    if not candidate_eids:
+        return set()
+    unique_eids = sorted(set(candidate_eids))
+    excluded: set[str] = set()
+    chunk_size = 200
+    for start in range(0, len(unique_eids), chunk_size):
+        chunk = unique_eids[start : start + chunk_size]
+        placeholders = ",".join(["?"] * len(chunk))
+        rows = conn.execute(
+            f"SELECT eid FROM evidence WHERE doc_id = ? AND eid IN ({placeholders})",
+            [input_doc_id, *chunk],
+        ).fetchall()
+        for row in rows:
+            eid = row["eid"]
+            if isinstance(eid, str) and eid:
+                excluded.add(eid)
+    return excluded
+
+
 def _judge_with_fact_index(
     slots: dict[str, object],
     fact_index: dict[tuple[str, str | None], list],
@@ -522,6 +660,7 @@ def _judge_with_fact_index(
     evidence_link_policy: str = "full",
     evidence_link_cap: int = _DEFAULT_EVIDENCE_LINK_CAP,
     comparison_cache: dict[tuple[str, str, str], Verdict | None] | None = None,
+    excluded_fact_eids: set[str] | None = None,
 ) -> tuple[Verdict | None, list[tuple[str, EvidenceRole]], dict[str, bool]]:
     meta = {
         "saw_ok": False,
@@ -545,6 +684,9 @@ def _judge_with_fact_index(
         if not candidates:
             continue
         for fact in candidates:
+            evidence_eid = getattr(fact, "evidence_eid", None)
+            if excluded_fact_eids and isinstance(evidence_eid, str) and evidence_eid in excluded_fact_eids:
+                continue
             judged: Verdict | None
             cache_key = (slot_key, repr(claimed_value), repr(fact.value))
             if comparison_cache is None:
@@ -628,6 +770,33 @@ def _resolve_graph_expand_options(req: ConsistencyRequest) -> tuple[bool, int, i
     except (TypeError, ValueError):
         doc_cap = _DEFAULT_GRAPH_DOC_CAP
     return enabled, max_hops, max(1, doc_cap)
+
+
+def _resolve_layer3_promotion_options(req: ConsistencyRequest) -> tuple[bool, float, int, float]:
+    enabled = bool(req.get("layer3_verdict_promotion", False))
+
+    min_fts_raw = req.get("layer3_min_fts_for_promotion")
+    try:
+        min_fts = float(min_fts_raw) if min_fts_raw is not None else _DEFAULT_LAYER3_MIN_FTS_FOR_PROMOTION
+    except (TypeError, ValueError):
+        min_fts = _DEFAULT_LAYER3_MIN_FTS_FOR_PROMOTION
+    min_fts = _clamp01(min_fts)
+
+    max_claim_chars_raw = req.get("layer3_max_claim_chars")
+    try:
+        max_claim_chars = int(max_claim_chars_raw) if max_claim_chars_raw is not None else _DEFAULT_LAYER3_MAX_CLAIM_CHARS
+    except (TypeError, ValueError):
+        max_claim_chars = _DEFAULT_LAYER3_MAX_CLAIM_CHARS
+    max_claim_chars = max(1, max_claim_chars)
+
+    ok_threshold_raw = req.get("layer3_ok_threshold")
+    try:
+        ok_threshold = float(ok_threshold_raw) if ok_threshold_raw is not None else _DEFAULT_LAYER3_OK_THRESHOLD
+    except (TypeError, ValueError):
+        ok_threshold = _DEFAULT_LAYER3_OK_THRESHOLD
+    ok_threshold = _clamp01(ok_threshold)
+
+    return enabled, min_fts, max_claim_chars, ok_threshold
 
 
 def _spans_overlap(start_a: int, end_a: int, start_b: int, end_b: int) -> bool:
@@ -885,6 +1054,9 @@ class ConsistencyEngineImpl:
         evidence_link_policy, evidence_link_cap = _resolve_evidence_link_options(req)
         exclude_self_evidence, self_evidence_scope = _resolve_self_evidence_options(req)
         graph_expand_enabled, graph_max_hops, graph_doc_cap = _resolve_graph_expand_options(req)
+        layer3_promotion_enabled, layer3_min_fts, layer3_max_claim_chars, layer3_ok_threshold = (
+            _resolve_layer3_promotion_options(req)
+        )
         retrieval_filters = _normalize_consistency_filters(req.get("filters"))
         metadata_filter_requested = bool(retrieval_filters)
         stats_raw = req.get("stats")
@@ -907,6 +1079,7 @@ class ConsistencyEngineImpl:
             req_stats.setdefault("unknown_reason_counts", {})
             req_stats.setdefault("evidence_confidence_sum", 0.0)
             req_stats.setdefault("decision_confidence_sum", 0.0)
+            req_stats.setdefault("layer3_promoted_ok_count", 0)
 
         if not isinstance(project_id, str) or not isinstance(doc_id, str) or not isinstance(snapshot_id, str):
             raise RuntimeError("invalid consistency request")
@@ -981,6 +1154,11 @@ class ConsistencyEngineImpl:
                     req_stats["avg_slot_confidence"] = float(req_stats.get("slot_candidate_conf_sum", 0.0)) / selected
             tag_defs = schema_repo.list_tag_defs(conn, project_id)
             fact_index = _build_fact_index(facts, tag_defs=tag_defs)
+            excluded_self_fact_eids = _resolve_excluded_self_fact_eids(
+                conn,
+                facts=facts,
+                input_doc_id=doc_id,
+            )
             project_doc_ids_for_vector: list[str] | None = None
             retrieval_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
             slot_compare_cache: dict[tuple[str, str, str], Verdict | None] = {}
@@ -1198,6 +1376,7 @@ class ConsistencyEngineImpl:
                         evidence_link_policy=evidence_link_policy,
                         evidence_link_cap=evidence_link_cap,
                         comparison_cache=slot_compare_cache,
+                        excluded_fact_eids=excluded_self_fact_eids,
                     )
                     if judged is not None:
                         verdict = judged
@@ -1214,19 +1393,39 @@ class ConsistencyEngineImpl:
                     verdict = Verdict.UNKNOWN
                     unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
 
+                fts_strength = float(results[0]["score"]) if results else 0.0
+                promotion_fts_strength = _base_retrieval_score(results[0]) if results else 0.0
+                model_score = rerank_model_score if settings.enable_layer3_model else 0.0
+                confirmed_evidence_count = len([e for e in evidences if e.confirmed])
+
+                if (
+                    verdict is Verdict.UNKNOWN
+                    and settings.enable_layer3_model
+                    and layer3_promotion_enabled
+                    and evidences
+                    and confirmed_evidence_count > 0
+                    and promotion_fts_strength >= layer3_min_fts
+                    and len(claim_text) <= layer3_max_claim_chars
+                    and model_score >= layer3_ok_threshold
+                ):
+                    verdict = Verdict.OK
+                    unknown_reasons.clear()
+                    if req_stats is not None:
+                        req_stats["layer3_promoted_ok_count"] = int(req_stats.get("layer3_promoted_ok_count", 0)) + 1
+
                 if verdict is Verdict.UNKNOWN and not unknown_reasons:
                     if results:
                         unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
                     else:
                         unknown_reasons.add(_UNKNOWN_REASON_NO_EVIDENCE)
+                if verdict is not Verdict.UNKNOWN:
+                    unknown_reasons.clear()
                 _add_unknown_reasons(req_stats, unknown_reasons)
 
-                fts_strength = float(results[0]["score"]) if results else 0.0
-                model_score = rerank_model_score if settings.enable_layer3_model else 0.0
                 breakdown = ReliabilityBreakdown(
                     fts_strength=fts_strength,
                     evidence_count=len(evidences),
-                    confirmed_evidence=len([e for e in evidences if e.confirmed]),
+                    confirmed_evidence=confirmed_evidence_count,
                     model_score=model_score,
                 )
                 reliability, evidence_confidence, decision_confidence = _compute_reliability(

@@ -33,6 +33,10 @@ class ConsistencyRequest(TypedDict, total=False):
     graph_expand_enabled: bool
     graph_max_hops: int
     graph_doc_cap: int
+    layer3_verdict_promotion: bool
+    layer3_min_fts_for_promotion: float
+    layer3_max_claim_chars: int
+    layer3_ok_threshold: float
 
 
 class ConsistencyEngine(Protocol):

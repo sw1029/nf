@@ -141,3 +141,63 @@ def test_consistency_complete_payload_includes_unknown_reason_counts(
     assert isinstance(reason_counts, dict)
     assert int(reason_counts.get("NO_EVIDENCE", 0)) == 1
     assert int(reason_counts.get("SLOT_UNCOMPARABLE", 0)) == 1
+
+
+@pytest.mark.unit
+def test_consistency_worker_forwards_layer3_promotion_options(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "sample"
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    captured_req: dict[str, object] = {}
+
+    def fake_run(self, req):  # noqa: ANN001
+        captured_req.update(req)
+        return []
+
+    monkeypatch.setattr("modules.nf_workers.runner.ConsistencyEngineImpl.run", fake_run)
+
+    ctx = runner.WorkerContext(
+        job_id="job-consistency-2",
+        project_id=project_id,
+        payload={
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "preflight": {
+                "ensure_ingest": False,
+                "ensure_index_fts": False,
+                "schema_scope": "latest_approved",
+            },
+        },
+        params={
+            "consistency": {
+                "layer3_verdict_promotion": True,
+                "layer3_min_fts_for_promotion": 0.33,
+                "layer3_max_claim_chars": 180,
+                "layer3_ok_threshold": 0.91,
+            }
+        },
+        db_path=db_path,
+    )
+    runner._handle_consistency(ctx)
+
+    assert captured_req.get("layer3_verdict_promotion") is True
+    assert float(captured_req.get("layer3_min_fts_for_promotion", 0.0)) == pytest.approx(0.33)
+    assert int(captured_req.get("layer3_max_claim_chars", 0)) == 180
+    assert float(captured_req.get("layer3_ok_threshold", 0.0)) == pytest.approx(0.91)

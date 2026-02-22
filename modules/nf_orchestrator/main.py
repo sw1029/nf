@@ -1441,6 +1441,48 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                             ErrorCode.VALIDATION_ERROR,
                             "params.consistency.graph_doc_cap must be >= 1",
                         )
+                layer3_promotion_raw = consistency_raw.get("layer3_verdict_promotion")
+                if layer3_promotion_raw is not None and not isinstance(layer3_promotion_raw, bool):
+                    raise AppError(
+                        ErrorCode.VALIDATION_ERROR,
+                        "params.consistency.layer3_verdict_promotion must be boolean",
+                    )
+                layer3_min_fts_raw = consistency_raw.get("layer3_min_fts_for_promotion")
+                if layer3_min_fts_raw is not None:
+                    if not isinstance(layer3_min_fts_raw, (int, float)):
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.layer3_min_fts_for_promotion must be number",
+                        )
+                    if not 0.0 <= float(layer3_min_fts_raw) <= 1.0:
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.layer3_min_fts_for_promotion must be between 0 and 1",
+                        )
+                layer3_max_claim_chars_raw = consistency_raw.get("layer3_max_claim_chars")
+                if layer3_max_claim_chars_raw is not None:
+                    if not isinstance(layer3_max_claim_chars_raw, int):
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.layer3_max_claim_chars must be integer",
+                        )
+                    if layer3_max_claim_chars_raw < 1:
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.layer3_max_claim_chars must be >= 1",
+                        )
+                layer3_ok_threshold_raw = consistency_raw.get("layer3_ok_threshold")
+                if layer3_ok_threshold_raw is not None:
+                    if not isinstance(layer3_ok_threshold_raw, (int, float)):
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.layer3_ok_threshold must be number",
+                        )
+                    if not 0.0 <= float(layer3_ok_threshold_raw) <= 1.0:
+                        raise AppError(
+                            ErrorCode.VALIDATION_ERROR,
+                            "params.consistency.layer3_ok_threshold must be between 0 and 1",
+                        )
         extraction_raw = params.get("extraction")
         if extraction_raw is None:
             return
