@@ -148,4 +148,6 @@ def test_expand_candidate_docs_with_graph_includes_timeline_event_sources(tmp_pa
         )
 
     assert meta["applied"] is True
+    assert isinstance(meta.get("doc_distances"), dict)
     assert "doc-timeline" in candidates
+    assert "doc-timeline" in meta.get("doc_distances", {})

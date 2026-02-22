@@ -1,6 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
+import json
 import re
 import unicodedata
 import uuid
@@ -41,6 +42,41 @@ _ALLOWED_EVIDENCE_LINK_POLICIES = {"full", "cap", "contradict_only"}
 _DEFAULT_EVIDENCE_LINK_CAP = 20
 _DEFAULT_SELF_EVIDENCE_SCOPE = "range"
 _DEFAULT_GRAPH_DOC_CAP = 200
+_CANDIDATE_K = 12
+_FINAL_K = 3
+_VECTOR_REFILL_MIN = 6
+_NLI_RERANK_TOP_N = 8
+_RETRIEVAL_CACHE_SIZE = 256
+_UNKNOWN_REASON_NO_EVIDENCE = "NO_EVIDENCE"
+_UNKNOWN_REASON_AMBIGUOUS_ENTITY = "AMBIGUOUS_ENTITY"
+_UNKNOWN_REASON_SLOT_UNCOMPARABLE = "SLOT_UNCOMPARABLE"
+_UNKNOWN_REASON_CONFLICTING_EVIDENCE = "CONFLICTING_EVIDENCE"
+
+_STRING_SLOT_KEYS = {"time", "place", "relation", "affiliation", "job", "talent"}
+_SLOT_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "age": ("\ub098\uc774", "\uc5f0\ub839", "age"),
+    "time": ("\uc2dc\uac04", "\uc2dc\uc810", "\ub0a0\uc9dc", "\uc77c\uc2dc", "time", "date"),
+    "place": ("\uc7a5\uc18c", "\uc704\uce58", "place", "location"),
+    "relation": ("\uad00\uacc4", "relation"),
+    "affiliation": ("\uc18c\uc18d", "affiliation"),
+    "death": ("\uc0ac\ub9dd", "\uc0dd\uc874", "death", "alive"),
+    "job": ("\uc9c1\uc5c5", "\ud074\ub798\uc2a4", "job", "class"),
+    "talent": ("\uc7ac\ub2a5", "\ud2b9\uae30", "talent"),
+}
+_SCHEMA_TYPE_SLOT_KEYS: dict[str, str] = {
+    "int": "age",
+    "time": "time",
+    "loc": "place",
+    "rel": "relation",
+    "bool": "death",
+}
+_SENTENCE_END_CHARS = {".", "!", "?", "\n", "\u3002", "\uff01", "\uff1f"}
+_SENTENCE_TAIL_CHARS = {"'", '"', ")", "]", "}", "\u2019", "\u201d"}
+_STRING_EQUIVALENTS = {
+    "\uc655\uad81": "\uad81",
+    "\uc775\uc77c": "\ub2e4\uc74c\ub0a0",
+    "tomorrow": "nextday",
+}
 
 
 def _fingerprint(text: str) -> str:
@@ -52,13 +88,44 @@ def _now_ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _trimmed_span(text: str, start: int, end: int) -> tuple[int, int, str] | None:
+    left = max(0, int(start))
+    right = max(left, int(end))
+    while left < right and text[left].isspace():
+        left += 1
+    while right > left and text[right - 1].isspace():
+        right -= 1
+    if right <= left:
+        return None
+    return left, right, text[left:right]
+
+
 def _segment_text(text: str) -> list[tuple[int, int, str]]:
     segments: list[tuple[int, int, str]] = []
-    for match in re.finditer(r"[^\n]+", text):
-        segment = match.group(0).strip()
-        if not segment:
+    text_len = len(text)
+    cursor = 0
+
+    def append_segment(seg_start: int, seg_end: int) -> None:
+        trimmed = _trimmed_span(text, seg_start, seg_end)
+        if trimmed is None:
+            return
+        segments.append(trimmed)
+
+    idx = 0
+    while idx < text_len:
+        ch = text[idx]
+        if ch not in _SENTENCE_END_CHARS:
+            idx += 1
             continue
-        segments.append((match.start(), match.end(), segment))
+        seg_end = idx
+        if ch != "\n":
+            seg_end = idx + 1
+            while seg_end < text_len and text[seg_end] in _SENTENCE_TAIL_CHARS:
+                seg_end += 1
+        append_segment(cursor, seg_end)
+        cursor = idx + 1 if ch == "\n" else seg_end
+        idx = cursor
+    append_segment(cursor, text_len)
     return segments
 
 
@@ -73,24 +140,84 @@ def _extract_claims(
     *,
     pipeline: ExtractionPipeline | None = None,
     stats: dict[str, Any] | None = None,
-) -> list[tuple[int, int, str, dict[str, object]]]:
-    claims = []
-    for span_start, span_end, segment in _segment_text(text):
+) -> list[dict[str, Any]]:
+    claims: list[dict[str, Any]] = []
+    for segment_start, segment_end, segment_text in _segment_text(text):
         if pipeline is None:
-            slots = {}
-            result_rule_ms = 0.0
-            result_model_ms = 0.0
+            slots: dict[str, object] = {}
+            candidates: list[Any] = []
+            rule_eval_ms = 0.0
+            model_eval_ms = 0.0
         else:
-            result = pipeline.extract(segment)
+            result = pipeline.extract(segment_text)
             slots = result.slots
-            result_rule_ms = result.rule_eval_ms
-            result_model_ms = result.model_eval_ms
+            candidates = list(result.candidates)
+            rule_eval_ms = float(result.rule_eval_ms)
+            model_eval_ms = float(result.model_eval_ms)
         if stats is not None:
-            stats["rule_eval_ms"] = float(stats.get("rule_eval_ms", 0.0)) + result_rule_ms
-            stats["model_eval_ms"] = float(stats.get("model_eval_ms", 0.0)) + result_model_ms
+            stats["rule_eval_ms"] = float(stats.get("rule_eval_ms", 0.0)) + rule_eval_ms
+            stats["model_eval_ms"] = float(stats.get("model_eval_ms", 0.0)) + model_eval_ms
             stats["slot_matches"] = int(stats.get("slot_matches", 0)) + len(slots)
-        if slots:
-            claims.append((span_start, span_end, segment, slots))
+            stats["slot_candidate_count"] = int(stats.get("slot_candidate_count", 0)) + len(candidates)
+        if not slots:
+            continue
+
+        best_by_slot: dict[str, Any] = {}
+        for candidate in candidates:
+            slot_key = getattr(candidate, "slot_key", None)
+            if not isinstance(slot_key, str) or not slot_key:
+                continue
+            existing = best_by_slot.get(slot_key)
+            if existing is None or float(getattr(candidate, "confidence", 0.0)) > float(
+                getattr(existing, "confidence", 0.0)
+            ):
+                best_by_slot[slot_key] = candidate
+
+        for slot_key, slot_value in slots.items():
+            candidate = best_by_slot.get(slot_key)
+            rel_start = 0
+            rel_end = len(segment_text)
+            confidence = 0.0
+            if candidate is not None:
+                confidence = float(getattr(candidate, "confidence", 0.0))
+                try:
+                    cand_start = int(getattr(candidate, "span_start", 0))
+                    cand_end = int(getattr(candidate, "span_end", 0))
+                except (TypeError, ValueError):
+                    cand_start = 0
+                    cand_end = 0
+                cand_start = max(0, min(len(segment_text), cand_start))
+                cand_end = max(cand_start, min(len(segment_text), cand_end))
+                if cand_end > cand_start:
+                    rel_start = cand_start
+                    rel_end = cand_end
+
+            claim_start = segment_start + rel_start
+            claim_end = segment_start + rel_end
+            claim_piece = _trimmed_span(text, claim_start, claim_end)
+            if claim_piece is None:
+                claim_start = segment_start
+                claim_end = segment_end
+                claim_text = segment_text
+            else:
+                claim_start, claim_end, claim_text = claim_piece
+
+            claims.append(
+                {
+                    "segment_start": segment_start,
+                    "segment_end": segment_end,
+                    "segment_text": segment_text,
+                    "claim_start": claim_start,
+                    "claim_end": claim_end,
+                    "claim_text": claim_text,
+                    "slots": {slot_key: slot_value},
+                    "slot_key": slot_key,
+                    "slot_confidence": confidence,
+                }
+            )
+            if stats is not None:
+                stats["slot_candidate_selected"] = int(stats.get("slot_candidate_selected", 0)) + 1
+                stats["slot_candidate_conf_sum"] = float(stats.get("slot_candidate_conf_sum", 0.0)) + confidence
     return claims
 
 
@@ -114,31 +241,108 @@ def _bundle_evidence(evidences: list) -> list[dict[str, object]]:
     return bundled
 
 
-def _fact_slot_key(tag_path: str) -> str | None:
-    normalized = unicodedata.normalize("NFKC", tag_path or "").lower()
-    if "나이" in normalized:
-        return "age"
-    if "시간" in normalized or "시점" in normalized or "날짜" in normalized or "일시" in normalized:
-        return "time"
-    if "장소" in normalized or "위치" in normalized:
-        return "place"
-    if "관계" in normalized:
-        return "relation"
-    if "소속" in normalized:
-        return "affiliation"
-    if "사망" in normalized or "생존" in normalized:
-        return "death"
-    if "직업" in normalized or "클래스" in normalized:
-        return "job"
-    if "재능" in normalized:
-        return "talent"
+def _bundle_result_rows(rows: list[dict[str, Any]]) -> list[dict[str, object]]:
+    bundled: list[dict[str, object]] = []
+    for row in rows:
+        evidence = row.get("evidence") or {}
+        bundled.append(
+            {
+                "doc_id": str(evidence.get("doc_id", "")),
+                "snapshot_id": str(evidence.get("snapshot_id", "")),
+                "chunk_id": evidence.get("chunk_id"),
+                "section_path": str(evidence.get("section_path", "")),
+                "tag_path": str(evidence.get("tag_path", "")),
+                "snippet_text": str(evidence.get("snippet_text", "")),
+                "span_start": int(evidence.get("span_start", 0)),
+                "span_end": int(evidence.get("span_end", 0)),
+                "match_type": str(evidence.get("match_type", EvidenceMatchType.FUZZY.value)),
+                "confirmed": bool(evidence.get("confirmed", False)),
+            }
+        )
+    return bundled
+
+
+def _normalize_slot_key(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized in {
+        "age",
+        "time",
+        "place",
+        "relation",
+        "affiliation",
+        "job",
+        "talent",
+        "death",
+    }:
+        return normalized
     return None
+
+
+def _slot_key_from_constraints(constraints: Any) -> str | None:
+    if not hasattr(constraints, "get"):
+        return None
+    raw = constraints.get("slot_key")
+    return _normalize_slot_key(raw)
+
+
+def _slot_key_from_schema_type(schema_type: Any) -> str | None:
+    raw = getattr(schema_type, "value", schema_type)
+    if not isinstance(raw, str):
+        return None
+    return _SCHEMA_TYPE_SLOT_KEYS.get(raw.strip().lower())
+
+
+def _legacy_fact_slot_key(tag_path: str) -> str | None:
+    normalized = unicodedata.normalize("NFKC", tag_path or "").lower()
+    for slot_key, keywords in _SLOT_KEYWORDS.items():
+        if any(keyword in normalized for keyword in keywords):
+            return slot_key
+    return None
+
+
+def _fact_slot_key(tag_path: str, *, tag_def: Any | None = None) -> str | None:
+    if tag_def is not None:
+        slot_key = _slot_key_from_constraints(getattr(tag_def, "constraints", {}))
+        if slot_key is not None:
+            return slot_key
+        slot_key = _slot_key_from_schema_type(getattr(tag_def, "schema_type", None))
+        if slot_key is not None:
+            return slot_key
+    return _legacy_fact_slot_key(tag_path)
 
 
 def _norm_text(value: object) -> str:
     if value is None:
         return ""
     return unicodedata.normalize("NFKC", str(value)).strip().lower()
+
+
+def _normalize_slot_text(value: object) -> str:
+    text = _norm_text(value)
+    if not text:
+        return ""
+    compact = re.sub(r"\s+", "", text)
+    compact = compact.replace("'", "").replace('"', "")
+    for src, dst in _STRING_EQUIVALENTS.items():
+        compact = compact.replace(src, dst)
+    return compact
+
+
+def _tokenize_slot_text(value: object) -> set[str]:
+    text = _norm_text(value)
+    if not text:
+        return set()
+    tokens = re.split(r"[\s,./;:()\[\]{}<>|]+", text)
+    cleaned: set[str] = set()
+    for token in tokens:
+        if not token:
+            continue
+        reduced = re.sub(r"[^0-9a-zA-Z\uac00-\ud7a3]+", "", token)
+        if reduced:
+            cleaned.add(reduced)
+    return cleaned
 
 
 def _coerce_int(value: object) -> int | None:
@@ -164,8 +368,8 @@ def _coerce_bool(value: object) -> bool | None:
     text = _norm_text(value)
     if not text:
         return None
-    true_values = {"1", "true", "yes", "사망", "죽음", "죽었다", "죽었", "사망함", "사망했다"}
-    false_values = {"0", "false", "no", "생존", "살아있다", "살아있음"}
+    true_values = {"1", "true", "yes", "\uc0ac\ub9dd", "\uc8fd\uc74c", "\uc8fd\uc5c8\ub2e4", "\uc0ac\ub9dd\ud568"}
+    false_values = {"0", "false", "no", "\uc0dd\uc874", "\uc0b4\uc544\uc788\ub2e4", "\uc0b4\uc544\uc788\uc74c"}
     if text in true_values:
         return True
     if text in false_values:
@@ -188,14 +392,28 @@ def _compare_slot(slot_key: str, claimed_value: object, fact_value: object) -> V
             return None
         return Verdict.OK if claimed == expected else Verdict.VIOLATE
 
-    if slot_key in {"time", "place", "relation", "affiliation", "job", "talent"}:
-        claimed = _norm_text(claimed_value)
-        expected = _norm_text(fact_value)
+    if slot_key in _STRING_SLOT_KEYS:
+        claimed = _normalize_slot_text(claimed_value)
+        expected = _normalize_slot_text(fact_value)
         if not claimed or not expected:
             return None
         if claimed == expected or claimed in expected or expected in claimed:
             return Verdict.OK
-        return Verdict.VIOLATE
+
+        claimed_tokens = _tokenize_slot_text(claimed_value)
+        expected_tokens = _tokenize_slot_text(fact_value)
+        overlap = claimed_tokens.intersection(expected_tokens)
+        if overlap:
+            return Verdict.OK
+
+        if len(claimed_tokens) == 1 and len(expected_tokens) == 1:
+            return Verdict.VIOLATE
+
+        claimed_num = _coerce_int(claimed_value)
+        expected_num = _coerce_int(fact_value)
+        if claimed_num is not None and expected_num is not None and claimed_num != expected_num:
+            return Verdict.VIOLATE
+        return None
 
     return None
 
@@ -274,10 +492,20 @@ def _load_facts_for_scope(
     return resolved_schema_ver, facts
 
 
-def _build_fact_index(facts: list) -> dict[tuple[str, str | None], list]:
+def _build_fact_index(
+    facts: list,
+    *,
+    tag_defs: list[Any] | None = None,
+) -> dict[tuple[str, str | None], list]:
     indexed: dict[tuple[str, str | None], list] = {}
+    tag_def_by_path: dict[str, Any] = {}
+    for tag_def in tag_defs or []:
+        tag_path = getattr(tag_def, "tag_path", None)
+        if isinstance(tag_path, str) and tag_path:
+            tag_def_by_path[tag_path] = tag_def
+
     for fact in facts:
-        slot_key = _fact_slot_key(fact.tag_path)
+        slot_key = _fact_slot_key(fact.tag_path, tag_def=tag_def_by_path.get(fact.tag_path))
         if slot_key is None:
             continue
         indexed.setdefault((slot_key, _FACT_ALL_KEY), []).append(fact)
@@ -294,13 +522,17 @@ def _judge_with_fact_index(
     evidence_link_policy: str = "full",
     evidence_link_cap: int = _DEFAULT_EVIDENCE_LINK_CAP,
     comparison_cache: dict[tuple[str, str, str], Verdict | None] | None = None,
-) -> tuple[Verdict | None, list[tuple[str, EvidenceRole]]]:
+) -> tuple[Verdict | None, list[tuple[str, EvidenceRole]], dict[str, bool]]:
+    meta = {
+        "saw_ok": False,
+        "saw_violate": False,
+        "saw_uncomparable": False,
+        "conflicting": False,
+    }
     if not slots:
-        return None, []
+        return None, [], meta
 
     cap = max(1, int(evidence_link_cap))
-    saw_ok = False
-    saw_violate = False
     link_set: set[tuple[str, EvidenceRole]] = set()
     for slot_key, claimed_value in slots.items():
         if target_entity_id is None:
@@ -322,30 +554,37 @@ def _judge_with_fact_index(
                     comparison_cache[cache_key] = _compare_slot(slot_key, claimed_value, fact.value)
                 judged = comparison_cache[cache_key]
             if judged is None:
+                meta["saw_uncomparable"] = True
                 continue
             if judged is Verdict.VIOLATE:
-                saw_violate = True
+                meta["saw_violate"] = True
                 link_set.add((fact.evidence_eid, EvidenceRole.CONTRADICT))
             elif judged is Verdict.OK:
-                saw_ok = True
+                meta["saw_ok"] = True
                 link_set.add((fact.evidence_eid, EvidenceRole.SUPPORT))
-            if evidence_link_policy != "full" and saw_violate and len(link_set) >= cap:
+            if evidence_link_policy != "full" and meta["saw_violate"] and len(link_set) >= cap:
                 break
-        if evidence_link_policy != "full" and saw_violate and len(link_set) >= cap:
+        if evidence_link_policy != "full" and meta["saw_violate"] and len(link_set) >= cap:
             break
 
     links = sorted(link_set, key=lambda item: (item[0], item[1].value))
-    if saw_violate:
-        return Verdict.VIOLATE, links
-    if saw_ok:
-        return Verdict.OK, links
-    return None, []
+    if meta["saw_ok"] and meta["saw_violate"]:
+        meta["conflicting"] = True
+        return Verdict.UNKNOWN, links, meta
+    if meta["saw_violate"]:
+        return Verdict.VIOLATE, links, meta
+    if meta["saw_ok"]:
+        return Verdict.OK, links, meta
+    return None, [], meta
 
 
-def _claim_cache_key(text: str) -> str:
+def _claim_cache_key(text: str, *, filters: dict[str, object] | None = None) -> str:
     normalized = unicodedata.normalize("NFKC", text or "")
     normalized = re.sub(r"\s+", " ", normalized).strip().lower()
-    return normalized
+    if not filters:
+        return normalized
+    payload = json.dumps(filters, ensure_ascii=False, sort_keys=True, default=str)
+    return f"{normalized}|{payload}"
 
 
 def _resolve_evidence_link_options(req: ConsistencyRequest) -> tuple[str, int]:
@@ -418,6 +657,83 @@ def _merge_result_lists(primary: list[dict[str, Any]], secondary: list[dict[str,
         if len(merged) >= limit:
             break
     return merged
+
+
+def _result_doc_id(result: dict[str, Any]) -> str:
+    evidence = result.get("evidence") or {}
+    doc_id = evidence.get("doc_id")
+    if isinstance(doc_id, str):
+        return doc_id
+    return ""
+
+
+def _base_retrieval_score(result: dict[str, Any]) -> float:
+    source = str(result.get("source", "")).lower()
+    try:
+        raw_score = float(result.get("score") or 0.0)
+    except (TypeError, ValueError):
+        raw_score = 0.0
+    if source == "fts":
+        return 1.0 / (1.0 + max(0.0, raw_score))
+    return max(0.0, min(1.0, raw_score))
+
+
+def _rerank_results_for_consistency(
+    *,
+    results: list[dict[str, Any]],
+    claim_text: str,
+    filters: dict[str, object],
+    graph_doc_distances: dict[str, int],
+    gateway: Any,
+    enable_model: bool,
+) -> tuple[list[dict[str, Any]], float]:
+    if not results:
+        return [], 0.0
+
+    scored: list[tuple[dict[str, Any], float]] = []
+    for idx, row in enumerate(results):
+        rank_score = 1.0 / float(idx + 1)
+        base_score = _base_retrieval_score(row)
+        doc_id = _result_doc_id(row)
+        graph_bonus = 0.0
+        hop = graph_doc_distances.get(doc_id)
+        if isinstance(hop, int):
+            if hop <= 1:
+                graph_bonus = 0.15
+            elif hop == 2:
+                graph_bonus = 0.08
+        metadata_bonus = 0.05 if filters and str(row.get("source", "")).lower() == "fts" else 0.0
+        score = (base_score * 0.60) + (rank_score * 0.25) + graph_bonus + metadata_bonus
+        scored.append((row, score))
+
+    scored.sort(key=lambda item: item[1], reverse=True)
+    max_nli = 0.0
+    if enable_model and gateway is not None:
+        nli_scores: dict[str, float] = {}
+        for row, _cheap_score in scored[:_NLI_RERANK_TOP_N]:
+            identity = _result_identity(row)
+            try:
+                nli_value = gateway.nli_score(
+                    {
+                        "claim_text": claim_text,
+                        "evidence": _bundle_result_rows([row]),
+                    }
+                )
+                nli_score = max(0.0, min(1.0, float(nli_value)))
+            except Exception:  # noqa: BLE001
+                nli_score = 0.0
+            nli_scores[identity] = nli_score
+            if nli_score > max_nli:
+                max_nli = nli_score
+
+        rescored: list[tuple[dict[str, Any], float]] = []
+        for row, cheap_score in scored:
+            nli_bonus = 0.2 * nli_scores.get(_result_identity(row), 0.0)
+            rescored.append((row, cheap_score + nli_bonus))
+        scored = rescored
+        scored.sort(key=lambda item: item[1], reverse=True)
+
+    return [row for row, _score in scored], max_nli
 
 
 def _filter_self_evidence_results(
@@ -512,6 +828,50 @@ def _build_verdict_links(
     return links
 
 
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _compute_reliability(
+    *,
+    verdict: Verdict,
+    breakdown: ReliabilityBreakdown,
+) -> tuple[float, float, float]:
+    evidence_count = max(0, int(breakdown.evidence_count))
+    confirmed = max(0, int(breakdown.confirmed_evidence))
+    fts_component = 0.0
+    if evidence_count > 0:
+        fts_component = _clamp01(1.0 / (1.0 + max(0.0, float(breakdown.fts_strength))))
+    evidence_count_component = _clamp01(evidence_count / float(_FINAL_K))
+    confirmed_component = _clamp01(confirmed / float(max(1, evidence_count)))
+    model_component = _clamp01(float(breakdown.model_score))
+    evidence_confidence = _clamp01(
+        (0.45 * evidence_count_component)
+        + (0.25 * confirmed_component)
+        + (0.20 * fts_component)
+        + (0.10 * model_component)
+    )
+    if verdict is Verdict.UNKNOWN:
+        decision_confidence = 0.05 if evidence_count == 0 else _clamp01(0.20 + (0.45 * evidence_confidence))
+    elif verdict is Verdict.VIOLATE:
+        decision_confidence = _clamp01(0.55 + (0.45 * evidence_confidence))
+    else:
+        decision_confidence = _clamp01(0.50 + (0.45 * evidence_confidence))
+    reliability = _clamp01((0.65 * evidence_confidence) + (0.35 * decision_confidence))
+    return reliability, evidence_confidence, decision_confidence
+
+
+def _add_unknown_reasons(req_stats: dict[str, Any] | None, reasons: set[str]) -> None:
+    if req_stats is None or not reasons:
+        return
+    bucket_raw = req_stats.get("unknown_reason_counts")
+    if not isinstance(bucket_raw, dict):
+        bucket_raw = {}
+    for reason in sorted(reasons):
+        bucket_raw[reason] = int(bucket_raw.get(reason, 0)) + 1
+    req_stats["unknown_reason_counts"] = bucket_raw
+
+
 class ConsistencyEngineImpl:
     def __init__(self, *, db_path=None) -> None:
         self._db_path = db_path
@@ -537,10 +897,16 @@ class ConsistencyEngineImpl:
             req_stats.setdefault("rule_eval_ms", 0.0)
             req_stats.setdefault("model_eval_ms", 0.0)
             req_stats.setdefault("slot_matches", 0)
+            req_stats.setdefault("slot_candidate_count", 0)
+            req_stats.setdefault("slot_candidate_selected", 0)
+            req_stats.setdefault("slot_candidate_conf_sum", 0.0)
             req_stats.setdefault("self_evidence_filtered_count", 0)
             req_stats.setdefault("graph_expand_applied_count", 0)
             req_stats.setdefault("graph_expand_candidate_docs", 0)
             req_stats.setdefault("graph_expand_refill_results", 0)
+            req_stats.setdefault("unknown_reason_counts", {})
+            req_stats.setdefault("evidence_confidence_sum", 0.0)
+            req_stats.setdefault("decision_confidence_sum", 0.0)
 
         if not isinstance(project_id, str) or not isinstance(doc_id, str) or not isinstance(snapshot_id, str):
             raise RuntimeError("invalid consistency request")
@@ -609,26 +975,48 @@ class ConsistencyEngineImpl:
                 req_stats["ruleset_checksum"] = extractor_pipeline.ruleset_checksum
                 req_stats["mapping_checksum"] = extractor_pipeline.mapping_checksum
             claims = _extract_claims(text, pipeline=extractor_pipeline, stats=req_stats)
-            fact_index = _build_fact_index(facts)
+            if req_stats is not None:
+                selected = int(req_stats.get("slot_candidate_selected", 0))
+                if selected > 0:
+                    req_stats["avg_slot_confidence"] = float(req_stats.get("slot_candidate_conf_sum", 0.0)) / selected
+            tag_defs = schema_repo.list_tag_defs(conn, project_id)
+            fact_index = _build_fact_index(facts, tag_defs=tag_defs)
             project_doc_ids_for_vector: list[str] | None = None
-            retrieval_cache: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
-            retrieval_cache_size = 256
+            retrieval_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
             slot_compare_cache: dict[tuple[str, str, str], Verdict | None] = {}
 
             verdicts: list[VerdictLog] = []
-            for span_start, span_end, claim_text, slots in claims:
+            for claim in claims:
+                claim_text = str(claim["claim_text"])
+                segment_text = str(claim["segment_text"])
+                claim_start = int(claim["claim_start"])
+                claim_end = int(claim["claim_end"])
+                slots = dict(claim.get("slots") or {})
                 if req_stats is not None:
                     req_stats["claims_processed"] = int(req_stats.get("claims_processed", 0)) + 1
                 fingerprint = _fingerprint(claim_text)
+                segment_fingerprint = _fingerprint(segment_text)
                 if ignore_repo.is_ignored(
                     conn,
                     project_id,
                     fingerprint,
                     scope=doc_id,
                     kind="CONSISTENCY",
+                ) or (
+                    segment_fingerprint != fingerprint
+                    and ignore_repo.is_ignored(
+                        conn,
+                        project_id,
+                        segment_fingerprint,
+                        scope=doc_id,
+                        kind="CONSISTENCY",
+                    )
                 ):
                     continue
-                if whitelist_repo.is_whitelisted(conn, project_id, fingerprint, scope=doc_id):
+                if whitelist_repo.is_whitelisted(conn, project_id, fingerprint, scope=doc_id) or (
+                    segment_fingerprint != fingerprint
+                    and whitelist_repo.is_whitelisted(conn, project_id, segment_fingerprint, scope=doc_id)
+                ):
                     continue
 
                 retrieval_stats: dict[str, Any] = {
@@ -636,24 +1024,27 @@ class ConsistencyEngineImpl:
                     "rows_scanned": 0,
                     "shards_loaded": 0,
                 }
-                claim_abs_start = span_start + offset
-                claim_abs_end = span_end + offset
-                cache_key = _claim_cache_key(claim_text)
+                claim_abs_start = claim_start + offset
+                claim_abs_end = claim_end + offset
+                retrieval_query = segment_text or claim_text
+                cache_key = _claim_cache_key(retrieval_query, filters=retrieval_filters)
                 cached_results = retrieval_cache.get(cache_key)
                 if cached_results is not None:
                     retrieval_cache.move_to_end(cache_key)
-                    results = list(cached_results)
+                    candidate_results = list(cached_results.get("results", []))
+                    graph_doc_distances = dict(cached_results.get("graph_doc_distances", {}))
                 else:
+                    graph_doc_distances: dict[str, int] = {}
                     retrieval_req: dict[str, Any] = {
                         "project_id": project_id,
-                        "query": claim_text,
+                        "query": retrieval_query,
                         "filters": dict(retrieval_filters),
-                        "k": 3,
+                        "k": _CANDIDATE_K,
                         "stats": retrieval_stats,
                     }
-                    results = fts_search(conn, retrieval_req)
+                    candidate_results = fts_search(conn, retrieval_req)
                     if (
-                        not results
+                        len(candidate_results) < _VECTOR_REFILL_MIN
                         and settings.vector_index_mode.upper() != "DISABLED"
                         and not metadata_filter_requested
                     ):
@@ -664,21 +1055,34 @@ class ConsistencyEngineImpl:
                         vector_filters["doc_ids"] = project_doc_ids_for_vector
                         vector_req: dict[str, Any] = {
                             "project_id": project_id,
-                            "query": claim_text,
+                            "query": retrieval_query,
                             "filters": vector_filters,
-                            "k": 3,
+                            "k": _CANDIDATE_K,
                             "stats": retrieval_stats,
                         }
-                        results = vector_search(vector_req)
+                        vector_results = vector_search(vector_req)
+                        candidate_results = _merge_result_lists(
+                            candidate_results,
+                            vector_results,
+                            limit=_CANDIDATE_K * 3,
+                        )
                     if graph_expand_enabled:
                         candidate_doc_ids, graph_meta = expand_candidate_docs_with_graph(
                             conn,
                             project_id=project_id,
-                            query=claim_text,
+                            query=retrieval_query,
                             filters=dict(retrieval_filters),
                             max_hops=graph_max_hops,
                             doc_cap=graph_doc_cap,
                         )
+                        raw_distances = graph_meta.get("doc_distances")
+                        if isinstance(raw_distances, dict):
+                            for key, value in raw_distances.items():
+                                if isinstance(key, str):
+                                    try:
+                                        graph_doc_distances[key] = int(value)
+                                    except (TypeError, ValueError):
+                                        continue
                         if graph_meta.get("applied"):
                             if req_stats is not None:
                                 req_stats["graph_expand_applied_count"] = int(
@@ -689,9 +1093,9 @@ class ConsistencyEngineImpl:
                                 graph_filters["doc_ids"] = candidate_doc_ids
                                 graph_req: dict[str, Any] = {
                                     "project_id": project_id,
-                                    "query": claim_text,
+                                    "query": retrieval_query,
                                     "filters": graph_filters,
-                                    "k": 3,
+                                    "k": _CANDIDATE_K,
                                     "stats": retrieval_stats,
                                 }
                                 graph_results = fts_search(conn, graph_req)
@@ -702,14 +1106,21 @@ class ConsistencyEngineImpl:
                                     req_stats["graph_expand_refill_results"] = int(
                                         req_stats.get("graph_expand_refill_results", 0)
                                     ) + len(graph_results)
-                                results = _merge_result_lists(results, graph_results, limit=3)
-                    retrieval_cache[cache_key] = results
+                                candidate_results = _merge_result_lists(
+                                    candidate_results,
+                                    graph_results,
+                                    limit=_CANDIDATE_K * 3,
+                                )
+                    retrieval_cache[cache_key] = {
+                        "results": list(candidate_results),
+                        "graph_doc_distances": dict(graph_doc_distances),
+                    }
                     retrieval_cache.move_to_end(cache_key)
-                    while len(retrieval_cache) > retrieval_cache_size:
+                    while len(retrieval_cache) > _RETRIEVAL_CACHE_SIZE:
                         retrieval_cache.popitem(last=False)
                 if exclude_self_evidence:
-                    results, filtered_count = _filter_self_evidence_results(
-                        results,
+                    candidate_results, filtered_count = _filter_self_evidence_results(
+                        candidate_results,
                         input_doc_id=doc_id,
                         scope=self_evidence_scope,
                         claim_abs_start=claim_abs_start,
@@ -721,6 +1132,15 @@ class ConsistencyEngineImpl:
                         req_stats["self_evidence_filtered_count"] = int(
                             req_stats.get("self_evidence_filtered_count", 0)
                         ) + filtered_count
+                reranked_results, rerank_model_score = _rerank_results_for_consistency(
+                    results=candidate_results,
+                    claim_text=claim_text,
+                    filters=retrieval_filters,
+                    graph_doc_distances=graph_doc_distances,
+                    gateway=gateway,
+                    enable_model=bool(settings.enable_layer3_model),
+                )
+                results = reranked_results[:_FINAL_K]
                 if req_stats is not None:
                     req_stats["chunks_processed"] = int(req_stats.get("chunks_processed", 0)) + int(
                         retrieval_stats.get("chunks_processed", 0)
@@ -753,15 +1173,25 @@ class ConsistencyEngineImpl:
                     evidences.append(evidence)
 
                 verdict = Verdict.UNKNOWN
-                candidates = find_entity_candidates(claim_text, alias_index)
+                unknown_reasons: set[str] = set()
+                if not results:
+                    unknown_reasons.add(_UNKNOWN_REASON_NO_EVIDENCE)
+
+                candidates = find_entity_candidates(segment_text, alias_index)
                 ambiguous = len(candidates) > 1
                 target_entity_id: str | None = None
                 if len(candidates) == 1:
                     target_entity_id = next(iter(candidates))
 
                 fact_links: list[tuple[str, EvidenceRole]] = []
+                judge_meta = {
+                    "saw_ok": False,
+                    "saw_violate": False,
+                    "saw_uncomparable": False,
+                    "conflicting": False,
+                }
                 if fact_index:
-                    judged, fact_links = _judge_with_fact_index(
+                    judged, fact_links, judge_meta = _judge_with_fact_index(
                         slots,
                         fact_index,
                         target_entity_id=target_entity_id,
@@ -771,29 +1201,49 @@ class ConsistencyEngineImpl:
                     )
                     if judged is not None:
                         verdict = judged
+                    if judge_meta.get("saw_uncomparable"):
+                        unknown_reasons.add(_UNKNOWN_REASON_SLOT_UNCOMPARABLE)
+                    if judge_meta.get("conflicting"):
+                        unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
                 if ambiguous:
                     verdict = Verdict.UNKNOWN
+                    unknown_reasons.add(_UNKNOWN_REASON_AMBIGUOUS_ENTITY)
 
                 # Enforce evidence contract: VIOLATE must keep CONTRADICT role.
                 if verdict is Verdict.VIOLATE and not any(role is EvidenceRole.CONTRADICT for _, role in fact_links):
                     verdict = Verdict.UNKNOWN
+                    unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
+
+                if verdict is Verdict.UNKNOWN and not unknown_reasons:
+                    if results:
+                        unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
+                    else:
+                        unknown_reasons.add(_UNKNOWN_REASON_NO_EVIDENCE)
+                _add_unknown_reasons(req_stats, unknown_reasons)
 
                 fts_strength = float(results[0]["score"]) if results else 0.0
-                model_score = 0.0
-                if settings.enable_layer3_model and verdict is Verdict.UNKNOWN and evidences:
-                    model_score = gateway.nli_score(
-                        {"claim_text": claim_text, "evidence": _bundle_evidence(evidences)}
-                    )
+                model_score = rerank_model_score if settings.enable_layer3_model else 0.0
                 breakdown = ReliabilityBreakdown(
                     fts_strength=fts_strength,
                     evidence_count=len(evidences),
                     confirmed_evidence=len([e for e in evidences if e.confirmed]),
                     model_score=model_score,
                 )
-                reliability = min(0.6, breakdown.evidence_count / 3) if evidences else 0.0
-                if verdict is Verdict.UNKNOWN:
-                    reliability = 0.0
-                whitelist_applied = whitelist_repo.is_whitelisted(conn, project_id, fingerprint, scope=doc_id)
+                reliability, evidence_confidence, decision_confidence = _compute_reliability(
+                    verdict=verdict,
+                    breakdown=breakdown,
+                )
+                if req_stats is not None:
+                    req_stats["evidence_confidence_sum"] = float(req_stats.get("evidence_confidence_sum", 0.0)) + float(
+                        evidence_confidence
+                    )
+                    req_stats["decision_confidence_sum"] = float(req_stats.get("decision_confidence_sum", 0.0)) + float(
+                        decision_confidence
+                    )
+                whitelist_applied = whitelist_repo.is_whitelisted(conn, project_id, fingerprint, scope=doc_id) or (
+                    segment_fingerprint != fingerprint
+                    and whitelist_repo.is_whitelisted(conn, project_id, segment_fingerprint, scope=doc_id)
+                )
 
                 verdict_log = VerdictLog(
                     vid=str(uuid.uuid4()),
@@ -801,7 +1251,7 @@ class ConsistencyEngineImpl:
                     input_doc_id=doc_id,
                     input_snapshot_id=snapshot_id,
                     schema_ver=schema_ver,
-                    segment_span=Span(start=span_start + offset, end=span_end + offset),
+                    segment_span=Span(start=claim_start + offset, end=claim_end + offset),
                     claim_text=claim_text,
                     verdict=verdict,
                     reliability_overall=reliability,

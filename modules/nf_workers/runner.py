@@ -1443,6 +1443,9 @@ def _handle_consistency(ctx: WorkerContext) -> None:
                 "rule_eval_ms": float(req_stats.get("rule_eval_ms", 0.0)),
                 "model_eval_ms": float(req_stats.get("model_eval_ms", 0.0)),
                 "slot_matches": int(req_stats.get("slot_matches", 0)),
+                "unknown_reason_counts": dict(req_stats.get("unknown_reason_counts", {}))
+                if isinstance(req_stats.get("unknown_reason_counts"), dict)
+                else {},
                 **_standard_metrics_payload(
                     start_perf=start_perf,
                     claims_processed=int(req_stats.get("claims_processed", total)),
