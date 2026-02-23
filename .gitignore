@@ -1,6 +1,5 @@
 __pycache__
 .pytest_cache
-.vscode
 data
 nf_orchestrator.sqlite3
 verify

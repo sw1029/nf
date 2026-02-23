@@ -1,13 +1,23 @@
+# 최상위 설정임을 명시
 root = true
 
+# [1] 모든 파일에 적용되는 기본 설정
 [*]
-charset = utf-8
+charset = utf-8-bom
 end_of_line = lf
 insert_final_newline = true
 trim_trailing_whitespace = true
 
+# [2] C# 소스 파일: 특정 인코딩 및 줄바꿈 규칙 적용
+[*.cs]
+charset = utf-8-bom
+end_of_line = crlf
+insert_final_newline = true
+
+# [3] 마크다운 파일: 의미적 공백 유지를 위해 트림 비활성화
 [*.md]
 trim_trailing_whitespace = false
 
+# [4] Windows 배치 및 파워쉘 스크립트: OS 호환성을 위해 CRLF 강제
 [*.{bat,cmd,ps1}]
 end_of_line = crlf
