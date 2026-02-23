@@ -28,6 +28,17 @@
       --editor-line-height: 1.8;
       --editor-letter-spacing: 0px;
       --editor-font-family: 'Noto Serif KR', serif;
+
+      /* Status Colors */
+      --status-ok-bg: #f0fdf4;
+      --status-ok-border: #bbf7d0;
+      --status-ok-text: #166534;
+      --status-warn-bg: #fff7ed;
+      --status-warn-border: #fed7aa;
+      --status-warn-text: #9a3412;
+      --status-err-bg: #fef2f2;
+      --status-err-border: #fecaca;
+      --status-err-text: #991b1b;
     }
 
     * {
@@ -68,6 +79,7 @@
       border-right: none;
       border-left: 1px solid var(--border-color);
       width: 320px;
+      position: relative;
     }
 
     .sidebar-header {
@@ -156,13 +168,15 @@
     }
 
     .toolbar {
-      padding: 15px 30px;
+      padding: 10px 20px;
       background: white;
       border-bottom: 1px solid var(--border-color);
       display: flex;
       justify-content: space-between;
       align-items: center;
-      height: 60px;
+      min-height: 60px;
+      flex-wrap: wrap;
+      gap: 10px;
     }
 
     .doc-title-input {
@@ -204,6 +218,53 @@
     .paper[placeholder]:empty:before {
       content: attr(placeholder);
       color: #94a3b8;
+    }
+
+    /* Toolbar Badges & Status */
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px 8px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: #f1f5f9;
+      color: #475569;
+      border: 1px solid #e2e8f0;
+    }
+
+    .status-badge:hover {
+      background: #e2e8f0;
+    }
+
+    .status-badge.active {
+      background: #e0f2fe;
+      color: #0369a1;
+      border-color: #bae6fd;
+    }
+
+    .status-badge.warning {
+      background: #fef3c7;
+      color: #92400e;
+      border-color: #fde68a;
+      animation: pulse-warn 2s infinite;
+    }
+
+    @keyframes pulse-warn {
+      0% {
+        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
+      }
+
+      70% {
+        box-shadow: 0 0 0 6px rgba(245, 158, 11, 0);
+      }
+
+      100% {
+        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+      }
     }
 
     /* Buttons */
@@ -327,27 +388,92 @@
       margin-bottom: 15px;
     }
 
-    /* Analysis Cards */
+    /* Analysis Cards (Verdict Cards) */
     .analysis-card {
       background: #fff;
       border: 1px solid var(--border-color);
-      padding: 15px;
-      border-radius: 8px;
-      margin-bottom: 10px;
-      border-left: 4px solid var(--accent-secondary);
+      padding: 16px;
+      border-radius: 10px;
+      margin-bottom: 12px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      transition: box-shadow 0.2s;
+    }
+
+    .analysis-card:hover {
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.08);
     }
 
     .analysis-card.info {
-      border-left-color: #3498db;
+      /* OK */
+      border-left: 4px solid var(--status-ok-border);
+      background: var(--status-ok-bg);
     }
 
     .analysis-card.error {
-      border-left-color: #e74c3c;
+      /* VIOLATE */
+      border-left: 4px solid #ef4444;
+      background: var(--status-err-bg);
     }
 
     .analysis-card.unknown {
-      border-left-color: #94a3b8;
-      background: #f8fafc;
+      /* UNKNOWN */
+      border-left: 4px solid #f97316;
+      background: var(--status-warn-bg);
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .card-title {
+      font-weight: 700;
+      font-size: 0.95rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .card-title.error {
+      color: var(--status-err-text);
+    }
+
+    .card-title.unknown {
+      color: var(--status-warn-text);
+    }
+
+    .card-title.info {
+      color: var(--status-ok-text);
+    }
+
+    .claim-box {
+      background: rgba(255, 255, 255, 0.6);
+      border-left: 2px solid #cbd5e1;
+      padding: 8px 10px;
+      margin: 8px 0;
+      font-size: 0.9rem;
+      color: #334155;
+      font-style: italic;
+    }
+
+    .card-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+
+    .card-actions .btn {
+      padding: 6px 10px;
+      font-size: 0.8rem;
+    }
+
+    .card-actions .btn-primary {
+      flex: 1;
+      /* Make primary action larger */
+      min-width: 100px;
     }
 
     .assistant-advanced {
@@ -455,6 +581,133 @@
       padding: 6px 4px;
       font-size: 0.75rem;
     }
+
+    /* Jobs Panel Widget */
+    .jobs-widget {
+      position: absolute;
+      top: 60px;
+      right: 10px;
+      width: 320px;
+      background: white;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      box-shadow: var(--shadow-paper);
+      z-index: 100;
+      display: none;
+      flex-direction: column;
+      max-height: 400px;
+    }
+
+    .jobs-widget.active {
+      display: flex;
+    }
+
+    .jobs-header {
+      padding: 12px 15px;
+      border-bottom: 1px solid var(--border-color);
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #f8fafc;
+      border-radius: 8px 8px 0 0;
+    }
+
+    .jobs-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+    }
+
+    .job-item {
+      padding: 10px;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      font-size: 0.85rem;
+    }
+
+    .job-progress-bar {
+      height: 6px;
+      background: #e2e8f0;
+      border-radius: 3px;
+      margin-top: 6px;
+      overflow: hidden;
+    }
+
+    .job-progress-fill {
+      height: 100%;
+      background: var(--accent-primary);
+      width: 0%;
+      transition: width 0.3s;
+    }
+
+    /* Mobile Responsive */
+    .mobile-menu-btn {
+      display: none;
+      font-size: 1.5rem;
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--accent-primary);
+    }
+
+    @media (max-width: 768px) {
+      .sidebar {
+        position: absolute;
+        left: -300px;
+        transition: left 0.3s;
+      }
+
+      .sidebar.mobile-open {
+        left: 0;
+      }
+
+      .sidebar.right {
+        left: auto;
+        right: -320px;
+        transition: right 0.3s;
+      }
+
+      .sidebar.right.mobile-open {
+        right: 0;
+      }
+
+      .mobile-menu-btn {
+        display: block;
+      }
+
+      .toolbar {
+        padding: 5px 10px;
+      }
+
+      .doc-title-input {
+        width: 150px;
+        font-size: 1.1rem;
+      }
+
+      .editor-container {
+        padding: 10px;
+      }
+
+      .paper {
+        padding: 30px 20px;
+        min-height: calc(100vh - 80px);
+      }
+
+      #save-status,
+      #consistency-status,
+      #doc-type-badge {
+        display: none;
+        /* Hide non-essential elements on very small screens to save space */
+      }
+
+      .status-badge span.text {
+        display: none;
+      }
+
+      /* icon only on mobile */
+    }
   </style>
 </head>
 
@@ -547,18 +800,83 @@
       <!-- Toolbar -->
       <div class="toolbar">
         <div style="display:flex; align-items:center;">
+          <button class="mobile-menu-btn" onclick="toggleLeftSidebar()">☰</button>
           <span id="doc-type-badge"
-            style="background:#eee; padding:4px 8px; border-radius:4px; font-size:0.8rem; margin-right:10px; font-weight:600;">유형</span>
+            style="background:#eee; padding:4px 8px; border-radius:4px; font-size:0.8rem; margin-right:10px; font-weight:600; margin-left: 10px;">유형</span>
           <input id="doc-title-input" class="doc-title-input" placeholder="제목을 입력하세요" oninput="handleInput()"
             onclick="this.select()">
         </div>
 
         <div style="display:flex; gap:10px; align-items:center;">
-          <span id="consistency-status" style="font-size:0.8rem; color:#3498db; margin-right:5px;"></span>
-          <span id="save-status" style="font-size:0.8rem; color:#aaa; margin-right:10px;">저장됨</span>
-          <button class="btn btn-secondary" onclick="openExportModal()">내보내기</button>
-          <button class="btn btn-secondary" onclick="toggleConfigPanel()">화면 설정</button>
-          <button class="btn btn-icon" onclick="toggleRightSidebar()" title="AI 작가 도우미 열기/닫기">✨</button>
+          <!-- Custom Status Widgets -->
+          <div id="memory-pressure-badge" class="status-badge warning" style="display:none;"
+            title="시스템 안정화를 위해 잠시 대기 중입니다. 곧 재개됩니다.">
+            ⚠️ <span class="text" style="margin-left:4px;">시스템 대기 중</span>
+          </div>
+
+          <div id="jobs-status-badge" class="status-badge" onclick="toggleJobsPanel()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              style="margin-right:4px;">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path
+                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
+              </path>
+            </svg>
+            <span class="text" id="jobs-status-text">작업 대기</span>
+          </div>
+
+          <div id="consistency-badge" class="status-badge" title="클릭하여 백그라운드 점검 상태 확인"
+            onclick="toggleConsistencyPanel()">
+            👁️ <span class="text" id="consistency-status-text">상시 검토 중</span>
+          </div>
+
+          <span id="save-status" style="font-size:0.8rem; color:#aaa; margin-right:5px; margin-left:5px;">저장됨</span>
+          <button class="btn btn-secondary" onclick="openExportModal()" title="문서 내보내기">💾 내보내기</button>
+          <button class="btn btn-icon" onclick="toggleConfigPanel()" title="화면 설정">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
+              <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
+              <path d="M2 2l7.586 7.586"></path>
+              <circle cx="11" cy="11" r="2"></circle>
+            </svg>
+          </button>
+          <button class="btn btn-icon" style="background:#f1f5f9; color:var(--accent-primary);"
+            onclick="toggleRightSidebar()" title="AI 작가 도우미 메뉴">
+            ✨ <span style="font-size:0.8rem; font-weight:bold; margin-left:2px;">도우미</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Jobs Panel Widget -->
+      <div id="jobs-panel" class="jobs-widget">
+        <div class="jobs-header">
+          <span style="font-size:0.9rem;">백그라운드 작업</span>
+          <button class="btn-icon" style="font-size:0.8rem; padding:2px 6px;" onclick="fetchRecentJobs()">🔄
+            새로고침</button>
+        </div>
+        <div id="jobs-list-content" class="jobs-list">
+          <div style="text-align:center; color:#94a3b8; font-size:0.85rem; padding:10px;">작업 내역이 없습니다.</div>
+        </div>
+      </div>
+
+      <!-- Consistency Detail Panel (Pop-over from badge) -->
+      <div id="consistency-panel" class="jobs-widget" style="right:150px; width:280px;">
+        <div class="jobs-header">
+          <span style="font-size:0.9rem;">배경 점검 상태</span>
+          <button class="btn-icon" style="font-size:1rem; padding:0 4px;" onclick="toggleConsistencyPanel()">×</button>
+        </div>
+        <div class="jobs-list" style="padding:15px;">
+          <div style="font-size:0.85rem; color:#475569; margin-bottom:10px;">
+            <strong>대기 중인 단락:</strong> <span id="consistency-queued-count">0</span>건
+          </div>
+          <div style="font-size:0.85rem; color:#475569; margin-bottom:10px;">
+            <strong>최근 완료 시간:</strong> <span id="consistency-last-time">-</span>
+          </div>
+          <hr style="border:0; border-top:1px dashed #e2e8f0; margin:10px 0;">
+          <div id="consistency-details-list"
+            style="font-size:0.8rem; color:#64748b; max-height:150px; overflow-y:auto;">
+            진행 중인 범위가 없습니다.
+          </div>
         </div>
       </div>
 
@@ -1638,11 +1956,11 @@
           // Label construction: "N화 제목" 또는 "제목"
           let label = doc.title;
           if (doc.metadata && doc.metadata.episode_no) {
-            label = `< span style = "color:#e67e22; font-weight:bold; margin-right:5px;" > ${doc.metadata.episode_no}화</span > ${doc.title} `;
+            label = `<span style="color:#e67e22; font-weight:bold; margin-right:5px;">${doc.metadata.episode_no}화</span> ${doc.title}`;
           }
 
           item.innerHTML = `
-          < div style = "width:100%; display:flex; justify-content:space-between; align-items:center;" >
+          <div style="width:100%; display:flex; justify-content:space-between; align-items:center;">
                   <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; pointer-events:none;">${label}</span>
                   <div class="menu-btn" onclick="openDocCtxMenu(event, '${doc.doc_id}')">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1698,7 +2016,7 @@
       const maxOrder = groupDocs.reduce((max, d) => Math.max(max, (d.metadata?.order || 0)), 0);
       const newOrder = maxOrder + 10;
 
-      await api(`/ projects / ${state.projectId} /documents/${draggedDocId} `, 'PATCH', {
+      await api(`/projects/${state.projectId}/documents/${draggedDocId}`, 'PATCH', {
         metadata: { ...doc.metadata, group: newGroup, order: newOrder }
       });
 
@@ -1731,7 +2049,7 @@
         newOrder = (prevOrder + targetOrder) / 2;
       }
 
-      await api(`/ projects / ${state.projectId} /documents/${draggedDocId} `, 'PATCH', {
+      await api(`/projects/${state.projectId}/documents/${draggedDocId}`, 'PATCH', {
         metadata: { ...sourceDoc.metadata, group: targetGroup, order: newOrder }
       });
 
@@ -1818,7 +2136,7 @@
           document.getElementById('doc-title-input').value = newTitle;
         }
 
-        api(`/ projects / ${state.projectId} /documents/${docId} `, 'PATCH', { title: newTitle })
+        api(`/projects/${state.projectId}/documents/${docId}`, 'PATCH', { title: newTitle })
           .catch(e => {
             alert("이름 변경에 실패했습니다.");
             console.error(e);
@@ -1834,7 +2152,7 @@
       if (newGroup !== null) {
         const meta = doc.metadata || {};
         meta.group = newGroup;
-        api(`/ projects / ${state.projectId} /documents/${docId} `, 'PATCH', { metadata: meta })
+        api(`/projects/${state.projectId}/documents/${docId}`, 'PATCH', { metadata: meta })
           .then(() => {
             state.docs[docId].metadata = meta; // local update
             refreshDocList();
@@ -1852,7 +2170,7 @@
 
         const meta = doc.metadata || {};
         meta.episode_no = intNum;
-        api(`/ projects / ${state.projectId} /documents/${docId} `, 'PATCH', { metadata: meta })
+        api(`/projects/${state.projectId}/documents/${docId}`, 'PATCH', { metadata: meta })
           .then(() => {
             state.docs[docId].metadata = meta;
             refreshDocList()
@@ -1862,7 +2180,7 @@
 
     function confirmDeleteDoc(docId) {
       if (confirm("정말 이 문서를 삭제하시겠습니까?")) {
-        api(`/ projects / ${state.projectId} /documents/${docId} `, 'DELETE')
+        api(`/projects/${state.projectId}/documents/${docId}`, 'DELETE')
           .then(() => {
             delete state.docs[docId];
             if (state.currentDocId === docId) {
@@ -2024,10 +2342,11 @@
       const payload = (eventObj && typeof eventObj.payload === 'object') ? eventObj.payload : {};
       const reasonCode = String(payload.reason_code || '').trim();
       if (reasonCode === 'PAUSED_DUE_TO_MEMORY_PRESSURE') {
-        const rssMb = Number(payload.rss_mb);
-        const maxRamMb = Number(payload.max_ram_mb);
-        if (Number.isFinite(rssMb) && Number.isFinite(maxRamMb)) {
-          return `메모리 압력으로 대기 중 (RSS ${rssMb.toFixed(0)}MB / 제한 ${maxRamMb.toFixed(0)}MB)`;
+        const bdg = document.getElementById('memory-pressure-badge');
+        if (bdg) {
+          bdg.style.display = 'inline-flex';
+          clearTimeout(bdg.hideTimeout);
+          bdg.hideTimeout = setTimeout(() => { bdg.style.display = 'none'; }, 5000);
         }
         return '메모리 압력으로 대기 중';
       }
@@ -2215,14 +2534,18 @@
       const waitingCount = Math.max(0, queued.length - pending.length);
       state.backgroundConsistencyRunning = true;
 
-      const cStatus = document.getElementById('consistency-status');
+      const cStatusBadgeText = document.getElementById('consistency-status-text');
+      const cStatusBadge = document.getElementById('consistency-badge');
+      const cQueuedCount = document.getElementById('consistency-queued-count');
+
       const renderBackgroundStatus = (current, total, message = '') => {
-        if (!cStatus) return;
+        if (!cStatusBadgeText) return;
         const suffix = message ? ` | ${message}` : '';
-        cStatus.innerText = `백그라운드 정합성 ${Math.max(0, current)}/${Math.max(1, total)} (대기 ${Math.max(0, waitingCount)}건)${suffix}`;
-        cStatus.style.color = "#3498db";
+        cStatusBadgeText.innerText = `검토 중 ${Math.max(0, current)}/${Math.max(1, total)}`;
+        cStatusBadge.classList.add('active');
+        if (cQueuedCount) cQueuedCount.innerText = waitingCount;
       };
-      if (cStatus) {
+      if (cStatusBadgeText) {
         renderBackgroundStatus(0, pending.length);
       }
 
@@ -2266,9 +2589,10 @@
         }
       } catch (e) {
         console.error('background consistency failed', e);
-        if (cStatus) {
-          cStatus.innerText = `백그라운드 정합성 실패: ${String(e?.message || e)}`;
-          cStatus.style.color = "red";
+        if (cStatusBadgeText) {
+          cStatusBadgeText.innerText = `검토 실패`;
+          cStatusBadge.classList.remove('active');
+          cStatusBadge.classList.add('warning');
         }
       } finally {
         state.backgroundConsistencyRunning = false;
@@ -2277,14 +2601,23 @@
           if (!item || !Number.isInteger(item.start) || !Number.isInteger(item.end)) return false;
           return !pending.some((segment) => _spanOverlaps(item.start, item.end, segment.start, segment.end));
         });
+
+        if (document.getElementById('consistency-last-time')) {
+          document.getElementById('consistency-last-time').innerText = new Date().toLocaleTimeString();
+        }
+
         if (state.pendingConsistencySegments.length > 0) {
-          if (cStatus) {
-            cStatus.innerText = `백그라운드 정합성 대기 ${state.pendingConsistencySegments.length}건`;
-            cStatus.style.color = "#64748b";
+          if (cStatusBadgeText) {
+            cStatusBadgeText.innerText = `대기 ${state.pendingConsistencySegments.length}건`;
+            cStatusBadge.classList.remove('active');
           }
+          if (cQueuedCount) cQueuedCount.innerText = state.pendingConsistencySegments.length;
           scheduleBackgroundConsistencyCheck(docId);
-        } else if (cStatus) {
-          cStatus.innerText = '';
+        } else if (cStatusBadgeText) {
+          cStatusBadgeText.innerText = '상시 검토 중';
+          cStatusBadge.classList.remove('active');
+          cStatusBadge.classList.remove('warning');
+          if (cQueuedCount) cQueuedCount.innerText = 0;
         }
       }
     }
@@ -2458,20 +2791,34 @@
 
         html += `
                 <div class="analysis-card ${severityClass}">
-                    <strong>${escapeHtml(title)}</strong>
-                    <p style="font-size:0.9rem; margin:5px 0;">${escapeHtml(claimText)}</p>
-                    <div style="font-size:0.78rem; color:#666; margin-bottom:8px;">
-                      판정: ${escapeHtml(verdict)} | 신뢰도: ${Number.isFinite(reliability) ? reliability.toFixed(2) : '-'} | 범위: ${escapeHtml(spanLabel)}
+                    <div class="card-header">
+                       <span class="card-title ${severityClass}">
+                         ${verdict === 'VIOLATE' ? '❌' : (verdict === 'UNKNOWN' ? '❓' : '✅')}
+                         ${escapeHtml(title)}
+                       </span>
                     </div>
-                    ${previewPrimary ? `<div style="font-size:0.78rem; color:#475569; margin-bottom:8px;">근거 경로: ${escapeHtml(previewPrimary)}</div>` : ''}
-                    ${verdict === 'UNKNOWN' ? `<div style="font-size:0.78rem; color:#64748b; margin-bottom:8px;">사유: ${escapeHtml(unknownReasonText)}</div>` : ''}
-                    <div style="display:flex; gap:8px; margin-bottom:8px;">
-                      <button class="btn btn-secondary jump-claim" data-claim="${escapeHtml(claimText)}" data-span-start="${spanStart !== null ? spanStart : ''}" data-span-end="${spanEnd !== null ? spanEnd : ''}">본문으로 이동</button>
-                      <button class="btn btn-secondary load-verdict-detail" data-vid="${escapeHtml(vid)}" data-target="${escapeHtml(detailId)}" ${vid ? '' : 'disabled'}>근거 보기</button>
-                      <button class="btn btn-secondary verdict-whitelist" data-claim="${escapeHtml(claimText)}">허용 목록</button>
-                      <button class="btn btn-secondary verdict-ignore" data-claim="${escapeHtml(claimText)}">무시</button>
+                    <div class="claim-box">"${escapeHtml(claimText)}"</div>
+                    
+                    <div style="font-size:0.75rem; color:#64748b; margin-bottom:8px;">
+                      <span style="margin-right:8px;">신뢰도: ${Number.isFinite(reliability) ? reliability.toFixed(2) : '-'}</span>
                     </div>
-                    <div id="${escapeHtml(detailId)}" style="font-size:0.8rem; color:#555;"></div>
+                    
+                    <details style="margin-bottom:8px; font-size:0.8rem;">
+                       <summary style="cursor:pointer; color:#475569; font-weight:600;">상세 정보 접기/펴기</summary>
+                       <div style="margin-top:6px; padding:6px; background:#f8fafc; border-radius:4px; border:1px solid #e2e8f0;">
+                          ${previewPrimary ? `<div style="margin-bottom:4px;"><strong>근거:</strong> ${escapeHtml(previewPrimary)}</div>` : ''}
+                          ${verdict === 'UNKNOWN' ? `<div style="margin-bottom:4px;"><strong>사유:</strong> ${escapeHtml(unknownReasonText)}</div>` : ''}
+                          <div><strong>분석 범위:</strong> ${escapeHtml(spanLabel)}</div>
+                       </div>
+                    </details>
+                    
+                    <div class="card-actions">
+                      <button class="btn btn-primary jump-claim" data-claim="${escapeHtml(claimText)}" data-span-start="${spanStart !== null ? spanStart : ''}" data-span-end="${spanEnd !== null ? spanEnd : ''}">🔍 본문에서 보기</button>
+                      <button class="btn btn-secondary load-verdict-detail" data-vid="${escapeHtml(vid)}" data-target="${escapeHtml(detailId)}" ${vid ? '' : 'disabled'}>상세 근거</button>
+                      <button class="btn btn-secondary verdict-whitelist" data-claim="${escapeHtml(claimText)}" title="이 내용은 허용합니다">✔️ 예외 처리</button>
+                      <button class="btn btn-secondary verdict-ignore" data-claim="${escapeHtml(claimText)}" title="이 경고를 무시합니다">숨기기</button>
+                    </div>
+                    <div id="${escapeHtml(detailId)}" style="font-size:0.8rem; color:#555; margin-top:8px;"></div>
                 </div>
             `;
       });
@@ -2941,6 +3288,81 @@
 
       state.draggedDocId = null;
       refreshDocList();
+    }
+
+    // --- UI/Widget Toggles ---
+    function toggleLeftSidebar() {
+      document.getElementById('nav-sidebar').classList.toggle('mobile-open');
+    }
+
+    function toggleJobsPanel() {
+      const panel = document.getElementById('jobs-panel');
+      const badge = document.getElementById('jobs-status-badge');
+      panel.classList.toggle('active');
+      if (panel.classList.contains('active')) {
+        badge.classList.add('active');
+        fetchRecentJobs();
+      } else {
+        badge.classList.remove('active');
+      }
+    }
+
+    function toggleConsistencyPanel() {
+      const panel = document.getElementById('consistency-panel');
+      panel.classList.toggle('active');
+    }
+
+    async function fetchRecentJobs() {
+      const listContainer = document.getElementById('jobs-list-content');
+      listContainer.innerHTML = '<div style="text-align:center; color:#94a3b8; font-size:0.85rem; padding:10px;">불러오는 중...</div>';
+      try {
+        const res = await api('/jobs?limit=5');
+        const jobs = res.jobs || [];
+        if (jobs.length === 0) {
+          listContainer.innerHTML = '<div style="text-align:center; color:#94a3b8; font-size:0.85rem; padding:10px;">진행 중이거나 최근 작업이 없습니다.</div>';
+          document.getElementById('jobs-status-text').innerText = '작업 대기';
+          return;
+        }
+
+        let activeCount = 0;
+        let html = '';
+        jobs.forEach(job => {
+          if (['PENDING', 'RUNNING'].includes(job.status)) activeCount++;
+
+          let statusColor = '#64748b';
+          let pgColor = '#e2e8f0';
+          let progress = job.progress || 0;
+
+          if (job.status === 'SUCCEEDED') { statusColor = '#16a34a'; progress = 100; pgColor = '#22c55e'; }
+          else if (job.status === 'FAILED') { statusColor = '#dc2626'; pgColor = '#ef4444'; }
+          else if (job.status === 'RUNNING') { statusColor = '#2563eb'; pgColor = '#3b82f6'; }
+          else if (job.status === 'CANCELED') { statusColor = '#d97706'; }
+
+          html += `
+            <div class="job-item">
+              <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                <strong>${escapeHtml(job.type)}</strong>
+                <span style="color:${statusColor}; font-weight:600; font-size:0.75rem;">${escapeHtml(job.status)}</span>
+              </div>
+              <div style="font-size:0.75rem; color:#64748b;">ID: ${escapeHtml(job.job_id.split('-')[0])}... | ${new Date(job.created_at).toLocaleTimeString()}</div>
+              <div class="job-progress-bar">
+                <div class="job-progress-fill" style="width:${progress}%; background:${pgColor};"></div>
+              </div>
+            </div>
+          `;
+        });
+
+        listContainer.innerHTML = html;
+        if (activeCount > 0) {
+          document.getElementById('jobs-status-text').innerText = `작업 중(${activeCount})`;
+          document.getElementById('jobs-status-badge').classList.add('warning');
+        } else {
+          document.getElementById('jobs-status-text').innerText = '작업 휴식';
+          document.getElementById('jobs-status-badge').classList.remove('warning');
+        }
+      } catch (e) {
+        listContainer.innerHTML = `<div style="text-align:center; color:#dc2626; font-size:0.85rem; padding:10px;">로드 실패</div>`;
+      }
     }
 
     // Init
