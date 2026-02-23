@@ -582,6 +582,34 @@
       font-size: 0.75rem;
     }
 
+    /* Check Mode (Advanced Options Replacement) */
+    .check-mode-label {
+      display: flex;
+      align-items: flex-start;
+      padding: 10px;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .check-mode-label:hover {
+      background: #f8fafc;
+    }
+
+    .check-mode-label input {
+      margin-top: 4px;
+      margin-right: 10px;
+    }
+
+    .check-mode-label .desc {
+      font-size: 0.75rem;
+      color: #64748b;
+      margin-top: 4px;
+      display: block;
+    }
+
     /* Jobs Panel Widget */
     .jobs-widget {
       position: absolute;
@@ -933,68 +961,42 @@
         <label style="display:block; margin-top:8px; font-size:0.8rem; color:#64748b; cursor:pointer;">
           <input id="toggle-show-ok" type="checkbox" style="margin-right:6px;"> 정상 결과(OK) 보이기
         </label>
-        <details class="assistant-advanced">
-          <summary>세부 점검 옵션 <span class="help-tooltip" title="비전공자도 쉽게 사용할 수 있는 세부 설정입니다.">?</span></summary>
+        <details class="assistant-advanced" open>
+          <summary>🔍 점검 수준 및 집중 영역 <span class="help-tooltip" title="어떤 방식으로 글을 검토할지 선택하세요.">?</span></summary>
 
-          <div class="preset-btn-group">
-            <button class="btn btn-secondary" onclick="applyConsistencyPreset('quick')">빠른 기본 점검</button>
-            <button class="btn btn-secondary" onclick="applyConsistencyPreset('character')">인물 집중 점검</button>
-            <button class="btn btn-secondary" onclick="applyConsistencyPreset('deep')">설정 심층 점검</button>
+          <div class="check-mode-group" style="margin-top:10px;">
+            <label class="check-mode-label">
+              <input type="radio" name="consistency-level" value="quick" checked>
+              <div>
+                <strong style="color: #16a34a;">🟢 빠른 팩트 체크 (추천)</strong><br>
+                <span class="desc">이름, 나이, 장소 등 명시적인 설정 충돌만 빠르게 잡아냅니다.</span>
+              </div>
+            </label>
+            <label class="check-mode-label">
+              <input type="radio" name="consistency-level" value="deep">
+              <div>
+                <strong style="color: #2563eb;">🔵 설정 연계 심층 점검</strong><br>
+                <span class="desc">설정집 전체 문맥을 읽고 떡밥이나 인물의 심리적 모순까지 유추합니다.</span>
+              </div>
+            </label>
+            <label class="check-mode-label">
+              <input type="radio" name="consistency-level" value="strict">
+              <div>
+                <strong style="color: #7c3aed;">🟣 출판 전 정밀 검증 (느림)</strong><br>
+                <span class="desc">오탐지를 줄이기 위해 시스템이 여러 번 반복하여 분석합니다.</span>
+              </div>
+            </label>
           </div>
 
-          <div class="row">
-            <label for="consistency-filter-entity">특정 인물/장소 집중 점검 <span class="help-tooltip"
-                title="입력한 인물이나 장소를 중심으로 오류를 찾습니다.">?</span></label>
-            <input id="consistency-filter-entity" type="text" placeholder="예: 김철수, 마법학교">
-          </div>
-          <div class="row">
-            <label for="consistency-filter-time">특정 사건/시점 기준 점검 <span class="help-tooltip"
-                title="입력한 시간 배경이나 사건을 중심으로 점검합니다.">?</span></label>
-            <input id="consistency-filter-time" type="text" placeholder="예: 과거 회상, 에피소드1">
-          </div>
-          <div class="row">
-            <label for="consistency-filter-timeline">타임라인 지정 점검 (순서 번호) <span class="help-tooltip"
-                title="전체 시간선 중 특정 순번을 기준으로 점검합니다.">?</span></label>
-            <input id="consistency-filter-timeline" type="number" min="0" step="1" placeholder="타임라인 순서 번호">
-          </div>
-          <div class="row">
-            <label for="consistency-graph-mode">설정집 연계 심층 점검 <span class="help-tooltip"
-                title="작성하신 설정 문서를 깊이 분석하여 숨은 오류를 찾아냅니다.">?</span></label>
-            <select id="consistency-graph-mode">
-              <option value="off">끄기 (기본)</option>
-              <option value="auto">자동</option>
-              <option value="manual">수동</option>
-            </select>
-          </div>
-          <details style="margin-top: 10px; border-top: 1px dashed #cbd5e1; padding-top: 8px;">
-            <summary style="font-size: 0.75rem; color: #94a3b8; cursor: pointer; font-weight:600;">전문가 설정 (시스템 세부 조정)
-            </summary>
-            <div class="row" style="flex-direction:row; align-items:center; margin-top: 8px;">
-              <input type="checkbox" id="consistency-layer3-promotion" style="margin-right:6px;" checked>
-              <label for="consistency-layer3-promotion">강력한 문맥 추론 적용 <span class="help-tooltip"
-                  title="AI가 문맥을 깊이 추론하여 모호한 오류까지 잡아냅니다.">?</span></label>
+          <div style="margin-top:15px; border-top:1px dashed #cbd5e1; padding-top:10px;">
+            <span style="font-size:0.8rem; font-weight:bold; color:#475569;">🎯 집중 점검 (선택 영역 다중 허용)</span>
+            <div class="row" style="margin-top:8px;">
+              <input id="consistency-filter-entity" type="text" placeholder="특정 인물/장소 (예: 김철수, 마법학교)">
             </div>
             <div class="row">
-              <label for="consistency-verifier-mode">이중 확인 모드 <span class="help-tooltip"
-                  title="발견된 오류를 한 번 더 꼼꼼히 검증하여 신뢰도를 높입니다.">?</span></label>
-              <select id="consistency-verifier-mode">
-                <option value="off">끄기 (기본)</option>
-                <option value="conservative_nli">Conservative NLI</option>
-              </select>
+              <input id="consistency-filter-time" type="text" placeholder="특정 시점/사건 (예: 프롤로그, 과거 회상)">
             </div>
-            <div class="row">
-              <label for="consistency-triage-mode">오류 스마트 분류 <span class="help-tooltip"
-                  title="다양한 오류를 중요도에 따라 스마트하게 나눠 보여줍니다.">?</span></label>
-              <select id="consistency-triage-mode">
-                <option value="off">끄기 (기본)</option>
-                <option value="embedding_anomaly">Embedding Anomaly</option>
-              </select>
-            </div>
-            <div class="row" style="flex-direction:row; align-items:center;">
-              <input type="checkbox" id="consistency-loop-enabled" style="margin-right:6px;" checked>
-              <label for="consistency-loop-enabled">반복 정밀 검증 (시스템)</label>
-            </div>
-          </details>
+          </div>
         </details>
       </div>
 
@@ -1229,88 +1231,47 @@
       }
     }
 
-    function applyConsistencyPreset(mode) {
-      const entityInput = document.getElementById('consistency-filter-entity');
-      const timeInput = document.getElementById('consistency-filter-time');
-      const timelineInput = document.getElementById('consistency-filter-timeline');
-      const graphModeInput = document.getElementById('consistency-graph-mode');
-      const layer3Input = document.getElementById('consistency-layer3-promotion');
-      const verifierInput = document.getElementById('consistency-verifier-mode');
-      const triageInput = document.getElementById('consistency-triage-mode');
-      const loopInput = document.getElementById('consistency-loop-enabled');
-
-      if (mode === 'quick') {
-        if (entityInput) entityInput.value = '';
-        if (timeInput) timeInput.value = '';
-        if (timelineInput) timelineInput.value = '';
-        if (graphModeInput) graphModeInput.value = 'off';
-        if (layer3Input) layer3Input.checked = false;
-        if (verifierInput) verifierInput.value = 'off';
-        if (triageInput) triageInput.value = 'off';
-        if (loopInput) loopInput.checked = false;
-        _showConsistencyNotice('빠른 기본 점검 모드로 설정됨');
-      } else if (mode === 'character') {
-        if (timeInput) timeInput.value = '';
-        if (timelineInput) timelineInput.value = '';
-        if (graphModeInput) graphModeInput.value = 'off';
-        if (layer3Input) layer3Input.checked = true;
-        if (verifierInput) verifierInput.value = 'conservative_nli';
-        if (triageInput) triageInput.value = 'off';
-        if (loopInput) loopInput.checked = true;
-        if (entityInput) {
-          entityInput.focus();
-        }
-        _showConsistencyNotice('인물 집중 점검 모드로 설정됨 (대상 인물 입력 권장)');
-      } else if (mode === 'deep') {
-        if (entityInput) entityInput.value = '';
-        if (timeInput) timeInput.value = '';
-        if (timelineInput) timelineInput.value = '';
-        if (graphModeInput) graphModeInput.value = 'manual';
-        if (layer3Input) layer3Input.checked = true;
-        if (verifierInput) verifierInput.value = 'conservative_nli';
-        if (triageInput) triageInput.value = 'embedding_anomaly';
-        if (loopInput) loopInput.checked = true;
-        _showConsistencyNotice('심층 점검 모드로 설정됨');
-      }
-    }
-
     function _readConsistencyOptionsFromUi() {
       const entityInput = document.getElementById('consistency-filter-entity');
       const timeInput = document.getElementById('consistency-filter-time');
-      const timelineInput = document.getElementById('consistency-filter-timeline');
-      const graphModeInput = document.getElementById('consistency-graph-mode');
-      const layer3Input = document.getElementById('consistency-layer3-promotion');
-      const verifierInput = document.getElementById('consistency-verifier-mode');
-      const triageInput = document.getElementById('consistency-triage-mode');
-      const loopInput = document.getElementById('consistency-loop-enabled');
 
       const filters = {};
       const entityId = (entityInput && typeof entityInput.value === 'string') ? entityInput.value.trim() : '';
       const timeKey = (timeInput && typeof timeInput.value === 'string') ? timeInput.value.trim() : '';
-      const timelineRaw = (timelineInput && typeof timelineInput.value === 'string') ? timelineInput.value.trim() : '';
       if (entityId) filters.entity_id = entityId;
       if (timeKey) filters.time_key = timeKey;
-      if (timelineRaw !== '' && Number.isFinite(Number(timelineRaw))) {
-        filters.timeline_idx = Math.max(0, Math.floor(Number(timelineRaw)));
+
+      let selectedLevel = 'quick';
+      const levelRadios = document.getElementsByName('consistency-level');
+      if (levelRadios) {
+        for (let r of levelRadios) {
+          if (r.checked) { selectedLevel = r.value; break; }
+        }
       }
 
-      const graphMode = _normalizeGraphMode(
-        (graphModeInput && typeof graphModeInput.value === 'string') ? graphModeInput.value : 'off'
-      );
-      const layer3Promotion = layer3Input ? Boolean(layer3Input.checked) : false;
-      const verifierMode = _normalizeVerifierMode(
-        (verifierInput && typeof verifierInput.value === 'string') ? verifierInput.value : 'off'
-      );
-      const triageMode = _normalizeTriageMode(
-        (triageInput && typeof triageInput.value === 'string') ? triageInput.value : 'off'
-      );
-      const verificationLoop = loopInput ? Boolean(loopInput.checked) : false;
+      let graphMode = 'off';
+      let layer3Promotion = false;
+      let verifierMode = 'off';
+      let triageMode = 'off';
+      let verificationLoop = false;
+
+      if (selectedLevel === 'deep') {
+        graphMode = 'auto';
+        layer3Promotion = true;
+        triageMode = 'embedding_anomaly';
+      } else if (selectedLevel === 'strict') {
+        graphMode = 'auto';
+        layer3Promotion = true;
+        verifierMode = 'conservative_nli';
+        triageMode = 'strict'; // Backend can handle 'strict' or map to internal representation
+        verificationLoop = true;
+      }
 
       state.consistencyOptions = {
         filters: {
           entity_id: entityId,
           time_key: timeKey,
-          timeline_idx: timelineRaw,
+          timeline_idx: '',
         },
         graph_mode: graphMode,
         layer3_promotion: layer3Promotion,
