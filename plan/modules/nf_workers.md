@@ -1,4 +1,4 @@
-# nf-workers (잡 실행기) — MoSCoW 구현 계획
+﻿# nf-workers (잡 실행기) — MoSCoW 구현 계획
 
 nf-workers는 오케스트레이터가 큐에 넣은 작업을 실행하고, 리스/하트비트/취소를 처리하며, job_event로 스트리밍한다.
 

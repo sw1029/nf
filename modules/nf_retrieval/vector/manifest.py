@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from collections import OrderedDict
@@ -7,7 +7,8 @@ from typing import Any
 
 from modules.nf_retrieval.contracts import RetrievalRequest, RetrievalResult
 from modules.nf_retrieval.fts.snippet import make_snippet
-from modules.nf_retrieval.vector.embedder import overlap_score, tokenize
+from modules.nf_retrieval.vector.backends import create_vector_search_backend
+from modules.nf_retrieval.vector.embedder import tokenize
 from modules.nf_retrieval.vector.shard_store import DEFAULT_VECTOR_PATH, load_shard
 from modules.nf_shared.config import load_config
 from modules.nf_shared.protocol.dtos import EvidenceMatchType
@@ -119,6 +120,8 @@ def _load_shard_cached(path_value: str | Path) -> tuple[list[dict[str, Any]], bo
 
 
 def vector_search(req: RetrievalRequest) -> list[RetrievalResult]:
+    settings = load_config()
+    backend = create_vector_search_backend(settings.vector_search_backend)
     manifest = load_manifest()
     filters = req.get("filters") or {}
     shards = _select_shards(manifest, filters if isinstance(filters, dict) else {})
@@ -147,6 +150,7 @@ def vector_search(req: RetrievalRequest) -> list[RetrievalResult]:
         stats.setdefault("chunks_processed", 0)
         stats.setdefault("shards_loaded", 0)
         stats["shards_selected"] = len(shards)
+        stats["vector_backend"] = backend.name
 
     results: list[RetrievalResult] = []
     for shard in shards:
@@ -175,7 +179,13 @@ def vector_search(req: RetrievalRequest) -> list[RetrievalResult]:
             if isinstance(episode_filter, str) and episode_filter:
                 if entry.get("episode_id") != episode_filter:
                     continue
-            score = overlap_score(query_tokens, entry.get("tokens", []))
+            score = float(
+                backend.score(
+                    query_text=query,
+                    query_tokens=query_tokens,
+                    entry=entry,
+                )
+            )
             if score <= 0:
                 continue
             snippet = make_snippet(entry.get("text", ""), query)

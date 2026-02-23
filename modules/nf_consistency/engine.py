@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
@@ -62,6 +62,7 @@ _DEFAULT_VERIFICATION_LOOP_MAX_ROUNDS = 2
 _DEFAULT_VERIFICATION_LOOP_ROUND_TIMEOUT_MS = 250
 _DEFAULT_CLAIM_CONFIDENCE_MIN = 0.20
 _DEFAULT_GRAPH_MODE = "off"
+_DEFAULT_EPISODE_SCOPE_WINDOW = 10
 _CANDIDATE_K = 12
 _FINAL_K = 3
 _VECTOR_REFILL_MIN = 6
@@ -570,7 +571,138 @@ def _normalize_consistency_filters(raw: Any) -> dict[str, object]:
             normalized["timeline_idx"] = int(timeline_idx)
         except (TypeError, ValueError):
             pass
+    doc_id = raw.get("doc_id")
+    if isinstance(doc_id, str) and doc_id.strip():
+        normalized["doc_id"] = doc_id.strip()
+    doc_ids = raw.get("doc_ids")
+    if isinstance(doc_ids, list):
+        keep: list[str] = []
+        seen: set[str] = set()
+        for item in doc_ids:
+            if not isinstance(item, str):
+                continue
+            token = item.strip()
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            keep.append(token)
+        if keep:
+            normalized["doc_ids"] = keep
     return normalized
+
+
+def _doc_type_name(doc_type: Any) -> str:
+    if isinstance(doc_type, str):
+        return doc_type
+    value = getattr(doc_type, "value", None)
+    return value if isinstance(value, str) else ""
+
+
+def _extract_episode_number_from_doc(doc: Any) -> int | None:
+    metadata = getattr(doc, "metadata", None)
+    if hasattr(metadata, "get"):
+        raw_episode_no = metadata.get("episode_no")
+        if isinstance(raw_episode_no, int):
+            return raw_episode_no
+        if isinstance(raw_episode_no, str):
+            token = raw_episode_no.strip()
+            if token.isdigit():
+                try:
+                    return int(token)
+                except ValueError:
+                    pass
+    title = getattr(doc, "title", "")
+    if isinstance(title, str):
+        matches = re.findall(r"\d+", title)
+        if matches:
+            try:
+                return int(matches[0])
+            except ValueError:
+                pass
+    return None
+
+
+def _is_world_context_doc(doc: Any) -> bool:
+    doc_type = _doc_type_name(getattr(doc, "type", None))
+    if doc_type in {"SETTING", "CHAR", "PLOT"}:
+        return True
+    metadata = getattr(doc, "metadata", None)
+    if not hasattr(metadata, "get"):
+        return False
+    group = metadata.get("group")
+    if not isinstance(group, str):
+        return False
+    lowered = group.strip().lower()
+    return lowered in {"timeline", "타임라인"}
+
+
+def _build_default_doc_scope(
+    project_docs: list[Any],
+    *,
+    input_doc_id: str,
+    episode_window: int = _DEFAULT_EPISODE_SCOPE_WINDOW,
+) -> list[str]:
+    if not project_docs:
+        return [input_doc_id]
+    episode_window = max(0, int(episode_window))
+    selected: set[str] = {input_doc_id}
+    docs_by_id = {
+        doc.doc_id: doc
+        for doc in project_docs
+        if isinstance(getattr(doc, "doc_id", None), str) and getattr(doc, "doc_id")
+    }
+    current_doc = docs_by_id.get(input_doc_id)
+    current_episode_no = _extract_episode_number_from_doc(current_doc) if current_doc is not None else None
+    for doc in project_docs:
+        doc_id = getattr(doc, "doc_id", None)
+        if not isinstance(doc_id, str) or not doc_id:
+            continue
+        if doc_id == input_doc_id or _is_world_context_doc(doc):
+            selected.add(doc_id)
+            continue
+        if _doc_type_name(getattr(doc, "type", None)) != "EPISODE":
+            continue
+        if current_episode_no is None:
+            continue
+        candidate_episode_no = _extract_episode_number_from_doc(doc)
+        if candidate_episode_no is None:
+            continue
+        if abs(candidate_episode_no - current_episode_no) <= episode_window:
+            selected.add(doc_id)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for doc in project_docs:
+        doc_id = getattr(doc, "doc_id", None)
+        if not isinstance(doc_id, str) or not doc_id:
+            continue
+        if doc_id in selected and doc_id not in seen:
+            seen.add(doc_id)
+            ordered.append(doc_id)
+    if input_doc_id not in seen:
+        ordered.insert(0, input_doc_id)
+    return ordered
+
+
+def _inject_default_doc_scope(
+    filters: dict[str, object],
+    *,
+    project_docs: list[Any],
+    input_doc_id: str,
+) -> dict[str, object]:
+    next_filters = dict(filters)
+    if isinstance(next_filters.get("doc_id"), str):
+        return next_filters
+    raw_doc_ids = next_filters.get("doc_ids")
+    if isinstance(raw_doc_ids, list) and any(isinstance(item, str) and item.strip() for item in raw_doc_ids):
+        return next_filters
+    next_filters["doc_ids"] = _build_default_doc_scope(project_docs, input_doc_id=input_doc_id)
+    return next_filters
+
+
+def _has_metadata_scope_filters(filters: dict[str, object]) -> bool:
+    if not filters:
+        return False
+    return any(key in filters for key in ("entity_id", "time_key", "timeline_idx"))
 
 
 def _load_facts_for_scope(
@@ -1413,7 +1545,7 @@ class ConsistencyEngineImpl:
         )
         verifier_claim_char_limit = verifier_max_claim_chars if verifier_mode == "conservative_nli" else layer3_max_claim_chars
         retrieval_filters = _normalize_consistency_filters(req.get("filters"))
-        metadata_filter_requested = bool(retrieval_filters)
+        metadata_filter_requested = _has_metadata_scope_filters(retrieval_filters)
         stats_raw = req.get("stats")
         req_stats = stats_raw if isinstance(stats_raw, dict) else None
         if req_stats is not None:
@@ -1469,6 +1601,16 @@ class ConsistencyEngineImpl:
             for entity in entities:
                 aliases.extend(schema_repo.list_entity_aliases(conn, project_id, entity.entity_id))
             alias_index = build_alias_index(entities, aliases)
+            project_docs = document_repo.list_documents(conn, project_id)
+            retrieval_filters = _inject_default_doc_scope(
+                retrieval_filters,
+                project_docs=project_docs,
+                input_doc_id=doc_id,
+            )
+            if req_stats is not None:
+                doc_scope = retrieval_filters.get("doc_ids")
+                if isinstance(doc_scope, list):
+                    req_stats["default_doc_scope_count"] = len(doc_scope)
 
             text = docstore.read_text(snapshot.path)
             offset = 0
@@ -1542,7 +1684,6 @@ class ConsistencyEngineImpl:
                 facts=facts,
                 input_doc_id=doc_id,
             )
-            project_doc_ids_for_vector: list[str] | None = None
             retrieval_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
             slot_compare_cache: dict[tuple[str, str, str], Verdict | None] = {}
 
@@ -1624,15 +1765,10 @@ class ConsistencyEngineImpl:
                         and settings.vector_index_mode.upper() != "DISABLED"
                         and not metadata_filter_requested
                     ):
-                        if project_doc_ids_for_vector is None:
-                            project_docs = document_repo.list_documents(conn, project_id)
-                            project_doc_ids_for_vector = [item.doc_id for item in project_docs]
-                        vector_filters = dict(retrieval_filters)
-                        vector_filters["doc_ids"] = project_doc_ids_for_vector
                         vector_req: dict[str, Any] = {
                             "project_id": project_id,
                             "query": retrieval_query,
-                            "filters": vector_filters,
+                            "filters": dict(retrieval_filters),
                             "k": _CANDIDATE_K,
                             "stats": retrieval_stats,
                         }
@@ -1913,15 +2049,10 @@ class ConsistencyEngineImpl:
                             and settings.vector_index_mode.upper() != "DISABLED"
                             and not metadata_filter_requested
                         ):
-                            if project_doc_ids_for_vector is None:
-                                project_docs = document_repo.list_documents(conn, project_id)
-                                project_doc_ids_for_vector = [item.doc_id for item in project_docs]
-                            loop_vector_filters = dict(retrieval_filters)
-                            loop_vector_filters["doc_ids"] = project_doc_ids_for_vector
                             loop_vector_req: dict[str, Any] = {
                                 "project_id": project_id,
                                 "query": loop_query,
-                                "filters": loop_vector_filters,
+                                "filters": dict(retrieval_filters),
                                 "k": _CANDIDATE_K,
                                 "stats": loop_retrieval_stats,
                             }

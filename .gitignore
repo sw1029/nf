@@ -1,4 +1,4 @@
-__pycache__
+﻿__pycache__
 .pytest_cache
 data
 nf_orchestrator.sqlite3

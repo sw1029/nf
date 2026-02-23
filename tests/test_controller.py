@@ -1,4 +1,4 @@
-import pytest
+﻿import pytest
 
 
 EXPECTED_MARKERS = {"smoke", "unit", "integration", "placeholder"}

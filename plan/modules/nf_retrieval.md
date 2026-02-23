@@ -1,4 +1,4 @@
-# nf-retrieval (FTS/벡터) — MoSCoW 구현 계획
+﻿# nf-retrieval (FTS/벡터) — MoSCoW 구현 계획
 
 nf-retrieval은 “정확 인용(FTS)”과 “의미 확장(벡터 샤드)”를 제공한다.
 

@@ -1,4 +1,4 @@
-# nf-model-gateway (로컬/원격 모델 경계) — MoSCoW 구현 계획
+﻿# nf-model-gateway (로컬/원격 모델 경계) — MoSCoW 구현 계획
 
 nf-model-gateway는 모델 호출 경계를 제공한다: 로컬 소형 모델(ONNX), 원격 API, 그리고 차순위 로컬 생성 모델(로컬 생성기) 분기.
 

@@ -1,4 +1,4 @@
-# Contracts (모듈 간 계약/인터페이스) v0
+﻿# Contracts (모듈 간 계약/인터페이스) v0
 
 이 문서는 `plan/architecture_*.md`, `plan/TODO.md`를 기반으로 **모듈 간 계약(Contracts)** 을 정규화합니다.
 각 모듈 구현 문서(`plan/modules/*.md`)는 본 문서의 타입/스펙을 참조하는 것을 기본으로 합니다.

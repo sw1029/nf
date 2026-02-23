@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import pytest
 
@@ -46,6 +46,46 @@ def test_validate_job_params_accepts_valid_consistency_options() -> None:
             }
         },
     )
+
+
+@pytest.mark.unit
+def test_validate_job_params_accepts_manual_graph_and_off_modes() -> None:
+    handler = object.__new__(OrchestratorHandler)
+    handler._validate_job_params(
+        JobType.CONSISTENCY,
+        {
+            "consistency": {
+                "graph_mode": "manual",
+                "verifier": {"mode": "off"},
+                "triage": {"mode": "off"},
+            }
+        },
+    )
+
+
+@pytest.mark.unit
+def test_validate_job_params_rejects_legacy_ui_mode_aliases() -> None:
+    handler = object.__new__(OrchestratorHandler)
+    with pytest.raises(AppError) as exc_info:
+        handler._validate_job_params(
+            JobType.CONSISTENCY,
+            {"consistency": {"graph_mode": "on"}},
+        )
+    assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
+
+    with pytest.raises(AppError) as exc_info:
+        handler._validate_job_params(
+            JobType.CONSISTENCY,
+            {"consistency": {"verifier": {"mode": "on"}}},
+        )
+    assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
+
+    with pytest.raises(AppError) as exc_info:
+        handler._validate_job_params(
+            JobType.CONSISTENCY,
+            {"consistency": {"triage": {"mode": "on"}}},
+        )
+    assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
 
 
 @pytest.mark.unit

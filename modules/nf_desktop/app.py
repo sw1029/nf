@@ -1,4 +1,4 @@
-def launch_app() -> None:
+﻿def launch_app() -> None:
     """
     데스크톱 애플리케이션 시작(placeholder).
 

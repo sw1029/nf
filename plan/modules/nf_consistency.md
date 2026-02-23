@@ -1,4 +1,4 @@
-# nf-consistency (정합성 엔진) — MoSCoW 구현 계획
+﻿# nf-consistency (정합성 엔진) — MoSCoW 구현 계획
 
 nf-consistency는 원고 구간을 세그먼트로 나누고, 근거(Evidence)를 구성한 뒤, 계층형 판정으로 판정(Verdict)과 로그를 저장한다.
 

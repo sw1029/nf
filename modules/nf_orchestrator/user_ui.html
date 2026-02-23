@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ko">
 
 <head>
@@ -644,7 +644,8 @@
                 title="작성하신 설정 문서를 깊이 분석하여 숨은 오류를 찾아냅니다.">?</span></label>
             <select id="consistency-graph-mode">
               <option value="off">끄기 (기본)</option>
-              <option value="on">켜기</option>
+              <option value="auto">자동</option>
+              <option value="manual">수동</option>
             </select>
           </div>
           <details style="margin-top: 10px; border-top: 1px dashed #cbd5e1; padding-top: 8px;">
@@ -660,7 +661,7 @@
                   title="발견된 오류를 한 번 더 꼼꼼히 검증하여 신뢰도를 높입니다.">?</span></label>
               <select id="consistency-verifier-mode">
                 <option value="off">끄기 (기본)</option>
-                <option value="on">켜기</option>
+                <option value="conservative_nli">Conservative NLI</option>
               </select>
             </div>
             <div class="row">
@@ -668,7 +669,7 @@
                   title="다양한 오류를 중요도에 따라 스마트하게 나눠 보여줍니다.">?</span></label>
               <select id="consistency-triage-mode">
                 <option value="off">끄기 (기본)</option>
-                <option value="on">켜기</option>
+                <option value="embedding_anomaly">Embedding Anomaly</option>
               </select>
             </div>
             <div class="row" style="flex-direction:row; align-items:center;">
@@ -748,10 +749,10 @@
           timeline_idx: '',
         },
         graph_mode: 'off',
-        layer3_promotion: false,
+        layer3_promotion: true,
         verifier_mode: 'off',
         triage_mode: 'off',
-        verification_loop: false,
+        verification_loop: true,
       },
       editorConfig: {
         fontSize: '1.1rem',
@@ -852,8 +853,62 @@
       return changed;
     }
 
+    function _mergeConsistencySegments(segments) {
+      const normalized = (Array.isArray(segments) ? segments : [])
+        .filter((item) => item && Number.isInteger(item.start) && Number.isInteger(item.end) && item.end > item.start)
+        .map((item) => ({ start: item.start, end: item.end }))
+        .sort((left, right) => {
+          if (left.start !== right.start) return left.start - right.start;
+          return left.end - right.end;
+        });
+      if (normalized.length === 0) return [];
+      const merged = [normalized[0]];
+      for (let idx = 1; idx < normalized.length; idx += 1) {
+        const current = normalized[idx];
+        const tail = merged[merged.length - 1];
+        if (current.start <= tail.end + 1) {
+          tail.end = Math.max(tail.end, current.end);
+        } else {
+          merged.push(current);
+        }
+      }
+      return merged;
+    }
+
     function _spanOverlaps(startA, endA, startB, endB) {
       return startA < endB && startB < endA;
+    }
+
+    function _normalizeGraphMode(raw) {
+      if (raw === 'manual' || raw === 'auto' || raw === 'off') return raw;
+      if (raw === 'on') return 'manual';
+      return 'off';
+    }
+
+    function _normalizeVerifierMode(raw) {
+      if (raw === 'conservative_nli' || raw === 'off') return raw;
+      if (raw === 'on') return 'conservative_nli';
+      return 'off';
+    }
+
+    function _normalizeTriageMode(raw) {
+      if (raw === 'embedding_anomaly' || raw === 'off') return raw;
+      if (raw === 'on') return 'embedding_anomaly';
+      return 'off';
+    }
+
+    function _showConsistencyNotice(message, color = '#3498db', ttlMs = 2800) {
+      const cStatus = document.getElementById('consistency-status');
+      if (!cStatus || !message) return;
+      cStatus.innerText = String(message);
+      cStatus.style.color = color;
+      if (ttlMs > 0) {
+        setTimeout(() => {
+          if (cStatus.innerText === message && !state.backgroundConsistencyRunning) {
+            cStatus.innerText = '';
+          }
+        }, ttlMs);
+      }
     }
 
     function applyConsistencyPreset(mode) {
@@ -875,29 +930,29 @@
         if (verifierInput) verifierInput.value = 'off';
         if (triageInput) triageInput.value = 'off';
         if (loopInput) loopInput.checked = false;
-        alert("빠른 기본 점검 모드가 설정되었습니다.");
+        _showConsistencyNotice('빠른 기본 점검 모드로 설정됨');
       } else if (mode === 'character') {
         if (timeInput) timeInput.value = '';
         if (timelineInput) timelineInput.value = '';
         if (graphModeInput) graphModeInput.value = 'off';
         if (layer3Input) layer3Input.checked = true;
-        if (verifierInput) verifierInput.value = 'on';
+        if (verifierInput) verifierInput.value = 'conservative_nli';
         if (triageInput) triageInput.value = 'off';
         if (loopInput) loopInput.checked = true;
         if (entityInput) {
           entityInput.focus();
-          alert("인물 집중 점검 모드가 설정되었습니다. 검사할 인물 이름을 입력해주세요.");
         }
+        _showConsistencyNotice('인물 집중 점검 모드로 설정됨 (대상 인물 입력 권장)');
       } else if (mode === 'deep') {
         if (entityInput) entityInput.value = '';
         if (timeInput) timeInput.value = '';
         if (timelineInput) timelineInput.value = '';
-        if (graphModeInput) graphModeInput.value = 'on';
+        if (graphModeInput) graphModeInput.value = 'manual';
         if (layer3Input) layer3Input.checked = true;
-        if (verifierInput) verifierInput.value = 'on';
-        if (triageInput) triageInput.value = 'on';
+        if (verifierInput) verifierInput.value = 'conservative_nli';
+        if (triageInput) triageInput.value = 'embedding_anomaly';
         if (loopInput) loopInput.checked = true;
-        alert("설정 심층 점검 모드가 설정되었습니다.");
+        _showConsistencyNotice('심층 점검 모드로 설정됨');
       }
     }
 
@@ -921,17 +976,17 @@
         filters.timeline_idx = Math.max(0, Math.floor(Number(timelineRaw)));
       }
 
-      const graphMode = (graphModeInput && typeof graphModeInput.value === 'string')
-        ? graphModeInput.value
-        : 'off';
-      const layer3Promotion = layer3Input ? layer3Input.value === 'on' : false;
-      const verifierMode = (verifierInput && typeof verifierInput.value === 'string')
-        ? verifierInput.value
-        : 'off';
-      const triageMode = (triageInput && typeof triageInput.value === 'string')
-        ? triageInput.value
-        : 'off';
-      const verificationLoop = loopInput ? loopInput.value === 'on' : false;
+      const graphMode = _normalizeGraphMode(
+        (graphModeInput && typeof graphModeInput.value === 'string') ? graphModeInput.value : 'off'
+      );
+      const layer3Promotion = layer3Input ? Boolean(layer3Input.checked) : false;
+      const verifierMode = _normalizeVerifierMode(
+        (verifierInput && typeof verifierInput.value === 'string') ? verifierInput.value : 'off'
+      );
+      const triageMode = _normalizeTriageMode(
+        (triageInput && typeof triageInput.value === 'string') ? triageInput.value : 'off'
+      );
+      const verificationLoop = loopInput ? Boolean(loopInput.checked) : false;
 
       state.consistencyOptions = {
         filters: {
@@ -1252,15 +1307,15 @@
           });
         }
         const graphModeInput = document.getElementById('consistency-graph-mode');
-        if (graphModeInput) graphModeInput.value = state.consistencyOptions.graph_mode || 'off';
+        if (graphModeInput) graphModeInput.value = _normalizeGraphMode(state.consistencyOptions.graph_mode || 'off');
         const layer3Input = document.getElementById('consistency-layer3-promotion');
-        if (layer3Input) layer3Input.value = state.consistencyOptions.layer3_promotion ? 'on' : 'off';
+        if (layer3Input) layer3Input.checked = Boolean(state.consistencyOptions.layer3_promotion);
         const verifierInput = document.getElementById('consistency-verifier-mode');
-        if (verifierInput) verifierInput.value = state.consistencyOptions.verifier_mode || 'off';
+        if (verifierInput) verifierInput.value = _normalizeVerifierMode(state.consistencyOptions.verifier_mode || 'off');
         const triageInput = document.getElementById('consistency-triage-mode');
-        if (triageInput) triageInput.value = state.consistencyOptions.triage_mode || 'off';
+        if (triageInput) triageInput.value = _normalizeTriageMode(state.consistencyOptions.triage_mode || 'off');
         const loopInput = document.getElementById('consistency-loop-enabled');
-        if (loopInput) loopInput.value = state.consistencyOptions.verification_loop ? 'on' : 'off';
+        if (loopInput) loopInput.checked = Boolean(state.consistencyOptions.verification_loop);
 
         if (data.projects && Object.keys(data.projects).length > 0) {
           select.innerHTML = '<option value="">선택하세요</option>';
@@ -1948,28 +2003,63 @@
     }
 
     // --- API Helper for Jobs ---
-    async function waitForJob(jobId, onProgress) {
-      let percentage = 10;
+    function _toProgressPercent(rawProgress) {
+      const numeric = Number(rawProgress);
+      if (!Number.isFinite(numeric)) return null;
+      if (numeric <= 1.0) return Math.max(0, Math.min(100, Math.round(numeric * 100)));
+      return Math.max(0, Math.min(100, Math.round(numeric)));
+    }
+
+    function _jobErrorMessage(job) {
+      if (!job || typeof job !== 'object') return '작업 실패';
+      if (typeof job.error === 'string' && job.error.trim()) return job.error;
+      if (typeof job.error_message === 'string' && job.error_message.trim()) return job.error_message;
+      return '작업 실패';
+    }
+
+    function _eventStatusText(eventObj) {
+      if (!eventObj || typeof eventObj !== 'object') return '';
+      const level = String(eventObj.level || '').toUpperCase();
+      const message = String(eventObj.message || '').trim();
+      const payload = (eventObj && typeof eventObj.payload === 'object') ? eventObj.payload : {};
+      const reasonCode = String(payload.reason_code || '').trim();
+      if (reasonCode === 'PAUSED_DUE_TO_MEMORY_PRESSURE') {
+        const rssMb = Number(payload.rss_mb);
+        const maxRamMb = Number(payload.max_ram_mb);
+        if (Number.isFinite(rssMb) && Number.isFinite(maxRamMb)) {
+          return `메모리 압력으로 대기 중 (RSS ${rssMb.toFixed(0)}MB / 제한 ${maxRamMb.toFixed(0)}MB)`;
+        }
+        return '메모리 압력으로 대기 중';
+      }
+      if (message && level) return `[${level}] ${message}`;
+      if (message) return message;
+      return '';
+    }
+
+    async function _waitForJobByPolling(jobId, onProgress, onStatus, startPct = 10) {
+      let percentage = Math.max(0, Math.min(95, Number(startPct) || 10));
       return new Promise((resolve, reject) => {
         const check = async () => {
           try {
             const res = await api(`/jobs/${jobId}`);
-            const status = res.job.status;
+            const job = res.job || {};
+            const status = String(job.status || '');
 
             if (status === 'SUCCEEDED') {
               if (onProgress) onProgress(100);
-              resolve(res.job);
+              if (onStatus) onStatus('작업 완료');
+              resolve(job);
               return;
             }
             if (status === 'FAILED' || status === 'CANCELED') {
-              reject(new Error(res.job.error || "작업 실패"));
+              if (onStatus) onStatus(`작업 실패 (${status})`);
+              reject(new Error(_jobErrorMessage(job)));
               return;
             }
 
-            // Fake progress increment
-            percentage = Math.min(90, percentage + 10);
+            percentage = Math.min(95, percentage + 8);
             if (onProgress) onProgress(percentage);
-
+            if (onStatus) onStatus(`상태: ${status || 'RUNNING'}`);
             setTimeout(check, 1000);
           } catch (e) {
             reject(e);
@@ -1977,6 +2067,103 @@
         };
         check();
       });
+    }
+
+    async function _waitForJobViaSse(jobId, onProgress, onStatus) {
+      if (typeof EventSource === 'undefined') {
+        throw new Error('eventsource-not-supported');
+      }
+      return new Promise((resolve, reject) => {
+        const source = new EventSource(`/jobs/${encodeURIComponent(jobId)}/events`);
+        let done = false;
+        let hasMessage = false;
+        let fallbackPct = 10;
+        let statusErrorCount = 0;
+        let lastStatusText = '';
+
+        const finish = (cb) => {
+          if (done) return;
+          done = true;
+          clearInterval(statusTimer);
+          source.close();
+          cb();
+        };
+
+        const checkStatus = async () => {
+          if (done) return;
+          try {
+            const res = await api(`/jobs/${jobId}`);
+            const job = res.job || {};
+            const status = String(job.status || '');
+            if (status === 'SUCCEEDED') {
+              finish(() => {
+                if (onProgress) onProgress(100);
+                if (onStatus) onStatus('작업 완료');
+                resolve(job);
+              });
+              return;
+            }
+            if (status === 'FAILED' || status === 'CANCELED') {
+              finish(() => {
+                if (onStatus) onStatus(`작업 실패 (${status})`);
+                reject(new Error(_jobErrorMessage(job)));
+              });
+              return;
+            }
+            if (!hasMessage) {
+              fallbackPct = Math.min(90, fallbackPct + 6);
+              if (onProgress) onProgress(fallbackPct);
+              const fallbackStatusText = `상태: ${status || 'RUNNING'}`;
+              if (onStatus && fallbackStatusText !== lastStatusText) {
+                lastStatusText = fallbackStatusText;
+                onStatus(fallbackStatusText);
+              }
+            }
+            statusErrorCount = 0;
+          } catch (e) {
+            statusErrorCount += 1;
+            if (statusErrorCount >= 3) {
+              finish(() => reject(e));
+            }
+          }
+        };
+
+        const statusTimer = setInterval(() => {
+          void checkStatus();
+        }, 1000);
+        void checkStatus();
+
+        source.onmessage = (evt) => {
+          hasMessage = true;
+          let payload;
+          try {
+            payload = JSON.parse(evt.data);
+          } catch (_error) {
+            return;
+          }
+          const pct = _toProgressPercent(payload?.progress);
+          if (pct !== null && onProgress) onProgress(pct, payload);
+          const nextStatusText = _eventStatusText(payload);
+          if (onStatus && nextStatusText && nextStatusText !== lastStatusText) {
+            lastStatusText = nextStatusText;
+            onStatus(nextStatusText, payload);
+          }
+        };
+
+        source.onerror = () => {
+          if (!done && !hasMessage) {
+            finish(() => reject(new Error('sse-unavailable')));
+          }
+        };
+      });
+    }
+
+    async function waitForJob(jobId, onProgress, onStatus) {
+      try {
+        return await _waitForJobViaSse(jobId, onProgress, onStatus);
+      } catch (_sseError) {
+        return _waitForJobByPolling(jobId, onProgress, onStatus);
+      }
     }
 
     function schedulePostSavePipeline(docId) {
@@ -2021,21 +2208,28 @@
 
     async function runBackgroundConsistencyCheck(docId) {
       if (!state.projectId || !docId || state.backgroundConsistencyRunning) return;
-      const pending = (Array.isArray(state.pendingConsistencySegments) ? state.pendingConsistencySegments : [])
-        .filter((item) => item && Number.isInteger(item.start) && Number.isInteger(item.end) && item.end > item.start)
-        .slice(0, 8);
+      const queued = (Array.isArray(state.pendingConsistencySegments) ? state.pendingConsistencySegments : [])
+        .filter((item) => item && Number.isInteger(item.start) && Number.isInteger(item.end) && item.end > item.start);
+      const pending = _mergeConsistencySegments(queued).slice(0, 8);
       if (pending.length === 0) return;
-      const pendingKeys = new Set(pending.map((item) => `${item.start}:${item.end}`));
+      const waitingCount = Math.max(0, queued.length - pending.length);
       state.backgroundConsistencyRunning = true;
 
       const cStatus = document.getElementById('consistency-status');
-      if (cStatus) {
-        cStatus.innerText = "백그라운드 검사 중...";
+      const renderBackgroundStatus = (current, total, message = '') => {
+        if (!cStatus) return;
+        const suffix = message ? ` | ${message}` : '';
+        cStatus.innerText = `백그라운드 정합성 ${Math.max(0, current)}/${Math.max(1, total)} (대기 ${Math.max(0, waitingCount)}건)${suffix}`;
         cStatus.style.color = "#3498db";
+      };
+      if (cStatus) {
+        renderBackgroundStatus(0, pending.length);
       }
 
       try {
-        for (const segment of pending) {
+        for (let idx = 0; idx < pending.length; idx += 1) {
+          const segment = pending[idx];
+          renderBackgroundStatus(idx + 1, pending.length);
           const payload = _buildConsistencyJobPayload(
             docId,
             { start: segment.start, end: segment.end },
@@ -2046,7 +2240,13 @@
             }
           );
           const res = await api('/jobs', 'POST', payload);
-          await waitForJob(res.job.job_id);
+          await waitForJob(
+            res.job.job_id,
+            undefined,
+            (statusText) => {
+              renderBackgroundStatus(idx + 1, pending.length, statusText);
+            }
+          );
         }
 
         const vRes = await api('/query/verdicts', 'POST', {
@@ -2066,18 +2266,25 @@
         }
       } catch (e) {
         console.error('background consistency failed', e);
+        if (cStatus) {
+          cStatus.innerText = `백그라운드 정합성 실패: ${String(e?.message || e)}`;
+          cStatus.style.color = "red";
+        }
       } finally {
-        const cStatus = document.getElementById('consistency-status');
-        if (cStatus) cStatus.innerText = "";
-
         state.backgroundConsistencyRunning = false;
-        const queued = Array.isArray(state.pendingConsistencySegments) ? state.pendingConsistencySegments : [];
-        state.pendingConsistencySegments = queued.filter((item) => {
+        const remainingQueue = Array.isArray(state.pendingConsistencySegments) ? state.pendingConsistencySegments : [];
+        state.pendingConsistencySegments = remainingQueue.filter((item) => {
           if (!item || !Number.isInteger(item.start) || !Number.isInteger(item.end)) return false;
-          return !pendingKeys.has(`${item.start}:${item.end}`);
+          return !pending.some((segment) => _spanOverlaps(item.start, item.end, segment.start, segment.end));
         });
         if (state.pendingConsistencySegments.length > 0) {
+          if (cStatus) {
+            cStatus.innerText = `백그라운드 정합성 대기 ${state.pendingConsistencySegments.length}건`;
+            cStatus.style.color = "#64748b";
+          }
           scheduleBackgroundConsistencyCheck(docId);
+        } else if (cStatus) {
+          cStatus.innerText = '';
         }
       }
     }
@@ -2178,6 +2385,12 @@
         await waitForJob(jobId, (pct) => {
           const el = document.getElementById('check-progress');
           if (el) el.innerText = `${pct}%`;
+        }, (statusText) => {
+          const el = document.getElementById('check-progress');
+          if (!el) return;
+          const base = el.innerText && el.innerText.includes('%') ? el.innerText.split('%')[0] : '';
+          const pctText = base ? `${base}%` : el.innerText;
+          el.innerText = statusText ? `${pctText} | ${statusText}` : pctText;
         });
 
         // 3. Fetch Verdicts
@@ -2236,6 +2449,12 @@
         const spanLabel = (spanStart !== null && spanEnd !== null) ? `${spanStart} ~ ${spanEnd}` : '-';
         const detailId = `verdict-detail-${idx}`;
         const vid = typeof v.vid === 'string' ? v.vid : '';
+        const previewItems = Array.isArray(v.tag_path_preview_items)
+          ? v.tag_path_preview_items.map((item) => String(item || '').trim()).filter((item) => item.length > 0)
+          : [];
+        const previewPrimary = (typeof v.tag_path_preview === 'string' && v.tag_path_preview.trim())
+          ? v.tag_path_preview.trim()
+          : (previewItems[0] || '');
 
         html += `
                 <div class="analysis-card ${severityClass}">
@@ -2244,6 +2463,7 @@
                     <div style="font-size:0.78rem; color:#666; margin-bottom:8px;">
                       판정: ${escapeHtml(verdict)} | 신뢰도: ${Number.isFinite(reliability) ? reliability.toFixed(2) : '-'} | 범위: ${escapeHtml(spanLabel)}
                     </div>
+                    ${previewPrimary ? `<div style="font-size:0.78rem; color:#475569; margin-bottom:8px;">근거 경로: ${escapeHtml(previewPrimary)}</div>` : ''}
                     ${verdict === 'UNKNOWN' ? `<div style="font-size:0.78rem; color:#64748b; margin-bottom:8px;">사유: ${escapeHtml(unknownReasonText)}</div>` : ''}
                     <div style="display:flex; gap:8px; margin-bottom:8px;">
                       <button class="btn btn-secondary jump-claim" data-claim="${escapeHtml(claimText)}" data-span-start="${spanStart !== null ? spanStart : ''}" data-span-end="${spanEnd !== null ? spanEnd : ''}">본문으로 이동</button>

@@ -1,4 +1,4 @@
-import pytest
+﻿import pytest
 
 from modules.nf_model_gateway import contracts
 

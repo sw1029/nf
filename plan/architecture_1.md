@@ -1,4 +1,4 @@
-> 구현 순서(Phase) 통제: `plan/IMPLEMENTATION_CHECKLIST.md`
+﻿> 구현 순서(Phase) 통제: `plan/IMPLEMENTATION_CHECKLIST.md`
 
 ## 1) 상위 아키텍처 구조도 (프로세스/책임 분리)
 

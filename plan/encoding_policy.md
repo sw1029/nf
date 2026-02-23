@@ -1,7 +1,8 @@
-# Encoding Policy (Internal)
+﻿# Encoding Policy (Internal)
 
 ## Rule
-- All repository text files must be UTF-8 without BOM.
+- All repository text files must be UTF-8 with BOM.
+- Exception: `pytest.ini` must be UTF-8 **without** BOM (pytest parser limitation).
 - Windows scripts keep CRLF line endings (`*.ps1`, `*.cmd`, `*.bat`).
 
 ## Enforcement
@@ -9,6 +10,8 @@
 - Git line-ending baseline: `.gitattributes`
 - Validation command:
   - `python tools/quality/check_utf8.py`
+- Bulk conversion command:
+  - `python tools/quality/convert_utf8_bom.py --repo-root .`
 - CI/unit gate:
   - `pytest -q tests/test_encoding_policy.py`
 

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -60,6 +60,18 @@ def test_user_ui_exposes_advanced_consistency_controls() -> None:
 
 
 @pytest.mark.unit
+def test_user_ui_consistency_mode_contract_values_and_checkbox_sync() -> None:
+    html = Path("modules/nf_orchestrator/user_ui.html").read_text(encoding="utf-8")
+    assert '<option value="auto">' in html
+    assert '<option value="manual">' in html
+    assert '<option value="conservative_nli">' in html
+    assert '<option value="embedding_anomaly">' in html
+    assert "layer3Input.checked" in html
+    assert "loopInput.checked" in html
+    assert "value === 'on'" not in html
+
+
+@pytest.mark.unit
 def test_user_ui_supports_whitelist_ignore_and_inline_highlight() -> None:
     html = Path("modules/nf_orchestrator/user_ui.html").read_text(encoding="utf-8")
     assert "markVerdictAsWhitelisted" in html
@@ -73,4 +85,14 @@ def test_user_ui_supports_whitelist_ignore_and_inline_highlight() -> None:
 def test_user_ui_verdict_detail_renders_fact_paths() -> None:
     html = Path("modules/nf_orchestrator/user_ui.html").read_text(encoding="utf-8")
     assert "fact_paths" in html
-    assert "CONTRADICT evidence link missing" in html
+    assert "CONTRADICT" in html
+    assert "CONTRADICT evidence link missing" not in html
+
+
+@pytest.mark.unit
+def test_user_ui_wait_for_job_prefers_sse_and_falls_back_to_polling() -> None:
+    html = Path("modules/nf_orchestrator/user_ui.html").read_text(encoding="utf-8")
+    assert "_waitForJobViaSse" in html
+    assert "_waitForJobByPolling" in html
+    assert "EventSource" in html
+    assert "/jobs/${encodeURIComponent(jobId)}/events" in html

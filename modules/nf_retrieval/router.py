@@ -1,4 +1,4 @@
-from typing import Any, Literal
+﻿from typing import Any, Literal
 
 from modules.nf_orchestrator.storage import db
 from modules.nf_retrieval.contracts import RetrievalRequest, RetrievalResult

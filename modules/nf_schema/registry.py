@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from modules.nf_shared.protocol.dtos import SchemaType, TagKind
 

@@ -1,4 +1,4 @@
-# 제품 UI 연동 Helper 구현 계획 — MoSCoW
+﻿# 제품 UI 연동 Helper 구현 계획 — MoSCoW
 
 이 문서는 `nf-desktop`(추후 제품 UI)가 오케스트레이터(loopback HTTP)와 통신할 때 사용할 **공용 helper(클라이언트) 레이어**의 구현 계획이다.
 

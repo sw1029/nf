@@ -1,4 +1,4 @@
-# nf-orchestrator (핵심 API) — MoSCoW 구현 계획
+﻿# nf-orchestrator (핵심 API) — MoSCoW 구현 계획
 
 오케스트레이터는 로컬(루프백) API 서버로서, CRUD/쿼리/잡/스트리밍을 제공하고 정책을 강제한다.
 

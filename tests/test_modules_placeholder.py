@@ -1,4 +1,4 @@
-import importlib
+﻿import importlib
 from typing import Callable
 
 import pytest

@@ -1,4 +1,4 @@
-# nf-shared (공통 규격) — MoSCoW 구현 계획
+﻿# nf-shared (공통 규격) — MoSCoW 구현 계획
 
 본 문서는 공통 타입/DTO/에러/설정/직렬화 규격을 정의한다.
 

@@ -1,4 +1,4 @@
-> 구현 순서(Phase) 통제: `plan/IMPLEMENTATION_CHECKLIST.md`
+﻿> 구현 순서(Phase) 통제: `plan/IMPLEMENTATION_CHECKLIST.md`
 
 <<목적>>
 1. 사용자가 별도로 설정, 플롯, 등장인물 문서 작성(설정 문서에 별도 태깅, 부연 설명 등으로 부가정보, 분류, 계층적 분류 제공.)

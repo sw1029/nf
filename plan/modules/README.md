@@ -1,4 +1,4 @@
-# 모듈 구현 계획
+﻿# 모듈 구현 계획
 
 아래 문서들은 `plan/contracts.md` 및 `plan/architecture_*.md`를 기준으로 모듈별 구현 계획을 MoSCoW로 구체화합니다.
 

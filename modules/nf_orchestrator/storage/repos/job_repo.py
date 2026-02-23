@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import uuid
@@ -235,6 +235,23 @@ def count_running_jobs(conn, job_types: list[JobType]) -> int:
     if row is None:
         return 0
     return int(row["cnt"])
+
+
+def list_queued_jobs(conn, job_types: list[JobType], *, limit: int = 20) -> list[Job]:
+    if not job_types or limit <= 0:
+        return []
+    clause, params = _build_in_clause([job.value for job in job_types])
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM jobs
+        WHERE status = ? AND type IN {clause}
+        ORDER BY priority DESC, created_at ASC
+        LIMIT ?
+        """,
+        [JobStatus.QUEUED.value, *params, int(limit)],
+    ).fetchall()
+    return [_row_to_job(row) for row in rows]
 
 
 def lease_next_job(

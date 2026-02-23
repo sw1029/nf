@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
@@ -69,6 +69,10 @@ from modules.nf_shared.protocol.dtos import (
     VerdictLog,
 )
 
+_MEMORY_PRESSURE_REASON_CODE = "PAUSED_DUE_TO_MEMORY_PRESSURE"
+_MEMORY_PRESSURE_EVENT_COOLDOWN_SEC = 15.0
+_MEMORY_PRESSURE_EVENT_SAMPLE_LIMIT = 12
+
 
 class CancelledError(RuntimeError):
     pass
@@ -122,9 +126,45 @@ def run_worker(
     heavy_types = [JobType.INDEX_VEC, JobType.CONSISTENCY, JobType.RETRIEVE_VEC]
     settings = load_config()
     max_heavy_jobs = max(1, int(settings.max_heavy_jobs))
+    memory_pressure_warned_at: dict[str, float] = {}
 
     while True:
         if _memory_pressure(settings.max_ram_mb):
+            usage_mb = round(_get_process_rss_mb(), 2)
+            now_mono = time.monotonic()
+            try:
+                with db.connect(db_path) as conn:
+                    queued_heavy_jobs = job_repo.list_queued_jobs(
+                        conn,
+                        heavy_types,
+                        limit=_MEMORY_PRESSURE_EVENT_SAMPLE_LIMIT,
+                    )
+                    active_ids = {job.job_id for job in queued_heavy_jobs}
+                    stale_ids = [jid for jid in memory_pressure_warned_at if jid not in active_ids]
+                    for stale_id in stale_ids:
+                        memory_pressure_warned_at.pop(stale_id, None)
+                    for queued in queued_heavy_jobs:
+                        last_warned_at = memory_pressure_warned_at.get(queued.job_id)
+                        if (
+                            last_warned_at is not None
+                            and now_mono - last_warned_at < _MEMORY_PRESSURE_EVENT_COOLDOWN_SEC
+                        ):
+                            continue
+                        job_repo.add_job_event(
+                            conn,
+                            queued.job_id,
+                            JobEventLevel.WARN,
+                            "job lease paused due to memory pressure",
+                            payload={
+                                "reason_code": _MEMORY_PRESSURE_REASON_CODE,
+                                "rss_mb": usage_mb,
+                                "max_ram_mb": int(settings.max_ram_mb),
+                            },
+                        )
+                        memory_pressure_warned_at[queued.job_id] = now_mono
+            except Exception:
+                # Queue pressure events should never break the worker loop.
+                pass
             time.sleep(poll_interval)
             continue
         with db.connect(db_path) as conn:
@@ -514,8 +554,24 @@ def _extract_entity_mentions(
 
 
 def _extract_episode_number(doc) -> int | None:
+    if getattr(doc, "type", None) is not DocumentType.EPISODE:
+        return None
+
+    metadata = getattr(doc, "metadata", None)
+    if hasattr(metadata, "get"):
+        raw_episode_no = metadata.get("episode_no")
+        if isinstance(raw_episode_no, int):
+            return raw_episode_no
+        if isinstance(raw_episode_no, str):
+            trimmed = raw_episode_no.strip()
+            if trimmed.isdigit():
+                try:
+                    return int(trimmed)
+                except ValueError:
+                    pass
+
     if getattr(doc, "type", None) is DocumentType.EPISODE:
-        numbers = re.findall(r"\\d+", doc.title or "")
+        numbers = re.findall(r"\d+", doc.title or "")
         if numbers:
             try:
                 return int(numbers[0])

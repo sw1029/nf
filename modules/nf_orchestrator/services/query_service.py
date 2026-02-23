@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 from pathlib import Path
@@ -50,6 +50,56 @@ class QueryServiceImpl:
         with db.connect(self._db_path) as conn:
             verdicts = evidence_repo.list_verdicts(conn, project_id, input_doc_id=input_doc_id)
             return [v for v in verdicts]
+
+    def build_tag_path_preview_by_vid(
+        self,
+        project_id: str,
+        vids: list[str],
+        *,
+        limit_per_verdict: int = 2,
+    ) -> dict[str, list[str]]:
+        unique_vids = [item for item in vids if isinstance(item, str) and item]
+        if not unique_vids or limit_per_verdict <= 0:
+            return {}
+        with db.connect(self._db_path) as conn:
+            placeholders = ",".join(["?"] * len(unique_vids))
+            rows = conn.execute(
+                f"""
+                SELECT
+                    l.vid AS vid,
+                    l.role AS role,
+                    e.tag_path AS tag_path
+                FROM verdict_evidence_link l
+                JOIN evidence e ON e.eid = l.eid
+                JOIN verdict_log v ON v.vid = l.vid
+                WHERE v.project_id = ? AND l.vid IN ({placeholders})
+                ORDER BY
+                    l.vid ASC,
+                    CASE WHEN l.role = 'CONTRADICT' THEN 0 ELSE 1 END ASC,
+                    e.created_at ASC
+                """,
+                [project_id, *unique_vids],
+            ).fetchall()
+
+        previews: dict[str, list[str]] = {}
+        seen: dict[str, set[str]] = {}
+        cap = max(1, int(limit_per_verdict))
+        for row in rows:
+            vid = row["vid"]
+            tag_path = row["tag_path"] or ""
+            if not isinstance(vid, str) or not vid:
+                continue
+            if not isinstance(tag_path, str) or not tag_path:
+                continue
+            bucket = previews.setdefault(vid, [])
+            if len(bucket) >= cap:
+                continue
+            dedup = seen.setdefault(vid, set())
+            if tag_path in dedup:
+                continue
+            dedup.add(tag_path)
+            bucket.append(tag_path)
+        return previews
 
     def get_verdict_detail(self, project_id: str, vid: str) -> dict[str, object] | None:
         with db.connect(self._db_path) as conn:

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -1227,7 +1227,24 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             if not isinstance(project_id, str):
                 raise AppError(ErrorCode.VALIDATION_ERROR, "project_id가 필요합니다")
             verdicts = self.server.query_service.list_verdicts(project_id, input_doc_id=input_doc_id)
-            self._send_json(HTTPStatus.OK, {"verdicts": dump_json(verdicts)})
+            verdict_items = dump_json(verdicts)
+            if isinstance(verdict_items, list):
+                vids = [
+                    item.get("vid")
+                    for item in verdict_items
+                    if isinstance(item, dict) and isinstance(item.get("vid"), str)
+                ]
+                previews = self.server.query_service.build_tag_path_preview_by_vid(project_id, vids)
+                for item in verdict_items:
+                    if not isinstance(item, dict):
+                        continue
+                    vid = item.get("vid")
+                    if not isinstance(vid, str):
+                        continue
+                    preview_items = previews.get(vid, [])
+                    item["tag_path_preview_items"] = preview_items
+                    item["tag_path_preview"] = preview_items[0] if preview_items else ""
+            self._send_json(HTTPStatus.OK, {"verdicts": verdict_items})
             return
         self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "찾을 수 없음")
 
@@ -1808,6 +1825,7 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 "enable_local_generator": settings.enable_local_generator,
                 "sync_retrieval_mode": settings.sync_retrieval_mode,
                 "vector_index_mode": settings.vector_index_mode,
+                "vector_search_backend": settings.vector_search_backend,
                 "max_loaded_shards": settings.max_loaded_shards,
                 "max_ram_mb": settings.max_ram_mb,
                 "max_heavy_jobs": settings.max_heavy_jobs,

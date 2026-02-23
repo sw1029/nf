@@ -1,4 +1,4 @@
-> 구현 순서(Phase) 통제: `plan/IMPLEMENTATION_CHECKLIST.md`
+﻿> 구현 순서(Phase) 통제: `plan/IMPLEMENTATION_CHECKLIST.md`
 
 # 구현/보완 현황 및 잔여 TODO (기준일: 2026-02-08)
 

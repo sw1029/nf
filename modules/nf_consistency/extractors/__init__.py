@@ -1,4 +1,4 @@
-from .contracts import (
+﻿from .contracts import (
     ALLOWED_EXTRACTION_MODES,
     ALLOWED_SLOT_KEYS,
     DEFAULT_MODEL_SLOTS,

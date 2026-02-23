@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import sys
@@ -36,6 +36,11 @@ ROOT_FILENAMES = {
     ".gitignore",
     ".gitattributes",
     ".editorconfig",
+    "pytest.ini",
+}
+
+NO_BOM_FILENAMES = {
+    # pytest/iniconfig cannot parse BOM-prefixed ini files on Windows.
     "pytest.ini",
 }
 
@@ -83,13 +88,16 @@ def _iter_policy_files(repo_root: Path) -> list[Path]:
     return [dedup[key] for key in sorted(dedup.keys())]
 
 
-def _encoding_error(raw: bytes) -> str | None:
-    if raw.startswith(b"\xef\xbb\xbf"):
-        return "utf-8-bom-not-allowed"
+def _encoding_error(raw: bytes, *, require_bom: bool = True) -> str | None:
     if raw.startswith(b"\xff\xfe") or raw.startswith(b"\xfe\xff"):
         return "utf-16-bom-not-allowed"
+    if require_bom and not raw.startswith(b"\xef\xbb\xbf"):
+        return "utf-8-bom-required"
+    if not require_bom and raw.startswith(b"\xef\xbb\xbf"):
+        return "utf-8-bom-not-allowed"
+    body = raw[3:] if require_bom else raw
     try:
-        raw.decode("utf-8")
+        body.decode("utf-8")
         return None
     except UnicodeDecodeError as exc:
         return f"not-utf8@{exc.start}"
@@ -104,24 +112,24 @@ def collect_violations(repo_root: Path) -> list[tuple[str, str]]:
         except OSError as exc:
             violations.append((rel, f"read-error:{exc}"))
             continue
-        err = _encoding_error(raw)
+        err = _encoding_error(raw, require_bom=path.name not in NO_BOM_FILENAMES)
         if err:
             violations.append((rel, err))
     return violations
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate repo text files are UTF-8 (no BOM).")
+    parser = argparse.ArgumentParser(description="Validate repo text files are UTF-8 with BOM.")
     parser.add_argument("--repo-root", default=".", help="Path to repository root.")
     args = parser.parse_args()
 
     repo_root = Path(args.repo_root).resolve()
     violations = collect_violations(repo_root)
     if not violations:
-        print("UTF-8 policy check passed")
+        print("UTF-8-BOM policy check passed")
         return 0
 
-    print("UTF-8 policy violations detected:")
+    print("UTF-8-BOM policy violations detected:")
     for rel, reason in violations:
         print(f"- {rel}: {reason}")
     return 1

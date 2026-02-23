@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 
 def make_snippet(text: str, query: str, *, max_len: int = 200) -> str:

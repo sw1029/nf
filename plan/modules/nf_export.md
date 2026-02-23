@@ -1,4 +1,4 @@
-# nf-export (TXT/DOCX) — MoSCoW 구현 계획
+﻿# nf-export (TXT/DOCX) — MoSCoW 구현 계획
 
 nf-export는 문서/구간을 TXT/DOCX로 내보내고(필수), 옵션으로 메타데이터(태그/근거 요약)를 포함한다.
 

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -22,6 +22,7 @@ class Settings:
 
     sync_retrieval_mode: str = "FTS_ONLY"
     vector_index_mode: str = "SHARDED"
+    vector_search_backend: str = "token_overlap"
 
     max_loaded_shards: int = 2
     max_ram_mb: int = 2048
@@ -114,4 +115,3 @@ def load_config(path: Path | str | None = None, *, env: Mapping[str, str] | None
             merged[field.name] = _coerce(target_type, merged[field.name])
 
     return Settings(**merged)
-

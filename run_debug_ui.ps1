@@ -1,4 +1,4 @@
-param(
+﻿param(
   [int]$Port = 8080,
   [string]$DebugToken = $([guid]::NewGuid().ToString("N")),
   [string]$ApiToken = ""

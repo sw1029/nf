@@ -1,4 +1,4 @@
-> 구현 순서(Phase) 통제: `plan/IMPLEMENTATION_CHECKLIST.md`
+﻿> 구현 순서(Phase) 통제: `plan/IMPLEMENTATION_CHECKLIST.md`
 
 ## 1) “더 촘촘한” 전체 구조도 (프로세스/스토리지/IPC/큐까지 포함)
 

@@ -1,4 +1,4 @@
-## MoSCoW 기반 TODO Checklist (현재까지 논의된 구조/요구 전반, 누락 없이)
+﻿## MoSCoW 기반 TODO Checklist (현재까지 논의된 구조/요구 전반, 누락 없이)
 
 > 표기 규칙:
 >

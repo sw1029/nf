@@ -1,4 +1,4 @@
-# nf-desktop (윈도우 UI) — MoSCoW 구현 계획
+﻿# nf-desktop (윈도우 UI) — MoSCoW 구현 계획
 
 nf-desktop은 사용자의 글 작성 흐름을 담당하며, 오케스트레이터와 IPC로 통신한다.
 

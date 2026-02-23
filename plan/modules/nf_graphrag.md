@@ -1,4 +1,4 @@
-# nf-graphrag (옵션형 그래프 하이브리드) — MoSCoW 구현 계획
+﻿# nf-graphrag (옵션형 그래프 하이브리드) — MoSCoW 구현 계획
 
 nf-graphrag는 전역정보(entity/time/timeline/facts)를 프로젝트 단위 그래프로 물질화하고,
 `RETRIEVE_VEC` 경로에서 옵션형 rerank를 수행한다.
