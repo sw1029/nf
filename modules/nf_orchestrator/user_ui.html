@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NF 吏묓븘 ?꾧뎄</title>
+  <title>NF 집필 연구</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -395,6 +395,16 @@
       background-color: rgba(148, 163, 184, 0.26);
     }
 
+    .nf-violate-bg {
+      background-color: rgba(231, 76, 60, 0.22);
+      border-bottom: 2px dashed rgba(231, 76, 60, 0.5);
+    }
+
+    .nf-unknown-bg {
+      background-color: rgba(148, 163, 184, 0.26);
+      border-bottom: 2px dashed rgba(148, 163, 184, 0.5);
+    }
+
     /* Episode Context Menu Button */
     .menu-btn {
       padding: 4px;
@@ -411,6 +421,40 @@
       background-color: #e2e8f0;
       color: var(--accent-primary);
     }
+
+    .help-tooltip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background-color: #e2e8f0;
+      color: #64748b;
+      font-size: 0.7rem;
+      font-weight: bold;
+      margin-left: 6px;
+      cursor: help;
+      vertical-align: text-top;
+    }
+
+    .help-tooltip:hover {
+      background-color: #cbd5e1;
+      color: #334155;
+    }
+
+    .preset-btn-group {
+      display: flex;
+      gap: 5px;
+      margin-top: 8px;
+      margin-bottom: 12px;
+    }
+
+    .preset-btn-group .btn {
+      flex: 1;
+      padding: 6px 4px;
+      font-size: 0.75rem;
+    }
   </style>
 </head>
 
@@ -420,7 +464,7 @@
   <div id="loading-overlay" class="overlay">
     <div style="text-align: center; background: white; padding: 20px; border-radius: 12px;">
       <img src="/assets/img.gif" class="loading-spinner" alt="Loading...">
-      <p id="loading-text" style="color: var(--text-secondary); margin-top: 10px;">泥섎━ 以묒엯?덈떎...</p>
+      <p id="loading-text" style="color: var(--text-secondary); margin-top: 10px;">처리 중입니다...</p>
     </div>
   </div>
 
@@ -428,32 +472,31 @@
   <div id="success-popup" class="overlay">
     <div class="modal">
       <img src="/assets/check.png" class="success-icon" alt="Success">
-      <h3 id="success-title">?꾨즺?섏뿀?듬땲??/h3>
+      <h3 id="success-title">완료되었습니다.</h3>
       <p id="success-message" style="color: var(--text-secondary); margin-bottom: 20px;"></p>
-      <button class="btn btn-primary" onclick="closeSuccessPopup()">?뺤씤</button>
+      <button class="btn btn-primary" onclick="closeSuccessPopup()">확인</button>
     </div>
   </div>
 
   <!-- Setup Modal (Project Select) -->
   <div id="setup-modal" class="overlay active">
     <div class="modal" style="text-align: left;">
-      <h2 style="margin-top:0">?섏쁺?⑸땲??/h2>
-      <p style="color: #666; margin-bottom: 20px;">?묒뾽???꾨줈?앺듃瑜??좏깮?섍굅???덈줈 留뚮뱶?몄슂.</p>
+      <h2 style="margin-top:0">환영합니다.</h2>
+      <p style="color: #666; margin-bottom: 20px;">작업할 프로젝트를 선택하거나 새로 만드세요.</p>
 
-      <label style="display:block; margin-bottom:5px; font-size:0.9rem;">湲곗〈 ?꾨줈?앺듃 遺덈윭?ㅺ린</label>
+      <label style="display:block; margin-bottom:5px; font-size:0.9rem;">기존 프로젝트 불러오기</label>
       <select id="project-select"
         style="width:100%; padding:10px; margin-bottom:20px; border-radius:6px; border:1px solid #ddd;"></select>
 
-      <div style="text-align: center; color: #aaa; margin-bottom: 20px;">- ?먮뒗 -</div>
-
-      <label style="display:block; margin-bottom:5px; font-size:0.9rem;">???꾨줈?앺듃 ?대쫫</label>
+      <div style="text-align: center; color: #aaa; margin-bottom: 20px;">- 또는 -</div>
+      <label style="display:block; margin-bottom:5px; font-size:0.9rem;">새 프로젝트 이름</label>
       <input id="new-project-name"
         style="width:100%; padding:10px; margin-bottom:20px; border-radius:6px; border:1px solid #ddd;"
-        placeholder="?섎쭔??硫뗭쭊 ?뚯꽕">
+        placeholder="나만의 멋진 소설">
 
       <div style="display: flex; gap: 10px;">
-        <button class="btn btn-primary" style="flex:1" onclick="handleCreateProject()">???꾨줈?앺듃 ?쒖옉</button>
-        <button class="btn btn-secondary" style="flex:1" onclick="handleLoadProject()">遺덈윭?ㅺ린</button>
+        <button class="btn btn-primary" style="flex:1" onclick="handleCreateProject()">새 프로젝트 시작</button>
+        <button class="btn btn-secondary" style="flex:1" onclick="handleLoadProject()">불러오기</button>
       </div>
     </div>
   </div>
@@ -468,15 +511,15 @@
       </div>
 
       <div class="tabs">
-        <button class="tab-btn active" onclick="switchNavTab('EPISODE')">蹂몃Ц</button>
-        <button class="tab-btn" onclick="switchNavTab('SETTING')">?ㅼ젙</button>
-        <button class="tab-btn" onclick="switchNavTab('PLOT')">援ъ긽</button>
-        <button class="tab-btn" onclick="switchNavTab('TIMELINE')">??꾨씪??/button>
+        <button class="tab-btn active" onclick="switchNavTab('EPISODE')">본문</button>
+        <button class="tab-btn" onclick="switchNavTab('SETTING')">설정</button>
+        <button class="tab-btn" onclick="switchNavTab('PLOT')">구상</button>
+        <button class="tab-btn" onclick="switchNavTab('TIMELINE')">타임라인</button>
       </div>
 
       <div style="padding: 10px; display:flex; gap:5px;">
-        <button class="btn btn-primary" style="flex:1" onclick="createNewDoc()">+ ??臾몄꽌</button>
-        <button class="btn btn-secondary" style="flex:1" onclick="createNewChapter()">+ ??梨뺥꽣</button>
+        <button class="btn btn-primary" style="flex:1" onclick="createNewDoc()">+ 새 문서</button>
+        <button class="btn btn-secondary" style="flex:1" onclick="createNewChapter()">+ 새 챕터</button>
       </div>
 
       <div id="doc-list" class="list-container">
@@ -484,7 +527,7 @@
       </div>
 
       <div style="padding: 20px; border-top: 1px solid var(--border-color);">
-        <button class="btn btn-secondary" style="width:100%" onclick="exitProject()">?꾨줈?앺듃 ?섍?湲?/button>
+        <button class="btn btn-secondary" style="width:100%" onclick="exitProject()">프로젝트 나가기</button>
       </div>
     </aside>
 
@@ -494,10 +537,10 @@
       <!-- Placeholder -->
       <div id="empty-state"
         style="position:absolute; top:0; left:0; width:100%; height:100%; background:white; z-index:10; display:flex; flex-direction:column; justify-content:center; align-items:center; color:#ccc;">
-        <div style="font-size:3rem; margin-bottom:20px;">?뱷</div>
-        <div style="font-size:1.2rem;">臾몄꽌瑜??좏깮?섍굅???덈줈 留뚮뱶?몄슂</div>
+        <div style="font-size:3rem; margin-bottom:20px;">📝</div>
+        <div style="font-size:1.2rem;">문서를 선택하거나 새로 만드세요</div>
         <div style="margin-top:20px;">
-          <button class="btn btn-primary" onclick="createNewDoc()">??臾몄꽌 留뚮뱾湲?/button>
+          <button class="btn btn-primary" onclick="createNewDoc()">새 문서 만들기</button>
         </div>
       </div>
 
@@ -505,49 +548,51 @@
       <div class="toolbar">
         <div style="display:flex; align-items:center;">
           <span id="doc-type-badge"
-            style="background:#eee; padding:4px 8px; border-radius:4px; font-size:0.8rem; margin-right:10px; font-weight:600;">?좏삎</span>
-          <input id="doc-title-input" class="doc-title-input" placeholder="?쒕ぉ???낅젰?섏꽭?? oninput="handleInput()"
+            style="background:#eee; padding:4px 8px; border-radius:4px; font-size:0.8rem; margin-right:10px; font-weight:600;">유형</span>
+          <input id="doc-title-input" class="doc-title-input" placeholder="제목을 입력하세요" oninput="handleInput()"
             onclick="this.select()">
         </div>
 
         <div style="display:flex; gap:10px; align-items:center;">
-          <span id="save-status" style="font-size:0.8rem; color:#aaa; margin-right:10px;">??λ맖</span>
-          <button class="btn btn-secondary" onclick="openExportModal()">?대낫?닿린</button>
-          <button class="btn btn-secondary" onclick="toggleConfigPanel()">?붾㈃ ?ㅼ젙</button>
-          <button class="btn btn-icon" onclick="toggleRightSidebar()">??/button>
+          <span id="consistency-status" style="font-size:0.8rem; color:#3498db; margin-right:5px;"></span>
+          <span id="save-status" style="font-size:0.8rem; color:#aaa; margin-right:10px;">저장됨</span>
+          <button class="btn btn-secondary" onclick="openExportModal()">내보내기</button>
+          <button class="btn btn-secondary" onclick="toggleConfigPanel()">화면 설정</button>
+          <button class="btn btn-icon" onclick="toggleRightSidebar()" title="AI 작가 도우미 열기/닫기">✨</button>
         </div>
       </div>
 
       <!-- Config Panel -->
       <div id="config-panel" class="config-panel">
-        <h4 style="margin-top:0">?먮뵒???ㅼ젙</h4>
+        <h4 style="margin-top:0">에디터 설정</h4>
         <div class="config-row">
-          <span class="config-label">湲???ш린</span>
+          <span class="config-label">글자 크기</span>
           <input type="range" class="config-input" min="14" max="24" value="18"
             oninput="updateEditorConfig('fontSize', this.value + 'px')">
         </div>
         <div class="config-row">
-          <span class="config-label">以?媛꾧꺽</span>
+          <span class="config-label">줄 간격</span>
           <input type="range" class="config-input" min="1.2" max="2.5" step="0.1" value="1.8"
             oninput="updateEditorConfig('lineHeight', this.value)">
         </div>
         <div class="config-row">
-          <span class="config-label">?먭컙</span>
+          <span class="config-label">자간</span>
           <input type="range" class="config-input" min="-1" max="2" step="0.1" value="0"
             oninput="updateEditorConfig('letterSpacing', this.value + 'px')">
         </div>
         <div class="config-row">
-          <span class="config-label">?고듃</span>
+          <span class="config-label">폰트</span>
           <select class="config-input" onchange="updateEditorConfig('fontFamily', this.value)">
-            <option value="'Noto Serif KR', serif">紐낆“泥?(Serif)</option>
-            <option value="'Noto Sans KR', sans-serif">怨좊뵓泥?(Sans)</option>
+            <option value="'Noto Serif KR', serif">명조체 (Serif)</option>
+            <option value="'Noto Sans KR', sans-serif">고딕체 (Sans)</option>
           </select>
         </div>
       </div>
 
       <!-- Editor -->
       <div class="editor-container">
-        <div id="editor" class="paper" contenteditable="true" placeholder="?ш린???댁슜???묒꽦?섏꽭??.." oninput="handleInput()">
+        <div id="editor" class="paper" contenteditable="true" placeholder="여기에 내용을 작성하세요..." oninput="handleInput()"
+          oncompositionstart="handleComposition(true)" oncompositionend="handleComposition(false)">
         </div>
       </div>
 
@@ -556,76 +601,87 @@
     <!-- Right Sidebar: Assistant -->
     <aside class="sidebar right" id="assistant-sidebar">
       <div class="sidebar-header">
-        <div class="sidebar-title">?묎? ?꾩슦誘?/div>
+        <div class="sidebar-title">작가 도우미</div>
       </div>
 
       <div class="tabs">
-        <button class="tab-btn active" onclick="switchAssistTab('CHECK')">?ㅻ쪟 ?먭?</button>
-        <button class="tab-btn" onclick="switchAssistTab('SEARCH')">湲곗뼲 ?먯깋</button>
+        <button class="tab-btn active" onclick="switchAssistTab('CHECK')">오류 점검</button>
+        <button class="tab-btn" onclick="switchAssistTab('SEARCH')">기억 검색</button>
       </div>
 
       <div style="padding: 15px; border-bottom: 1px solid #eee;">
-        <button id="assist-action-btn" class="btn btn-primary" style="width:100%" onclick="runAssistantAction()">吏湲?
-          ?먭??섍린</button>
+        <button id="assist-action-btn" class="btn btn-primary" style="width:100%" onclick="runAssistantAction()">지금
+          점검하기</button>
         <label style="display:block; margin-top:8px; font-size:0.8rem; color:#64748b; cursor:pointer;">
-          <input id="toggle-show-ok" type="checkbox" style="margin-right:6px;"> Show OK verdicts
+          <input id="toggle-show-ok" type="checkbox" style="margin-right:6px;"> 정상 결과(OK) 보이기
         </label>
         <details class="assistant-advanced">
-          <summary>Advanced Consistency Options</summary>
+          <summary>세부 점검 옵션 <span class="help-tooltip" title="비전공자도 쉽게 사용할 수 있는 세부 설정입니다.">?</span></summary>
+
+          <div class="preset-btn-group">
+            <button class="btn btn-secondary" onclick="applyConsistencyPreset('quick')">빠른 기본 점검</button>
+            <button class="btn btn-secondary" onclick="applyConsistencyPreset('character')">인물 집중 점검</button>
+            <button class="btn btn-secondary" onclick="applyConsistencyPreset('deep')">설정 심층 점검</button>
+          </div>
+
           <div class="row">
-            <label for="consistency-filter-entity">Filter: entity_id</label>
-            <input id="consistency-filter-entity" type="text" placeholder="entity_id">
+            <label for="consistency-filter-entity">특정 인물/장소 집중 점검 <span class="help-tooltip"
+                title="입력한 인물이나 장소를 중심으로 오류를 찾습니다.">?</span></label>
+            <input id="consistency-filter-entity" type="text" placeholder="예: 김철수, 마법학교">
           </div>
           <div class="row">
-            <label for="consistency-filter-time">Filter: time_key</label>
-            <input id="consistency-filter-time" type="text" placeholder="time_key">
+            <label for="consistency-filter-time">특정 사건/시점 기준 점검 <span class="help-tooltip"
+                title="입력한 시간 배경이나 사건을 중심으로 점검합니다.">?</span></label>
+            <input id="consistency-filter-time" type="text" placeholder="예: 과거 회상, 에피소드1">
           </div>
           <div class="row">
-            <label for="consistency-filter-timeline">Filter: timeline_idx</label>
-            <input id="consistency-filter-timeline" type="number" min="0" step="1" placeholder="timeline_idx">
+            <label for="consistency-filter-timeline">타임라인 지정 점검 (순서 번호) <span class="help-tooltip"
+                title="전체 시간선 중 특정 순번을 기준으로 점검합니다.">?</span></label>
+            <input id="consistency-filter-timeline" type="number" min="0" step="1" placeholder="타임라인 순서 번호">
           </div>
           <div class="row">
-            <label for="consistency-graph-mode">Graph mode</label>
+            <label for="consistency-graph-mode">설정집 연계 심층 점검 <span class="help-tooltip"
+                title="작성하신 설정 문서를 깊이 분석하여 숨은 오류를 찾아냅니다.">?</span></label>
             <select id="consistency-graph-mode">
-              <option value="off">off</option>
-              <option value="manual">manual</option>
-              <option value="auto">auto</option>
+              <option value="off">끄기 (기본)</option>
+              <option value="on">켜기</option>
             </select>
           </div>
-          <div class="row">
-            <label for="consistency-layer3-promotion">Layer3 promotion</label>
-            <select id="consistency-layer3-promotion">
-              <option value="off">off</option>
-              <option value="on">on</option>
-            </select>
-          </div>
-          <div class="row">
-            <label for="consistency-verifier-mode">Verifier mode</label>
-            <select id="consistency-verifier-mode">
-              <option value="off">off</option>
-              <option value="conservative_nli">conservative_nli</option>
-            </select>
-          </div>
-          <div class="row">
-            <label for="consistency-triage-mode">Triage mode</label>
-            <select id="consistency-triage-mode">
-              <option value="off">off</option>
-              <option value="embedding_anomaly">embedding_anomaly</option>
-            </select>
-          </div>
-          <div class="row">
-            <label for="consistency-loop-enabled">Verification loop</label>
-            <select id="consistency-loop-enabled">
-              <option value="off">off</option>
-              <option value="on">on</option>
-            </select>
-          </div>
+          <details style="margin-top: 10px; border-top: 1px dashed #cbd5e1; padding-top: 8px;">
+            <summary style="font-size: 0.75rem; color: #94a3b8; cursor: pointer; font-weight:600;">전문가 설정 (시스템 세부 조정)
+            </summary>
+            <div class="row" style="flex-direction:row; align-items:center; margin-top: 8px;">
+              <input type="checkbox" id="consistency-layer3-promotion" style="margin-right:6px;" checked>
+              <label for="consistency-layer3-promotion">강력한 문맥 추론 적용 <span class="help-tooltip"
+                  title="AI가 문맥을 깊이 추론하여 모호한 오류까지 잡아냅니다.">?</span></label>
+            </div>
+            <div class="row">
+              <label for="consistency-verifier-mode">이중 확인 모드 <span class="help-tooltip"
+                  title="발견된 오류를 한 번 더 꼼꼼히 검증하여 신뢰도를 높입니다.">?</span></label>
+              <select id="consistency-verifier-mode">
+                <option value="off">끄기 (기본)</option>
+                <option value="on">켜기</option>
+              </select>
+            </div>
+            <div class="row">
+              <label for="consistency-triage-mode">오류 스마트 분류 <span class="help-tooltip"
+                  title="다양한 오류를 중요도에 따라 스마트하게 나눠 보여줍니다.">?</span></label>
+              <select id="consistency-triage-mode">
+                <option value="off">끄기 (기본)</option>
+                <option value="on">켜기</option>
+              </select>
+            </div>
+            <div class="row" style="flex-direction:row; align-items:center;">
+              <input type="checkbox" id="consistency-loop-enabled" style="margin-right:6px;" checked>
+              <label for="consistency-loop-enabled">반복 정밀 검증 (시스템)</label>
+            </div>
+          </details>
         </details>
       </div>
 
       <div id="assistant-content" class="list-container">
         <div style="text-align:center; color:#aaa; margin-top:50px;">
-          ?꾩슦誘멸? ?湲?以묒엯?덈떎.
+          도우미가 대기 중입니다.
         </div>
       </div>
     </aside>
@@ -635,17 +691,17 @@
   <!-- Export Modal -->
   <div id="export-modal" class="overlay">
     <div class="modal">
-      <h2>臾몄꽌 ?대낫?닿린</h2>
+      <h2>문서 내보내기</h2>
       <div class="form-group">
-        <label>?뺤떇 ?좏깮</label>
+        <label>형식 선택</label>
         <div class="radio-group" style="display:flex; gap:10px; margin-top:5px;">
-          <label style="cursor:pointer;"><input type="radio" name="export-fmt" value="txt" checked> ?띿뒪??(.txt)</label>
-          <label style="cursor:pointer;"><input type="radio" name="export-fmt" value="docx"> 臾몄꽌 (.docx)</label>
+          <label style="cursor:pointer;"><input type="radio" name="export-fmt" value="txt" checked> 텍스트 (.txt)</label>
+          <label style="cursor:pointer;"><input type="radio" name="export-fmt" value="docx"> 문서 (.docx)</label>
         </div>
       </div>
       <div class="actions">
-        <button onclick="closeExportModal()">痍⑥냼</button>
-        <button class="primary" onclick="handleExport()">?대낫?닿린</button>
+        <button onclick="closeExportModal()">취소</button>
+        <button class="primary" onclick="handleExport()">내보내기</button>
       </div>
     </div>
   </div>
@@ -800,6 +856,51 @@
       return startA < endB && startB < endA;
     }
 
+    function applyConsistencyPreset(mode) {
+      const entityInput = document.getElementById('consistency-filter-entity');
+      const timeInput = document.getElementById('consistency-filter-time');
+      const timelineInput = document.getElementById('consistency-filter-timeline');
+      const graphModeInput = document.getElementById('consistency-graph-mode');
+      const layer3Input = document.getElementById('consistency-layer3-promotion');
+      const verifierInput = document.getElementById('consistency-verifier-mode');
+      const triageInput = document.getElementById('consistency-triage-mode');
+      const loopInput = document.getElementById('consistency-loop-enabled');
+
+      if (mode === 'quick') {
+        if (entityInput) entityInput.value = '';
+        if (timeInput) timeInput.value = '';
+        if (timelineInput) timelineInput.value = '';
+        if (graphModeInput) graphModeInput.value = 'off';
+        if (layer3Input) layer3Input.checked = false;
+        if (verifierInput) verifierInput.value = 'off';
+        if (triageInput) triageInput.value = 'off';
+        if (loopInput) loopInput.checked = false;
+        alert("빠른 기본 점검 모드가 설정되었습니다.");
+      } else if (mode === 'character') {
+        if (timeInput) timeInput.value = '';
+        if (timelineInput) timelineInput.value = '';
+        if (graphModeInput) graphModeInput.value = 'off';
+        if (layer3Input) layer3Input.checked = true;
+        if (verifierInput) verifierInput.value = 'on';
+        if (triageInput) triageInput.value = 'off';
+        if (loopInput) loopInput.checked = true;
+        if (entityInput) {
+          entityInput.focus();
+          alert("인물 집중 점검 모드가 설정되었습니다. 검사할 인물 이름을 입력해주세요.");
+        }
+      } else if (mode === 'deep') {
+        if (entityInput) entityInput.value = '';
+        if (timeInput) timeInput.value = '';
+        if (timelineInput) timelineInput.value = '';
+        if (graphModeInput) graphModeInput.value = 'on';
+        if (layer3Input) layer3Input.checked = true;
+        if (verifierInput) verifierInput.value = 'on';
+        if (triageInput) triageInput.value = 'on';
+        if (loopInput) loopInput.checked = true;
+        alert("설정 심층 점검 모드가 설정되었습니다.");
+      }
+    }
+
     function _readConsistencyOptionsFromUi() {
       const entityInput = document.getElementById('consistency-filter-entity');
       const timeInput = document.getElementById('consistency-filter-time');
@@ -892,14 +993,30 @@
       };
     }
 
+    let fallbackHighlightActive = false;
+
     function clearInlineVerdictHighlights() {
-      if (!window.CSS || !CSS.highlights) return;
-      CSS.highlights.delete('nf-violate');
-      CSS.highlights.delete('nf-unknown');
+      if (window.CSS && CSS.highlights) {
+        CSS.highlights.delete('nf-violate');
+        CSS.highlights.delete('nf-unknown');
+      }
+
+      const editor = document.getElementById('editor');
+      if (!editor) return;
+      const spans = editor.querySelectorAll('.nf-highlight-fallback');
+      spans.forEach(span => {
+        const parent = span.parentNode;
+        if (!parent) return;
+        while (span.firstChild) parent.insertBefore(span.firstChild, span);
+        parent.removeChild(span);
+      });
+      if (spans.length > 0) {
+        editor.normalize();
+      }
+      fallbackHighlightActive = false;
     }
 
     function renderInlineVerdictHighlights(verdicts) {
-      if (!window.CSS || !CSS.highlights || typeof window.Highlight !== 'function') return;
       clearInlineVerdictHighlights();
       const editor = document.getElementById('editor');
       if (!editor) return;
@@ -909,9 +1026,9 @@
       const textNodes = _collectEditorTextNodes(editor);
       if (!textNodes.length) return;
 
-      const violateRanges = [];
-      const unknownRanges = [];
       const rows = Array.isArray(verdicts) ? verdicts : [];
+      const highlightItems = [];
+
       rows.forEach((item) => {
         const verdict = String(item?.verdict || 'UNKNOWN');
         if (verdict !== 'VIOLATE' && verdict !== 'UNKNOWN') return;
@@ -921,21 +1038,52 @@
         if (start === null || end === null || end <= start || start < 0 || start >= text.length) return;
         const clampedEnd = Math.min(end, text.length);
         if (clampedEnd <= start) return;
-        const startPos = _positionForOffset(textNodes, start);
-        const endPos = _positionForOffset(textNodes, clampedEnd);
-        if (!startPos || !endPos) return;
-        const range = document.createRange();
-        range.setStart(startPos.node, startPos.offset);
-        range.setEnd(endPos.node, endPos.offset);
-        if (verdict === 'VIOLATE') violateRanges.push(range);
-        else unknownRanges.push(range);
+        highlightItems.push({ start, end: clampedEnd, verdict });
       });
 
-      if (violateRanges.length > 0) {
-        CSS.highlights.set('nf-violate', new Highlight(...violateRanges));
-      }
-      if (unknownRanges.length > 0) {
-        CSS.highlights.set('nf-unknown', new Highlight(...unknownRanges));
+      if (window.CSS && CSS.highlights && typeof window.Highlight === 'function') {
+        const violateRanges = [];
+        const unknownRanges = [];
+        highlightItems.forEach(({ start, end, verdict }) => {
+          const startPos = _positionForOffset(textNodes, start);
+          const endPos = _positionForOffset(textNodes, end);
+          if (!startPos || !endPos) return;
+          const range = document.createRange();
+          range.setStart(startPos.node, startPos.offset);
+          range.setEnd(endPos.node, endPos.offset);
+          if (verdict === 'VIOLATE') violateRanges.push(range);
+          else unknownRanges.push(range);
+        });
+
+        if (violateRanges.length > 0) {
+          CSS.highlights.set('nf-violate', new Highlight(...violateRanges));
+        }
+        if (unknownRanges.length > 0) {
+          CSS.highlights.set('nf-unknown', new Highlight(...unknownRanges));
+        }
+      } else {
+        fallbackHighlightActive = true;
+        highlightItems.sort((a, b) => b.start - a.start);
+        highlightItems.forEach(({ start, end, verdict }) => {
+          const startPos = _positionForOffset(textNodes, start);
+          const endPos = _positionForOffset(textNodes, end);
+          if (!startPos || !endPos) return;
+          const range = document.createRange();
+          range.setStart(startPos.node, startPos.offset);
+          range.setEnd(endPos.node, endPos.offset);
+
+          const span = document.createElement('span');
+          const bgClass = verdict === 'VIOLATE' ? 'nf-violate-bg' : 'nf-unknown-bg';
+          span.className = `nf-highlight-fallback ${bgClass}`;
+
+          try {
+            range.surroundContents(span);
+          } catch (e) {
+            const contents = range.extractContents();
+            span.appendChild(contents);
+            range.insertNode(span);
+          }
+        });
       }
     }
 
@@ -945,7 +1093,7 @@
     function handleInput() {
       state.isDirty = true;
       clearInlineVerdictHighlights();
-      document.getElementById('save-status').innerText = "??λ릺吏 ?딆쓬";
+      document.getElementById('save-status').innerText = "저장되지 않음";
       document.getElementById('save-status').style.color = "#e67e22";
 
       // Debounce still useful for stopping typing updates
@@ -960,8 +1108,8 @@
       const title = document.getElementById('doc-title-input').value; // Always get fresh title
 
       // Visual Feedback
-      if (immediate) showLoading("???以?..");
-      else document.getElementById('save-status').innerText = "???以?..";
+      if (immediate) showLoading("저장 중...");
+      else document.getElementById('save-status').innerText = "저장 중...";
 
       // Optimistic Update (Immediate UI Sync)
       if (state.docs[state.currentDocId]) {
@@ -985,14 +1133,14 @@
         state.lastSegmentFingerprints = nextSegments;
 
         state.isDirty = false;
-        document.getElementById('save-status').innerText = "??λ맖";
+        document.getElementById('save-status').innerText = "저장됨";
         document.getElementById('save-status').style.color = "#aaa";
         if (immediate) hideLoading();
         schedulePostSavePipeline(state.currentDocId);
 
         // No need to render again unless we want to confirm from server
       } catch (e) {
-        document.getElementById('save-status').innerText = "????ㅽ뙣";
+        document.getElementById('save-status').innerText = "저장 실패";
         document.getElementById('save-status').style.color = "red";
         if (immediate) hideLoading();
         console.error(e);
@@ -1040,18 +1188,40 @@
     }
 
     // --- Loading & Success UI ---
-    function showLoading(msg = "泥섎━ 以묒엯?덈떎...") {
-      document.getElementById('loading-text').innerText = msg;
-      document.getElementById('loading-overlay').classList.add('active');
+    function showLoading(msg = "처리 중입니다...", blocking = false) {
+      if (blocking || !state.projectId) {
+        document.getElementById('loading-text').innerText = msg;
+        document.getElementById('loading-overlay').classList.add('active');
+      } else {
+        const el = document.getElementById('save-status');
+        if (el) {
+          el.innerText = msg;
+          el.style.color = "#3498db";
+        }
+      }
     }
 
     function hideLoading() {
       document.getElementById('loading-overlay').classList.remove('active');
+      const el = document.getElementById('save-status');
+      if (el && (el.style.color === "rgb(52, 152, 219)" || el.style.color === "#3498db")) { // Only clear if we set it
+        el.innerText = "준비됨";
+        el.style.color = "#aaa";
+      }
     }
 
-    function showSuccess(msg = "?꾨즺?섏뿀?듬땲??) {
-      document.getElementById('success-message').innerText = msg;
-      document.getElementById('success-popup').classList.add('active');
+    function showSuccess(msg = "완료되었습니다.") {
+      const el = document.getElementById('save-status');
+      if (el) {
+        el.innerText = msg;
+        el.style.color = "#2ecc71";
+        setTimeout(() => {
+          if (el.innerText === msg) {
+            el.innerText = "준비됨";
+            el.style.color = "#aaa";
+          }
+        }, 3000);
+      }
     }
 
     function closeSuccessPopup() {
@@ -1093,7 +1263,7 @@
         if (loopInput) loopInput.value = state.consistencyOptions.verification_loop ? 'on' : 'off';
 
         if (data.projects && Object.keys(data.projects).length > 0) {
-          select.innerHTML = '<option value="">?좏깮?섏꽭??/option>';
+          select.innerHTML = '<option value="">선택하세요</option>';
           Object.values(data.projects).forEach(p => {
             const opt = document.createElement('option');
             opt.value = p.project_id;
@@ -1101,7 +1271,7 @@
             select.appendChild(opt);
           });
         } else {
-          select.innerHTML = '<option value="">?꾨줈?앺듃媛 ?놁뒿?덈떎</option>';
+          select.innerHTML = '<option value="">프로젝트가 없습니다</option>';
         }
       } catch (e) {
         console.error("Init Error", e);
@@ -1110,25 +1280,24 @@
 
     async function handleCreateProject() {
       const name = document.getElementById('new-project-name').value;
-      if (!name) return alert("?대쫫???낅젰?댁＜?몄슂");
+      if (!name) return alert("이름을 입력해주세요");
 
-      showLoading("?꾨줈?앺듃 ?앹꽦 以?..");
+      showLoading("프로젝트 생성 중...");
       try {
         const res = await api('/projects', 'POST', { name, settings: { mode: 'dev' } });
         hideLoading();
         loadProject(res.project.project_id, res.project.name);
         document.getElementById('setup-modal').classList.remove('active');
-        // showSuccess("?꾨줈?앺듃媛 ?앹꽦?섏뿀?듬땲??"); // Skip for faster UX
       } catch (e) {
         hideLoading();
         console.error("Create Project Error", e);
-        alert("?앹꽦 ?ㅽ뙣: " + e.message);
+        alert("생성 실패: " + e.message);
       }
     }
 
     async function handleLoadProject() {
       const pid = document.getElementById('project-select').value;
-      if (!pid) return alert("?좏깮?댁＜?몄슂");
+      if (!pid) return alert("선택해주세요");
       const name = document.querySelector(`#project-select option[value="${pid}"]`).textContent;
       loadProject(pid, name);
       document.getElementById('setup-modal').classList.remove('active');
@@ -1152,7 +1321,7 @@
     // --- Doc Management ---
     async function refreshDocList() {
       const list = document.getElementById('doc-list');
-      list.innerHTML = '<div style="text-align:center; padding:20px; color:#aaa;">濡쒕뵫 以?..</div>';
+      list.innerHTML = '<div style="text-align:center; padding:20px; color:#aaa;">로딩 중...</div>';
 
       try {
         const res = await api(`/projects/${state.projectId}/documents`);
@@ -1167,7 +1336,7 @@
         state.docs = docsMap;
         renderDocList();
       } catch (e) {
-        list.innerHTML = '<div style="text-align:center; color:red;">濡쒕뱶 ?ㅽ뙣</div>';
+        list.innerHTML = '<div style="text-align:center; color:red;">로드 실패</div>';
       }
     }
 
@@ -1199,7 +1368,7 @@
 
       docs.forEach(d => {
         const gName = (d.metadata && d.metadata.group) || "";
-        if (!gName || gName === "誘몃텇瑜?) {
+        if (!gName || gName === "미분류") {
           noGroup.push(d);
         } else {
           if (!groups[gName]) groups[gName] = [];
@@ -1254,7 +1423,7 @@
         html += `
             <div class="struct-node group-node">
                 <div class="node-circle big"></div>
-                <div class="node-label" style="opacity:0.7">誘몃텇瑜?/div>
+                <div class="node-label" style="opacity:0.7">미분류</div>
             </div>
             <div class="struct-line"></div>
           `;
@@ -1314,7 +1483,18 @@
       });
 
       if (relevantDocs.length === 0) {
-        list.innerHTML = '<div style="text-align:center; padding:20px; color:#ccc;">?꾩쭅 臾몄꽌媛 ?놁뒿?덈떎.</div>';
+        let emptyMessage = "아직 문서가 없습니다.";
+        if (typeFilter === 'SETTING') {
+          emptyMessage = "작품의 세계관, 등장인물 설정을 여기에 추가하면 AI가 설정을 기반으로 오류를 잡아냅니다.";
+        } else if (typeFilter === 'PLOT') {
+          emptyMessage = "소설의 전체적인 줄거리와 요약을 이곳에 정리해두세요.";
+        } else if (typeFilter === 'TIMELINE') {
+          emptyMessage = "작품 내 주요 사건들을 시간순으로 기록하는 타임라인 문서입니다.";
+        }
+
+        list.innerHTML = `<div style="text-align:center; padding:20px 15px; color:#94a3b8; font-size:0.9rem; line-height:1.5; background:#f8fafc; border-radius:8px; margin-top:10px;">
+          ${emptyMessage}
+        </div>`;
         return;
       }
 
@@ -1323,12 +1503,12 @@
         item.className = 'list-item' + (state.currentDocId === doc.doc_id ? ' active' : '');
         item.onclick = () => loadDoc(doc.doc_id);
         item.innerHTML = `
-                <div>
+          < div >
                    <div style="font-weight:600;">${doc.title}</div>
                    <div class="meta">${new Date(doc.updated_at).toLocaleString()}</div>
-                </div>
-                <div style="font-size:0.8rem; background:#eee; padding:2px 6px; border-radius:4px;">${doc.type}</div>
-            `;
+                </div >
+          <div style="font-size:0.8rem; background:#eee; padding:2px 6px; border-radius:4px;">${doc.type}</div>
+        `;
         list.appendChild(item);
       });
     }
@@ -1340,22 +1520,24 @@
 
       const docs = Object.values(state.docs).filter(d => d.type === 'EPISODE');
       if (docs.length === 0) {
-        list.innerHTML = '<div style="text-align:center; padding:20px; color:#ccc;">?먰뵾?뚮뱶媛 ?놁뒿?덈떎.</div>';
+        list.innerHTML = '<div style="text-align:center; padding:20px; color:#ccc;">에피소드가 없습니다.</div>';
         return;
       }
 
       // Grouping
-      const groups = { "誘몃텇瑜?: [] };
+      const groups = {
+        "미분류": []
+      };
       docs.forEach(d => {
-        const gName = (d.metadata && d.metadata.group) ? d.metadata.group : "誘몃텇瑜?;
+        const gName = (d.metadata && d.metadata.group) ? d.metadata.group : "미분류";
         if (!groups[gName]) groups[gName] = [];
         groups[gName].push(d);
       });
 
       // Sorting: Groups then items within groups
       const sortedGroupNames = Object.keys(groups).sort((a, b) => {
-        if (a === "誘몃텇瑜?) return 1;
-        if (b === "誘몃텇瑜?) return -1;
+        if (a === "미분류") return 1;
+        if (b === "미분류") return -1;
         return a.localeCompare(b);
       });
 
@@ -1398,14 +1580,14 @@
           item.ondragover = (e) => handleDragOver(e);
           item.ondrop = (e) => handleDropOnItem(e, doc.doc_id, gName);
 
-          // Label construction: "?????쒕ぉ" or just "?쒕ぉ"
+          // Label construction: "N화 제목" 또는 "제목"
           let label = doc.title;
           if (doc.metadata && doc.metadata.episode_no) {
-            label = `<span style="color:#e67e22; font-weight:bold; margin-right:5px;">??{doc.metadata.episode_no}??/span> ${doc.title}`;
+            label = `< span style = "color:#e67e22; font-weight:bold; margin-right:5px;" > ${doc.metadata.episode_no}화</span > ${doc.title} `;
           }
 
           item.innerHTML = `
-              <div style="width:100%; display:flex; justify-content:space-between; align-items:center;">
+          < div style = "width:100%; display:flex; justify-content:space-between; align-items:center;" >
                   <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; pointer-events:none;">${label}</span>
                   <div class="menu-btn" onclick="openDocCtxMenu(event, '${doc.doc_id}')">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1414,8 +1596,8 @@
                       <circle cx="12" cy="19" r="1"></circle>
                     </svg>
                   </div>
-              </div>
-           `;
+              </div >
+          `;
           item.onclick = (e) => {
             loadDoc(doc.doc_id); // openDocCtxMenu stops propagation, so this is safe
           };
@@ -1455,13 +1637,13 @@
       const newGroup = targetGroupName;
 
       const groupDocs = Object.values(state.docs).filter(d => {
-        const g = (d.metadata && d.metadata.group) ? d.metadata.group : "誘몃텇瑜?;
+        const g = (d.metadata && d.metadata.group) ? d.metadata.group : "미분류";
         return g === newGroup;
       });
       const maxOrder = groupDocs.reduce((max, d) => Math.max(max, (d.metadata?.order || 0)), 0);
       const newOrder = maxOrder + 10;
 
-      await api(`/projects/${state.projectId}/documents/${draggedDocId}`, 'PATCH', {
+      await api(`/ projects / ${state.projectId} /documents/${draggedDocId} `, 'PATCH', {
         metadata: { ...doc.metadata, group: newGroup, order: newOrder }
       });
 
@@ -1479,7 +1661,7 @@
       const targetOrder = (targetDoc.metadata && targetDoc.metadata.order) !== undefined ? targetDoc.metadata.order : 0;
 
       const groupDocs = Object.values(state.docs).filter(d => {
-        const g = (d.metadata && d.metadata.group) ? d.metadata.group : "誘몃텇瑜?;
+        const g = (d.metadata && d.metadata.group) ? d.metadata.group : "미분류";
         return g === targetGroup;
       }).sort((a, b) => (a.metadata?.order || 0) - (b.metadata?.order || 0));
 
@@ -1494,7 +1676,7 @@
         newOrder = (prevOrder + targetOrder) / 2;
       }
 
-      await api(`/projects/${state.projectId}/documents/${draggedDocId}`, 'PATCH', {
+      await api(`/ projects / ${state.projectId} /documents/${draggedDocId} `, 'PATCH', {
         metadata: { ...sourceDoc.metadata, group: targetGroup, order: newOrder }
       });
 
@@ -1558,10 +1740,10 @@
       e.preventDefault();
 
       const options = [
-        { label: "?대쫫 蹂寃?(Rename)", action: () => promptRenameDoc(docId) },
-        { label: "洹몃９ ?대룞 (Move)", action: () => promptMoveGroup(docId) },
-        { label: "?붿닔 ?ㅼ젙 (Set No.)", action: () => promptEpisodeNo(docId) },
-        { label: "??젣 (Delete)", action: () => confirmDeleteDoc(docId), color: '#e74c3c' }
+        { label: "이름 변경", action: () => promptRenameDoc(docId) },
+        { label: "챕터 이동", action: () => promptMoveGroup(docId) },
+        { label: "회차 번호 설정", action: () => promptEpisodeNo(docId) },
+        { label: "삭제", action: () => confirmDeleteDoc(docId), color: '#e74c3c' }
       ];
 
       showCtxMenu(e.clientX, e.clientY, options);
@@ -1569,7 +1751,7 @@
 
     function promptRenameDoc(docId) {
       const doc = state.docs[docId];
-      const newTitle = prompt("蹂寃쏀븷 ?쒕ぉ:", doc.title);
+      const newTitle = prompt("새 제목을 입력하세요:", doc.title);
       if (newTitle && newTitle !== doc.title) {
         // Optimistic Update
         state.docs[docId].title = newTitle;
@@ -1581,9 +1763,9 @@
           document.getElementById('doc-title-input').value = newTitle;
         }
 
-        api(`/projects/${state.projectId}/documents/${docId}`, 'PATCH', { title: newTitle })
+        api(`/ projects / ${state.projectId} /documents/${docId} `, 'PATCH', { title: newTitle })
           .catch(e => {
-            alert("?대쫫 蹂寃??ㅽ뙣");
+            alert("이름 변경에 실패했습니다.");
             console.error(e);
             // Rollback? Simplified for now.
           });
@@ -1593,11 +1775,11 @@
     function promptMoveGroup(docId) {
       const doc = state.docs[docId];
       const currentGroup = (doc.metadata && doc.metadata.group) || "";
-      const newGroup = prompt("?대룞??洹몃９紐?(鍮꾩썙?먮㈃ '誘몃텇瑜?):", currentGroup);
+      const newGroup = prompt("이동할 챕터 이름을 입력하세요 (비워 두면 '미분류'):", currentGroup);
       if (newGroup !== null) {
         const meta = doc.metadata || {};
         meta.group = newGroup;
-        api(`/projects/${state.projectId}/documents/${docId}`, 'PATCH', { metadata: meta })
+        api(`/ projects / ${state.projectId} /documents/${docId} `, 'PATCH', { metadata: meta })
           .then(() => {
             state.docs[docId].metadata = meta; // local update
             refreshDocList();
@@ -1608,14 +1790,14 @@
     function promptEpisodeNo(docId) {
       const doc = state.docs[docId];
       const currentNo = (doc.metadata && doc.metadata.episode_no) || "";
-      const num = prompt("?붿닔 踰덊샇 (?レ옄留??낅젰):", currentNo);
+      const num = prompt("회차 번호를 입력하세요 (숫자만):", currentNo);
       if (num !== null) {
         const intNum = parseInt(num, 10);
-        if (isNaN(intNum)) return alert("?좏슚???レ옄媛 ?꾨떃?덈떎.");
+        if (isNaN(intNum)) return alert("유효한 숫자를 입력해주세요.");
 
         const meta = doc.metadata || {};
         meta.episode_no = intNum;
-        api(`/projects/${state.projectId}/documents/${docId}`, 'PATCH', { metadata: meta })
+        api(`/ projects / ${state.projectId} /documents/${docId} `, 'PATCH', { metadata: meta })
           .then(() => {
             state.docs[docId].metadata = meta;
             refreshDocList()
@@ -1624,8 +1806,8 @@
     }
 
     function confirmDeleteDoc(docId) {
-      if (confirm("?뺣쭚 ??臾몄꽌瑜???젣?섏떆寃좎뒿?덇퉴?")) {
-        api(`/projects/${state.projectId}/documents/${docId}`, 'DELETE')
+      if (confirm("정말 이 문서를 삭제하시겠습니까?")) {
+        api(`/ projects / ${state.projectId} /documents/${docId} `, 'DELETE')
           .then(() => {
             delete state.docs[docId];
             if (state.currentDocId === docId) {
@@ -1642,19 +1824,19 @@
       e.preventDefault();
 
       const options = [
-        { label: "洹몃９ ?대쫫 蹂寃?(Rename)", action: () => promptRenameGroup(groupName) },
+        { label: "챕터 이름 변경", action: () => promptRenameGroup(groupName) },
       ];
 
       showCtxMenu(e.clientX, e.clientY, options);
     }
 
     async function promptRenameGroup(oldName) {
-      const newName = prompt("??洹몃９ ?대쫫:", oldName);
+      const newName = prompt("새 챕터 이름을 입력하세요:", oldName);
       if (newName && newName !== oldName) {
-        showLoading("洹몃９ ?대쫫 蹂寃?以?..");
+        showLoading("챕터 이름 변경 중...");
 
         const groupDocs = Object.values(state.docs).filter(d => {
-          const g = (d.metadata && d.metadata.group) ? d.metadata.group : "誘몃텇瑜?;
+          const g = (d.metadata && d.metadata.group) ? d.metadata.group : "미분류";
           return g === oldName;
         });
 
@@ -1666,7 +1848,7 @@
         }));
 
         try {
-          await api(`/projects/${state.projectId}/documents/reorder`, 'POST', { updates });
+          await api(`/ projects / ${state.projectId} /documents/reorder`, 'POST', { updates });
           updates.forEach(u => {
             if (state.docs[u.doc_id].metadata) {
               state.docs[u.doc_id].metadata.group = newName;
@@ -1674,7 +1856,7 @@
           });
           refreshDocList();
         } catch (err) {
-          alert("洹몃９ ?대쫫 蹂寃??ㅽ뙣");
+          alert("챕터 이름 변경에 실패했습니다.");
           console.error(err);
         } finally {
           hideLoading();
@@ -1683,7 +1865,7 @@
     }
 
     async function createNewDoc() {
-      const title = "?쒕ぉ ?놁쓬";
+      const title = "제목 없음";
 
       // Type based on current tab
       let type = state.currentNavTab;
@@ -1691,15 +1873,15 @@
         // Ask subtype? For now default to SETTING
       }
 
-      showLoading("臾몄꽌 ?앹꽦 以?..");
+      showLoading("문서 생성 중...");
       try {
-        const res = await api(`/projects/${state.projectId}/documents`, 'POST', {
+        const res = await api(`/ projects / ${state.projectId}/documents`, 'POST', {
           title, type, content: ''
         });
         hideLoading();
         await refreshDocList();
         loadDoc(res.document.doc_id);
-      } catch (e) { hideLoading(); alert("?ㅽ뙣"); }
+      } catch (e) { hideLoading(); alert("문서 생성에 실패했습니다."); }
     }
 
     async function loadDoc(did) {
@@ -1715,7 +1897,7 @@
       document.getElementById('empty-state').style.display = 'none';
       if (document.getElementById('loading-overlay').classList.contains('active') === false) {
         // Only show local loading if not blocked by something else
-        // showLoading("臾몄꽌 濡쒕뵫 以?.."); // Might be too intrusive?
+        // showLoading("문서 로딩 중..."); // Might be too intrusive?
         // Let's just use the editor placeholder or opacity?
         document.getElementById('editor').style.opacity = '0.5';
       }
@@ -1735,7 +1917,7 @@
         state.lastSegmentFingerprints = _segmentTextForConsistency(loadedContent);
         state.lastVerdicts = [];
         clearInlineVerdictHighlights();
-        document.getElementById('save-status').innerText = "??λ맖";
+        document.getElementById('save-status').innerText = "저장됨";
         document.getElementById('save-status').style.color = "#aaa";
 
         document.getElementById('doc-type-badge').innerText = fullDoc.type || 'UNKNOWN';
@@ -1746,7 +1928,7 @@
         // hideLoading();
       } catch (e) {
         console.error("Load Doc Error", e);
-        document.getElementById('editor').innerText = "濡쒕뱶 ?ㅽ뙣";
+        document.getElementById('editor').innerText = "로드 실패";
         document.getElementById('editor').style.opacity = '1';
       }
     }
@@ -1761,8 +1943,8 @@
       state.assistantMode = mode;
 
       const btn = document.getElementById('assist-action-btn');
-      if (mode === 'CHECK') btn.innerText = "?ㅻ쪟 ?먭??섍린";
-      if (mode === 'SEARCH') btn.innerText = "愿???댁슜 李얘린";
+      if (mode === 'CHECK') btn.innerText = "오류 점검하기";
+      if (mode === 'SEARCH') btn.innerText = "기억 검색하기";
     }
 
     // --- API Helper for Jobs ---
@@ -1780,7 +1962,7 @@
               return;
             }
             if (status === 'FAILED' || status === 'CANCELED') {
-              reject(new Error(res.job.error || "?묒뾽 ?ㅽ뙣"));
+              reject(new Error(res.job.error || "작업 실패"));
               return;
             }
 
@@ -1845,6 +2027,13 @@
       if (pending.length === 0) return;
       const pendingKeys = new Set(pending.map((item) => `${item.start}:${item.end}`));
       state.backgroundConsistencyRunning = true;
+
+      const cStatus = document.getElementById('consistency-status');
+      if (cStatus) {
+        cStatus.innerText = "백그라운드 검사 중...";
+        cStatus.style.color = "#3498db";
+      }
+
       try {
         for (const segment of pending) {
           const payload = _buildConsistencyJobPayload(
@@ -1878,6 +2067,9 @@
       } catch (e) {
         console.error('background consistency failed', e);
       } finally {
+        const cStatus = document.getElementById('consistency-status');
+        if (cStatus) cStatus.innerText = "";
+
         state.backgroundConsistencyRunning = false;
         const queued = Array.isArray(state.pendingConsistencySegments) ? state.pendingConsistencySegments : [];
         state.pendingConsistencySegments = queued.filter((item) => {
@@ -1900,22 +2092,22 @@
     }
 
     function verdictLabel(verdict) {
-      if (verdict === 'VIOLATE') return '?ㅼ젙 異⑸룎';
-      if (verdict === 'OK') return '?뺥빀???묓샇';
-      return '?ъ떎 ?뺤씤 ?꾩슂';
+      if (verdict === 'VIOLATE') return '설정 충돌';
+      if (verdict === 'OK') return '정합성 양호';
+      return '사실 확인 필요';
     }
 
     async function runAssistantAction() {
-      if (!state.currentDocId) return alert("臾몄꽌瑜?癒쇱? ?ъ꽭??);
+      if (!state.currentDocId) return alert("문서를 먼저 여세요");
 
       const mode = state.assistantMode || 'CHECK';
       const contentPanel = document.getElementById('assistant-content');
 
       if (mode === 'SEARCH') {
-        contentPanel.innerHTML = '<div style="text-align:center; padding:20px; color:#666;"><img src="/assets/img.gif" width="30"> 愿???댁슜 ?먯깋 以?..</div>';
+        contentPanel.innerHTML = '<div style="text-align:center; padding:20px; color:#666;"><img src="/assets/img.gif" width="30"> 관련 내용을 검색 중입니다...</div>';
         try {
           const editor = document.getElementById('editor');
-          const query = editor.innerText.substring(0, 500) || "?댁슜 ?놁쓬"; // Contextual search
+          const query = editor.innerText.substring(0, 500) || "내용 없음"; // Contextual search
 
           // Try Sync Retrieval (FTS)
           const res = await api('/query/retrieval', 'POST', {
@@ -1925,16 +2117,16 @@
           });
 
           if (!res.results || res.results.length === 0) {
-            contentPanel.innerHTML = '<div style="padding:20px; text-align:center;">愿?⑤맂 ?댁슜??李얠쓣 ???놁뒿?덈떎.</div>';
+            contentPanel.innerHTML = '<div style="padding:20px; text-align:center;">관련된 내용을 찾지 못했습니다.</div>';
             return;
           }
 
-          let html = '<div style="padding:10px;"><strong>寃??寃곌낵</strong></div>';
+          let html = '<div style="padding:10px;"><strong>검색 결과</strong></div>';
           res.results.forEach((r) => {
             const evidence = (r && typeof r === 'object' && typeof r.evidence === 'object') ? r.evidence : {};
             const docId = evidence.doc_id || r.doc_id || '';
-            const snippet = evidence.snippet_text || r.snippet || '(?ㅻ땲???놁쓬)';
-            const title = (docId && state.docs[docId] && state.docs[docId].title) ? state.docs[docId].title : (docId || '臾몄꽌');
+            const snippet = evidence.snippet_text || r.snippet || '(본문 발췌 없음)';
+            const title = (docId && state.docs[docId] && state.docs[docId].title) ? state.docs[docId].title : (docId || '문서');
             const score = Number(r.score || 0);
             html += `
                     <div class="analysis-card info" style="cursor:pointer;" data-doc-id="${escapeHtml(docId)}">
@@ -1942,7 +2134,7 @@
                         <div style="font-size:0.8rem; color:#666; margin-top:5px;">
                             ${escapeHtml(snippet)}
                         </div>
-                        <div style="font-size:0.75rem; color:#999; margin-top:5px;">?먯닔: ${Number.isFinite(score) ? score.toFixed(3) : '-'}</div>
+                        <div style="font-size:0.75rem; color:#999; margin-top:5px;">점수: ${Number.isFinite(score) ? score.toFixed(3) : '-'}</div>
                     </div>
                 `;
           });
@@ -1956,13 +2148,13 @@
 
         } catch (e) {
           console.error(e);
-          contentPanel.innerHTML = `<div style="text-align:center; padding:20px; color:red;">寃???ㅽ뙣<br>${e.message}</div>`;
+          contentPanel.innerHTML = `<div style="text-align:center; padding:20px; color:red;">검색 실패<br>${e.message}</div>`;
         }
         return;
       }
 
       // CHECK Mode
-      contentPanel.innerHTML = '<div style="text-align:center; padding:20px;"><img src="/assets/img.gif" width="40" alt="loading"><br>AI媛 遺꾩꽍 以묒엯?덈떎... <span id="check-progress">0%</span></div>';
+      contentPanel.innerHTML = '<div style="text-align:center; padding:20px;"><img src="/assets/img.gif" width="40" alt="loading"><br>AI가 분석 중입니다... <span id="check-progress">0%</span></div>';
 
       try {
         // 1. Submit Job
@@ -1996,11 +2188,11 @@
         });
 
         renderVerdicts(vRes.verdicts || []);
-        showSuccess("?먭????꾨즺?섏뿀?듬땲??");
+        showSuccess("점검이 완료되었습니다.");
 
       } catch (e) {
         console.error(e);
-        contentPanel.innerHTML = `<div style="color:red; padding:20px;">遺꾩꽍 ?ㅽ뙣: ${e.message}</div>`;
+        contentPanel.innerHTML = `<div style="color:red; padding:20px;">분석 실패: ${e.message}</div>`;
       }
     }
 
@@ -2016,27 +2208,27 @@
       if (visible.length === 0) {
         clearInlineVerdictHighlights();
         contentPanel.innerHTML = showOk
-          ? '<div style="padding:20px; text-align:center;">No consistency verdicts found.</div>'
-          : '<div style="padding:20px; text-align:center;">No VIOLATE/UNKNOWN verdicts found.</div>';
+          ? '<div style="padding:20px; text-align:center;">정합성 판정 결과가 없습니다.</div>'
+          : '<div style="padding:20px; text-align:center;">충돌 또는 확인 필요 항목이 없습니다.</div>';
         return;
       }
 
       let html = '';
       if (options && options.background) {
-        html += '<div style="padding:8px 10px; font-size:0.8rem; color:#64748b;">Background check updated changed segments.</div>';
+        html += '<div style="padding:8px 10px; font-size:0.8rem; color:#64748b;">백그라운드 점검으로 변경 구간 결과가 갱신되었습니다.</div>';
       }
       visible.forEach((v, idx) => {
         const verdict = String(v.verdict || 'UNKNOWN');
         const severityClass = verdict === 'VIOLATE' ? 'error' : (verdict === 'UNKNOWN' ? 'unknown' : 'info');
         const title = verdictLabel(verdict);
-        const claimText = (typeof v.claim_text === 'string' && v.claim_text.trim()) ? v.claim_text : 'N/A';
+        const claimText = (typeof v.claim_text === 'string' && v.claim_text.trim()) ? v.claim_text : '내용 없음';
         const unknownReasonsRaw = Array.isArray(v.unknown_reasons) ? v.unknown_reasons : [];
         const unknownReasons = unknownReasonsRaw
           .map((item) => String(item || '').trim())
           .filter((item) => item.length > 0);
         const unknownReasonText = unknownReasons.length > 0
           ? unknownReasons.join(', ')
-          : 'Insufficient evidence or ambiguity';
+          : '근거가 부족하거나 의미가 모호합니다.';
         const reliability = Number(v.reliability_overall || 0);
         const segmentSpan = (v && typeof v.segment_span === 'object') ? v.segment_span : {};
         const spanStart = Number.isInteger(segmentSpan.start) ? segmentSpan.start : null;
@@ -2050,14 +2242,14 @@
                     <strong>${escapeHtml(title)}</strong>
                     <p style="font-size:0.9rem; margin:5px 0;">${escapeHtml(claimText)}</p>
                     <div style="font-size:0.78rem; color:#666; margin-bottom:8px;">
-                      verdict: ${escapeHtml(verdict)} | reliability: ${Number.isFinite(reliability) ? reliability.toFixed(2) : '-'} | span: ${escapeHtml(spanLabel)}
+                      판정: ${escapeHtml(verdict)} | 신뢰도: ${Number.isFinite(reliability) ? reliability.toFixed(2) : '-'} | 범위: ${escapeHtml(spanLabel)}
                     </div>
-                    ${verdict === 'UNKNOWN' ? `<div style="font-size:0.78rem; color:#64748b; margin-bottom:8px;">reason: ${escapeHtml(unknownReasonText)}</div>` : ''}
+                    ${verdict === 'UNKNOWN' ? `<div style="font-size:0.78rem; color:#64748b; margin-bottom:8px;">사유: ${escapeHtml(unknownReasonText)}</div>` : ''}
                     <div style="display:flex; gap:8px; margin-bottom:8px;">
-                      <button class="btn btn-secondary jump-claim" data-claim="${escapeHtml(claimText)}" data-span-start="${spanStart !== null ? spanStart : ''}" data-span-end="${spanEnd !== null ? spanEnd : ''}">Jump to text</button>
-                      <button class="btn btn-secondary load-verdict-detail" data-vid="${escapeHtml(vid)}" data-target="${escapeHtml(detailId)}" ${vid ? '' : 'disabled'}>Load evidence</button>
-                      <button class="btn btn-secondary verdict-whitelist" data-claim="${escapeHtml(claimText)}">Whitelist</button>
-                      <button class="btn btn-secondary verdict-ignore" data-claim="${escapeHtml(claimText)}">Ignore</button>
+                      <button class="btn btn-secondary jump-claim" data-claim="${escapeHtml(claimText)}" data-span-start="${spanStart !== null ? spanStart : ''}" data-span-end="${spanEnd !== null ? spanEnd : ''}">본문으로 이동</button>
+                      <button class="btn btn-secondary load-verdict-detail" data-vid="${escapeHtml(vid)}" data-target="${escapeHtml(detailId)}" ${vid ? '' : 'disabled'}>근거 보기</button>
+                      <button class="btn btn-secondary verdict-whitelist" data-claim="${escapeHtml(claimText)}">허용 목록</button>
+                      <button class="btn btn-secondary verdict-ignore" data-claim="${escapeHtml(claimText)}">무시</button>
                     </div>
                     <div id="${escapeHtml(detailId)}" style="font-size:0.8rem; color:#555;"></div>
                 </div>
@@ -2125,7 +2317,7 @@
         await refreshVerdictsForCurrentDoc();
       } catch (e) {
         console.error('failed to whitelist verdict', e);
-        alert(`Failed to whitelist: ${e.message}`);
+        alert(`허용 목록 추가 실패: ${e.message}`);
       }
     }
 
@@ -2141,14 +2333,14 @@
         await refreshVerdictsForCurrentDoc();
       } catch (e) {
         console.error('failed to ignore verdict', e);
-        alert(`Failed to ignore: ${e.message}`);
+        alert(`무시 처리 실패: ${e.message}`);
       }
     }
 
     async function loadVerdictDetail(vid, targetId) {
       const target = document.getElementById(targetId);
       if (!target || !vid || !state.projectId) return;
-      target.innerHTML = '<span style="color:#888;">Loading evidence...</span>';
+      target.innerHTML = '<span style="color:#888;">근거를 불러오는 중...</span>';
       try {
         const res = await api(`/query/verdicts/${encodeURIComponent(vid)}?project_id=${encodeURIComponent(state.projectId)}`);
         const evidenceItemsRaw = Array.isArray(res.evidence) ? res.evidence : [];
@@ -2173,24 +2365,24 @@
 
         let html = `
           <div style="margin-bottom:8px; padding:8px; background:#f8fafc; border-radius:6px;">
-            <div><strong>whitelisted:</strong> ${whitelisted}</div>
-            <div><strong>ignored:</strong> ${ignored}</div>
-            <div><strong>verdict:</strong> ${escapeHtml(verdictType)}</div>
-            <div><strong>claim_fingerprint:</strong> ${escapeHtml(claimFingerprint)}</div>
-            <div><strong>unknown_reasons:</strong> ${escapeHtml(unknownReasons.length > 0 ? unknownReasons.join(', ') : '-')}</div>
-            <div><strong>contradict_evidence_count:</strong> ${contradictCount}</div>
+            <div><strong>허용 목록 포함:</strong> ${whitelisted}</div>
+            <div><strong>무시 처리:</strong> ${ignored}</div>
+            <div><strong>판정:</strong> ${escapeHtml(verdictType)}</div>
+            <div><strong>클레임 식별값:</strong> ${escapeHtml(claimFingerprint)}</div>
+            <div><strong>확인 필요 사유:</strong> ${escapeHtml(unknownReasons.length > 0 ? unknownReasons.join(', ') : '-')}</div>
+            <div><strong>반박 근거 수:</strong> ${contradictCount}</div>
           </div>
         `;
         if (verdictType === 'VIOLATE' && contradictCount <= 0) {
           html += `
             <div style="margin-bottom:8px; padding:8px; border-radius:6px; background:#fff7ed; color:#9a3412;">
-              CONTRADICT evidence link missing: verdict may be downgraded to UNKNOWN by engine policy.
+              반박(CONTRADICT) 근거 연결이 없어 엔진 정책에 따라 판정이 UNKNOWN으로 하향될 수 있습니다.
             </div>
           `;
         }
 
         if (factPaths.length > 0) {
-          html += '<div style="margin-bottom:8px;"><strong>fact_paths</strong></div>';
+          html += '<div style="margin-bottom:8px;"><strong>연관 사실 경로</strong></div>';
           factPaths.forEach((pathItem) => {
             const role = String(pathItem?.role || '-');
             const tagPath = String(pathItem?.tag_path || '-');
@@ -2198,15 +2390,15 @@
             html += `
               <div style="margin-bottom:6px; padding:6px 8px; background:#eff6ff; border-radius:6px;">
                 <div style="font-weight:600;">${escapeHtml(role)}</div>
-                <div>tag_path: ${escapeHtml(tagPath)}</div>
-                <div>entity_id: ${escapeHtml(entityId)}</div>
+                <div>태그 경로: ${escapeHtml(tagPath)}</div>
+                <div>엔티티 ID: ${escapeHtml(entityId)}</div>
               </div>
             `;
           });
         }
 
         if (evidenceItems.length === 0) {
-          target.innerHTML = `${html}<span style="color:#888;">No linked evidence.</span>`;
+          target.innerHTML = `${html}<span style="color:#888;">연결된 근거가 없습니다.</span>`;
           return;
         }
         evidenceItems.forEach((item) => {
@@ -2214,19 +2406,19 @@
           const role = String(item.role || '-');
           const docId = String(ev.doc_id || '-');
           const tagPath = String(ev.tag_path || '-');
-          const snippet = String(ev.snippet_text || '(no snippet)');
+          const snippet = String(ev.snippet_text || '(본문 발췌 없음)');
           html += `
             <div style="margin-bottom:6px; padding:6px 8px; background:#f8fafc; border-radius:6px;">
               <div style="font-weight:600;">${escapeHtml(role)}</div>
-              <div>doc: ${escapeHtml(docId)}</div>
-              <div>tag: ${escapeHtml(tagPath)}</div>
+              <div>문서: ${escapeHtml(docId)}</div>
+              <div>태그: ${escapeHtml(tagPath)}</div>
               <div style="color:#666;">${escapeHtml(snippet)}</div>
             </div>
           `;
         });
         target.innerHTML = html;
       } catch (e) {
-        target.innerHTML = `<span style="color:red;">Failed to load evidence: ${escapeHtml(e.message || String(e))}</span>`;
+        target.innerHTML = `<span style="color:red;">근거 불러오기에 실패했습니다: ${escapeHtml(e.message || String(e))}</span>`;
       }
     }
 
@@ -2323,10 +2515,10 @@
       document.getElementById('export-modal').classList.remove('active');
     }
     async function handleExport() {
-      if (!state.currentDocId) return alert("臾몄꽌瑜??댁뼱二쇱꽭??);
+      if (!state.currentDocId) return alert("문서를 열어주세요");
       const format = document.querySelector('input[name="export-fmt"]:checked').value;
 
-      showLoading("?뚯씪 以鍮?以?..");
+      showLoading("파일 준비 중...");
       try {
         const res = await api('/jobs', 'POST', {
           type: 'EXPORT',
@@ -2357,7 +2549,7 @@
           link.click();
           document.body.removeChild(link);
         } else {
-          alert("?대낫?닿린 ?꾨즺 (?ㅼ슫濡쒕뱶 URL ?놁쓬)");
+          alert("내보내기 완료 (다운로드 URL 없음)");
         }
 
         hideLoading();
@@ -2365,19 +2557,19 @@
       } catch (e) {
         hideLoading();
         console.error(e);
-        alert("?대낫?닿린 ?ㅽ뙣: " + e.message);
+        alert("내보내기 실패: " + e.message);
       }
     }
 
     async function createNewChapter() {
-      const chapterName = prompt("??梨뺥꽣(洹몃９) ?대쫫???낅젰?섏꽭??");
+      const chapterName = prompt("새 챕터(그룹) 이름을 입력하세요");
       if (!chapterName) return;
 
-      showLoading("梨뺥꽣 ?앹꽦 以?..");
+      showLoading("챕터 생성 중...");
       try {
         // Create a placeholder doc for this chapter
         const res = await api(`/projects/${state.projectId}/documents`, 'POST', {
-          title: `${chapterName} - ?쒕쭑`,
+          title: `${chapterName} - 서막`,
           type: 'EPISODE',
           content: '',
           metadata: { group: chapterName, order: 0, episode_no: 1 }
@@ -2387,7 +2579,7 @@
         loadDoc(res.document.doc_id);
       } catch (e) {
         hideLoading();
-        alert("梨뺥꽣 ?앹꽦 ?ㅽ뙣");
+        alert("챕터 생성에 실패했습니다.");
         console.error(e);
       }
     }
@@ -2449,7 +2641,7 @@
 
       let targetGroup = targetGroupName;
       if (!targetGroup) {
-        targetGroup = (targetDoc.metadata && targetDoc.metadata.group) || "誘몃텇瑜?;
+        targetGroup = (targetDoc.metadata && targetDoc.metadata.group) || "미분류";
       }
 
       // Flexible Sorting: Check Drop Position (Before or After)
@@ -2463,7 +2655,7 @@
 
       // Get Group Docs sorted
       const groupDocs = Object.values(state.docs).filter(d => {
-        const g = (d.metadata && d.metadata.group) || "誘몃텇瑜?;
+        const g = (d.metadata && d.metadata.group) || "미분류";
         return g === targetGroup;
       }).sort((a, b) => (a.metadata?.order || 0) - (b.metadata?.order || 0));
 
@@ -2516,7 +2708,7 @@
       // Move to this group, append to end (order = max + 10)
 
       const groupDocs = Object.values(state.docs).filter(d => {
-        const g = (d.metadata && d.metadata.group) || "誘몃텇瑜?;
+        const g = (d.metadata && d.metadata.group) || "미분류";
         return g === targetGroupName;
       });
 

@@ -14,3 +14,4 @@ test_files
 *.cmd
 *.sqlite3-shm
 *.sqlite3-wal
+.agents/rules/window.md
