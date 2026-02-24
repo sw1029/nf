@@ -1,179 +1,142 @@
 ﻿<!doctype html>
 <html lang="ko">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>NF 집필 연구</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Noto+Serif+KR:wght@300;400;600&display=swap"
-      rel="stylesheet"
-    />
-    <script src="https://unpkg.com/lucide@latest"></script>
-        <link rel="stylesheet" href="/assets/user_ui.styles.css" />
 
-  </head>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NF 집필 연구</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Noto+Serif+KR:wght@300;400;600&display=swap"
+    rel="stylesheet" />
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="/assets/user_ui.styles.css" />
 
-  <body>
-    <!-- Loading Overlay -->
-    <div id="loading-overlay" class="overlay">
-      <div
-        style="
+</head>
+
+<body>
+  <!-- Loading Overlay -->
+  <div id="loading-overlay" class="overlay">
+    <div style="
           text-align: center;
           background: white;
           padding: 20px;
           border-radius: 12px;
-        "
-      >
-        <img src="/assets/img.gif" class="loading-spinner" alt="Loading..." />
-        <p
-          id="loading-text"
-          style="color: var(--text-secondary); margin-top: 10px"
-        >
-          처리 중입니다...
-        </p>
-      </div>
+        ">
+      <img src="/assets/img.gif" class="loading-spinner" alt="Loading..." />
+      <p id="loading-text" style="color: var(--text-secondary); margin-top: 10px">
+        처리 중입니다...
+      </p>
     </div>
+  </div>
 
-    <!-- Success Popup -->
-    <div id="success-popup" class="overlay">
-      <div class="modal">
-        <img src="/assets/check.png" class="success-icon" alt="Success" />
-        <h3 id="success-title">완료되었습니다.</h3>
-        <p
-          id="success-message"
-          style="color: var(--text-secondary); margin-bottom: 20px"
-        ></p>
-        <button class="btn btn-primary" onclick="closeSuccessPopup()">
-          확인
+  <!-- Success Popup -->
+  <div id="success-popup" class="overlay">
+    <div class="modal">
+      <img src="/assets/check.png" class="success-icon" alt="Success" />
+      <h3 id="success-title">완료되었습니다.</h3>
+      <p id="success-message" style="color: var(--text-secondary); margin-bottom: 20px"></p>
+      <button class="btn btn-primary" onclick="closeSuccessPopup()">
+        확인
+      </button>
+    </div>
+  </div>
+
+  <!-- Setup Modal (Project Select) -->
+  <div id="setup-modal" class="overlay active">
+    <div class="modal" style="text-align: left">
+      <h2 style="margin-top: 0">환영합니다.</h2>
+      <p style="color: #666; margin-bottom: 20px">
+        작업할 프로젝트를 선택하거나 새로 만드세요.
+      </p>
+
+      <label style="display: block; margin-bottom: 5px; font-size: 0.9rem">기존 프로젝트 불러오기</label>
+      <select id="project-select" style="
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 20px;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+          "></select>
+
+      <div style="text-align: center; color: #aaa; margin-bottom: 20px">
+        - 또는 -
+      </div>
+      <label style="display: block; margin-bottom: 5px; font-size: 0.9rem">새 프로젝트 이름</label>
+      <input id="new-project-name" style="
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 20px;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+          " placeholder="나만의 멋진 소설" />
+
+      <div style="display: flex; gap: 10px">
+        <button class="btn btn-primary" style="flex: 1" onclick="handleCreateProject()">
+          새 프로젝트 시작
+        </button>
+        <button class="btn btn-secondary" style="flex: 1" onclick="handleLoadProject()">
+          불러오기
         </button>
       </div>
     </div>
+  </div>
 
-    <!-- Setup Modal (Project Select) -->
-    <div id="setup-modal" class="overlay active">
-      <div class="modal" style="text-align: left">
-        <h2 style="margin-top: 0">환영합니다.</h2>
-        <p style="color: #666; margin-bottom: 20px">
-          작업할 프로젝트를 선택하거나 새로 만드세요.
-        </p>
-
-        <label style="display: block; margin-bottom: 5px; font-size: 0.9rem"
-          >기존 프로젝트 불러오기</label
-        >
-        <select
-          id="project-select"
-          style="
-            width: 100%;
-            padding: 10px;
-            margin-bottom: 20px;
-            border-radius: 6px;
-            border: 1px solid #ddd;
-          "
-        ></select>
-
-        <div style="text-align: center; color: #aaa; margin-bottom: 20px">
-          - 또는 -
-        </div>
-        <label style="display: block; margin-bottom: 5px; font-size: 0.9rem"
-          >새 프로젝트 이름</label
-        >
-        <input
-          id="new-project-name"
-          style="
-            width: 100%;
-            padding: 10px;
-            margin-bottom: 20px;
-            border-radius: 6px;
-            border: 1px solid #ddd;
-          "
-          placeholder="나만의 멋진 소설"
-        />
-
-        <div style="display: flex; gap: 10px">
-          <button
-            class="btn btn-primary"
-            style="flex: 1"
-            onclick="handleCreateProject()"
-          >
-            새 프로젝트 시작
-          </button>
-          <button
-            class="btn btn-secondary"
-            style="flex: 1"
-            onclick="handleLoadProject()"
-          >
-            불러오기
-          </button>
+  <div id="app-container">
+    <!-- Left Sidebar: Navigation -->
+    <aside class="sidebar" id="nav-sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title">NF Studio</div>
+        <div style="font-size: 0.8rem; color: #888" id="current-project-label">
+          -
         </div>
       </div>
-    </div>
 
-    <div id="app-container">
-      <!-- Left Sidebar: Navigation -->
-      <aside class="sidebar" id="nav-sidebar">
-        <div class="sidebar-header">
-          <div class="sidebar-title">NF Studio</div>
-          <div
-            style="font-size: 0.8rem; color: #888"
-            id="current-project-label"
-          >
-            -
-          </div>
-        </div>
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchNavTab('EPISODE')">
+          본문
+        </button>
+        <button class="tab-btn" onclick="switchNavTab('SETTING')">
+          설정
+        </button>
+        <button class="tab-btn" onclick="switchNavTab('PLOT')">구상</button>
+        <button class="tab-btn" onclick="switchNavTab('TIMELINE')">
+          타임라인
+        </button>
+      </div>
 
-        <div class="tabs">
-          <button class="tab-btn active" onclick="switchNavTab('EPISODE')">
-            본문
-          </button>
-          <button class="tab-btn" onclick="switchNavTab('SETTING')">
-            설정
-          </button>
-          <button class="tab-btn" onclick="switchNavTab('PLOT')">구상</button>
-          <button class="tab-btn" onclick="switchNavTab('TIMELINE')">
-            타임라인
-          </button>
-        </div>
+      <div style="padding: 10px; display: flex; gap: 5px">
+        <button class="btn btn-primary"
+          style="flex: 1; display:flex; align-items:center; justify-content:center; gap:6px;" onclick="createNewDoc()">
+          <i data-lucide="file-plus" style="width:16px; height:16px;"></i> 새 문서
+        </button>
+        <button class="btn btn-secondary"
+          style="flex: 1; display:flex; align-items:center; justify-content:center; gap:6px;"
+          onclick="createNewChapter()">
+          <i data-lucide="folder-plus" style="width:16px; height:16px;"></i> 새 챕터
+        </button>
+      </div>
 
-        <div style="padding: 10px; display: flex; gap: 5px">
-          <button
-            class="btn btn-primary"
-            style="flex: 1; display:flex; align-items:center; justify-content:center; gap:6px;"
-            onclick="createNewDoc()"
-          >
-            <i data-lucide="file-plus" style="width:16px; height:16px;"></i> 새 문서
-          </button>
-          <button
-            class="btn btn-secondary"
-            style="flex: 1; display:flex; align-items:center; justify-content:center; gap:6px;"
-            onclick="createNewChapter()"
-          >
-            <i data-lucide="folder-plus" style="width:16px; height:16px;"></i> 새 챕터
-          </button>
-        </div>
+      <div id="doc-list" class="list-container">
+        <!-- Rendered via JS -->
+      </div>
 
-        <div id="doc-list" class="list-container">
-          <!-- Rendered via JS -->
-        </div>
+      <div id="timeline-view" class="list-container" style="display: none;">
+        <!-- Rendered via JS for visual time axis -->
+      </div>
 
-        <div style="padding: 20px; border-top: 1px solid var(--border-color)">
-          <button
-            class="btn btn-secondary"
-            style="width: 100%"
-            onclick="exitProject()"
-          >
-            프로젝트 나가기
-          </button>
-        </div>
-      </aside>
+      <div style="padding: 20px; border-top: 1px solid var(--border-color)">
+        <button class="btn btn-secondary" style="width: 100%" onclick="exitProject()">
+          프로젝트 나가기
+        </button>
+      </div>
+    </aside>
 
-      <!-- Main Content -->
-      <main class="main-content" style="position: relative">
-        <!-- Placeholder -->
-        <div
-          id="empty-state"
-          style="
+    <!-- Main Content -->
+    <main class="main-content" style="position: relative">
+      <!-- Placeholder -->
+      <div id="empty-state" style="
             position: absolute;
             top: 0;
             left: 0;
@@ -186,28 +149,25 @@
             justify-content: center;
             align-items: center;
             color: #ccc;
-          "
-        >
-          <div style="margin-bottom: 20px; color:#cbd5e1;">
-            <i data-lucide="book-open" style="width:64px; height:64px;" stroke-width="1.5"></i>
-          </div>
-          <div style="font-size: 1.2rem">문서를 선택하거나 새로 만드세요</div>
-          <div style="margin-top: 20px">
-            <button class="btn btn-primary" onclick="createNewDoc()">
-              새 문서 만들기
-            </button>
-          </div>
+          ">
+        <div style="margin-bottom: 20px; color:#cbd5e1;">
+          <i data-lucide="book-open" style="width:64px; height:64px;" stroke-width="1.5"></i>
         </div>
+        <div style="font-size: 1.2rem">문서를 선택하거나 새로 만드세요</div>
+        <div style="margin-top: 20px">
+          <button class="btn btn-primary" onclick="createNewDoc()">
+            새 문서 만들기
+          </button>
+        </div>
+      </div>
 
-        <!-- Toolbar -->
-        <div class="toolbar">
-          <div style="display: flex; align-items: center">
-            <button class="mobile-menu-btn" onclick="toggleLeftSidebar()">
-              ☰
-            </button>
-            <span
-              id="doc-type-badge"
-              style="
+      <!-- Toolbar -->
+      <div class="toolbar">
+        <div style="display: flex; align-items: center">
+          <button class="mobile-menu-btn" onclick="toggleLeftSidebar()">
+            ☰
+          </button>
+          <span id="doc-type-badge" style="
                 background: #eee;
                 padding: 4px 8px;
                 border-radius: 4px;
@@ -215,392 +175,359 @@
                 margin-right: 10px;
                 font-weight: 600;
                 margin-left: 10px;
-              "
-              >유형</span
-            >
-            <input
-              id="doc-title-input"
-              class="doc-title-input"
-              placeholder="제목을 입력하세요"
-              oninput="handleInput()"
-              onclick="this.select()"
-            />
+              ">유형</span>
+          <input id="doc-title-input" class="doc-title-input" placeholder="제목을 입력하세요" oninput="handleInput()"
+            onclick="this.select()" />
+        </div>
+
+        <div style="display: flex; gap: 10px; align-items: center">
+          <!-- Custom Status Widgets -->
+          <div id="memory-pressure-badge" class="status-badge warning" style="display: none"
+            title="시스템 안정화를 위해 잠시 대기 중입니다. 곧 재개됩니다.">
+            <i data-lucide="alert-triangle" style="width:14px; height:14px; margin-right:4px;"></i>
+            <span class="text" style="margin-left: 4px">시스템 대기 중</span>
           </div>
 
-          <div style="display: flex; gap: 10px; align-items: center">
-            <!-- Custom Status Widgets -->
-            <div
-              id="memory-pressure-badge"
-              class="status-badge warning"
-              style="display: none"
-              title="시스템 안정화를 위해 잠시 대기 중입니다. 곧 재개됩니다."
-            >
-              <i data-lucide="alert-triangle" style="width:14px; height:14px; margin-right:4px;"></i>
-              <span class="text" style="margin-left: 4px">시스템 대기 중</span>
-            </div>
+          <div id="jobs-status-badge" class="status-badge" onclick="toggleJobsPanel()">
+            <i data-lucide="activity" style="width:14px; height:14px; margin-right:4px;"></i>
+            <span class="text" id="jobs-status-text">작업 대기</span>
+          </div>
 
-            <div
-              id="jobs-status-badge"
-              class="status-badge"
-              onclick="toggleJobsPanel()"
-            >
-              <i data-lucide="activity" style="width:14px; height:14px; margin-right:4px;"></i>
-              <span class="text" id="jobs-status-text">작업 대기</span>
-            </div>
+          <div id="consistency-badge" class="status-badge" title="클릭하여 백그라운드 점검 상태 확인"
+            onclick="toggleConsistencyPanel()">
+            <i data-lucide="eye" style="width:14px; height:14px; margin-right:4px;"></i>
+            <span class="text" id="consistency-status-text">상시 검토 중</span>
+          </div>
 
-            <div
-              id="consistency-badge"
-              class="status-badge"
-              title="클릭하여 백그라운드 점검 상태 확인"
-              onclick="toggleConsistencyPanel()"
-            >
-              <i data-lucide="eye" style="width:14px; height:14px; margin-right:4px;"></i>
-              <span class="text" id="consistency-status-text"
-                >상시 검토 중</span
-              >
-            </div>
-
-            <span
-              id="save-status"
-              style="
+          <span id="save-status" style="
                 font-size: 0.8rem;
                 color: #aaa;
                 margin-right: 5px;
                 margin-left: 5px;
-              "
-              >저장됨</span
-            >
-            <button
-              class="btn btn-secondary"
-              style="display:flex; align-items:center; gap:6px;"
-              onclick="openExportModal()"
-              title="문서 내보내기"
-            >
-              <i data-lucide="download" style="width:16px; height:16px;"></i> 내보내기
-            </button>
-            <button
-              class="btn btn-icon"
-              onclick="toggleConfigPanel()"
-              title="화면 설정"
-            >
-              <i data-lucide="settings" style="width:20px; height:20px;"></i>
-            </button>
-            <button
-              class="btn btn-icon"
-              style="background: #f1f5f9; color: var(--accent-primary); display:flex; align-items:center; padding: 6px 12px; gap:4px;"
-              onclick="toggleRightSidebar()"
-              title="AI 작가 도우미 메뉴"
-            >
-              <i data-lucide="sparkles" style="width:16px; height:16px;"></i>
-              <span
-                style="font-size: 0.8rem; font-weight: bold; margin-left: 2px"
-                >도우미</span
-              >
-            </button>
-          </div>
+              ">저장됨</span>
+          <button class="btn btn-secondary" style="display:flex; align-items:center; gap:6px;"
+            onclick="openExportModal()" title="문서 내보내기">
+            <i data-lucide="download" style="width:16px; height:16px;"></i> 내보내기
+          </button>
+          <button class="btn btn-icon" onclick="toggleConfigPanel()" title="화면 설정">
+            <i data-lucide="settings" style="width:20px; height:20px;"></i>
+          </button>
+          <button class="btn btn-icon"
+            style="background: #f1f5f9; color: var(--accent-primary); display:flex; align-items:center; padding: 6px 12px; gap:4px;"
+            onclick="toggleRightSidebar()" title="AI 작가 도우미 메뉴">
+            <i data-lucide="sparkles" style="width:16px; height:16px;"></i>
+            <span style="font-size: 0.8rem; font-weight: bold; margin-left: 2px">도우미</span>
+          </button>
         </div>
+      </div>
 
-        <!-- Jobs Panel Widget -->
-        <div id="jobs-panel" class="jobs-widget">
-          <div class="jobs-header">
-            <span style="font-size: 0.9rem">백그라운드 작업</span>
-            <button
-              class="btn-icon"
-              style="font-size: 0.8rem; padding: 2px 6px"
-              onclick="fetchRecentJobs()"
-            >
-              🔄 새로고침
-            </button>
-          </div>
-          <div id="jobs-list-content" class="jobs-list">
-            <div
-              style="
+      <!-- Jobs Panel Widget -->
+      <div id="jobs-panel" class="jobs-widget">
+        <div class="jobs-header">
+          <span style="font-size: 0.9rem">백그라운드 작업</span>
+          <button class="btn-icon" style="font-size: 0.8rem; padding: 2px 6px" onclick="fetchRecentJobs()">
+            🔄 새로고침
+          </button>
+        </div>
+        <div id="jobs-list-content" class="jobs-list">
+          <div style="
                 text-align: center;
                 color: #94a3b8;
                 font-size: 0.85rem;
                 padding: 10px;
-              "
-            >
-              작업 내역이 없습니다.
-            </div>
+              ">
+            작업 내역이 없습니다.
           </div>
         </div>
+      </div>
 
-        <!-- Consistency Detail Panel (Pop-over from badge) -->
-        <div
-          id="consistency-panel"
-          class="jobs-widget"
-          style="right: 150px; width: 280px"
-        >
-          <div class="jobs-header">
-            <span style="font-size: 0.9rem">배경 점검 상태</span>
-            <button
-              class="btn-icon"
-              style="font-size: 1rem; padding: 0 4px"
-              onclick="toggleConsistencyPanel()"
-            >
-              ×
-            </button>
+      <!-- Consistency Detail Panel (Pop-over from badge) -->
+      <div id="consistency-panel" class="jobs-widget" style="right: 150px; width: 280px">
+        <div class="jobs-header">
+          <span style="font-size: 0.9rem">배경 점검 상태</span>
+          <button class="btn-icon" style="font-size: 1rem; padding: 0 4px" onclick="toggleConsistencyPanel()">
+            ×
+          </button>
+        </div>
+        <div class="jobs-list" style="padding: 15px">
+          <div style="font-size: 0.85rem; color: #475569; margin-bottom: 10px">
+            <strong>대기 중인 단락:</strong>
+            <span id="consistency-queued-count">0</span>건
           </div>
-          <div class="jobs-list" style="padding: 15px">
-            <div
-              style="font-size: 0.85rem; color: #475569; margin-bottom: 10px"
-            >
-              <strong>대기 중인 단락:</strong>
-              <span id="consistency-queued-count">0</span>건
-            </div>
-            <div
-              style="font-size: 0.85rem; color: #475569; margin-bottom: 10px"
-            >
-              <strong>최근 완료 시간:</strong>
-              <span id="consistency-last-time">-</span>
-            </div>
-            <hr
-              style="border: 0; border-top: 1px dashed #e2e8f0; margin: 10px 0"
-            />
-            <div
-              id="consistency-details-list"
-              style="
+          <div style="font-size: 0.85rem; color: #475569; margin-bottom: 10px">
+            <strong>최근 완료 시간:</strong>
+            <span id="consistency-last-time">-</span>
+          </div>
+          <hr style="border: 0; border-top: 1px dashed #e2e8f0; margin: 10px 0" />
+          <div id="consistency-details-list" style="
                 font-size: 0.8rem;
                 color: #64748b;
                 max-height: 150px;
                 overflow-y: auto;
-              "
-            >
-              진행 중인 범위가 없습니다.
-            </div>
+              ">
+            진행 중인 범위가 없습니다.
           </div>
-        </div>
-
-        <!-- Config Panel -->
-        <div id="config-panel" class="config-panel">
-          <h4 style="margin-top: 0">에디터 설정</h4>
-          <div class="config-row">
-            <span class="config-label">글자 크기</span>
-            <input
-              type="range"
-              class="config-input"
-              min="14"
-              max="24"
-              value="18"
-              oninput="updateEditorConfig('fontSize', this.value + 'px')"
-            />
-          </div>
-          <div class="config-row">
-            <span class="config-label">줄 간격</span>
-            <input
-              type="range"
-              class="config-input"
-              min="1.2"
-              max="2.5"
-              step="0.1"
-              value="1.8"
-              oninput="updateEditorConfig('lineHeight', this.value)"
-            />
-          </div>
-          <div class="config-row">
-            <span class="config-label">자간</span>
-            <input
-              type="range"
-              class="config-input"
-              min="-1"
-              max="2"
-              step="0.1"
-              value="0"
-              oninput="updateEditorConfig('letterSpacing', this.value + 'px')"
-            />
-          </div>
-          <div class="config-row">
-            <span class="config-label">폰트</span>
-            <select
-              class="config-input"
-              onchange="updateEditorConfig('fontFamily', this.value)"
-            >
-              <option value="'Noto Serif KR', serif">명조체 (Serif)</option>
-              <option value="'Noto Sans KR', sans-serif">고딕체 (Sans)</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Editor Toolbar -->
-        <div id="editor-toolbar" class="editor-toolbar">
-          <button onclick="execCmd('bold')" title="굵게"><i data-lucide="bold" style="width:16px; height:16px;"></i></button>
-          <button onclick="execCmd('italic')" title="기울임"><i data-lucide="italic" style="width:16px; height:16px;"></i></button>
-          <button onclick="execCmd('underline')" title="밑줄"><i data-lucide="underline" style="width:16px; height:16px;"></i></button>
-          <div class="divider"></div>
-          <button onclick="execCmd('justifyLeft')" title="왼쪽 정렬"><i data-lucide="align-left" style="width:16px; height:16px;"></i></button>
-          <button onclick="execCmd('justifyCenter')" title="가운데 정렬"><i data-lucide="align-center" style="width:16px; height:16px;"></i></button>
-          <button onclick="execCmd('justifyRight')" title="오른쪽 정렬"><i data-lucide="align-right" style="width:16px; height:16px;"></i></button>
-          <div class="divider"></div>
-          <select onchange="updateEditorConfig('fontSize', this.value)" title="글자 크기">
-            <option value="14px">작게 (14px)</option>
-            <option value="18px" selected>보통 (18px)</option>
-            <option value="22px">크게 (22px)</option>
-          </select>
-          <select onchange="updateEditorConfig('lineHeight', this.value)" title="줄 간격">
-            <option value="1.5">좁게 (1.5)</option>
-            <option value="1.8" selected>보통 (1.8)</option>
-            <option value="2.2">넓게 (2.2)</option>
-          </select>
-        </div>
-
-        <!-- Editor -->
-        <div class="editor-container">
-          <div
-            id="editor"
-            class="paper"
-            contenteditable="true"
-            placeholder="여기에 내용을 작성하세요..."
-            oninput="handleInput()"
-            oncompositionstart="handleComposition(true)"
-            oncompositionend="handleComposition(false)"
-          ></div>
-        </div>
-      </main>
-
-      <!-- Right Sidebar: Assistant -->
-      <aside class="sidebar right" id="assistant-sidebar">
-        <div class="sidebar-header">
-          <div class="sidebar-title">작가 도우미</div>
-        </div>
-
-        <div class="tabs">
-          <button class="tab-btn active" onclick="switchAssistTab('CHECK')">
-            오류 점검
-          </button>
-          <button class="tab-btn" onclick="switchAssistTab('SEARCH')">
-            기억 검색
-          </button>
-          <button class="tab-btn" onclick="switchAssistTab('PROPOSE')">
-            문장 교정
-          </button>
-        </div>
-
-        <div style="padding: 15px; border-bottom: 1px solid #eee">
-          <button id="assist-action-btn" class="btn btn-primary" style="width: 100%" onclick="runAssistantAction()">오류 점검하기</button>
-          
-          <!-- CHECK: 설정 정합성 점검 옵션 -->
-          <div id="assist-panel-CHECK" class="assist-panel-content" style="display: block;">
-            <label style="display: block; margin-top: 8px; font-size: 0.8rem; color: #64748b; cursor: pointer;">
-              <input id="toggle-show-ok" type="checkbox" style="margin-right: 6px"/>
-              문제가 없는(OK) 단락도 함께 보기
-            </label>
-            <details class="assistant-advanced" open>
-              <summary>⚙️ 검토 옵션 (선택형)</summary>
-              <div class="check-mode-group" style="margin-top: 10px">
-                <label class="check-mode-label"><input type="radio" name="consistency-level" value="quick" checked/><div><strong style="color: #16a34a">🟢 가볍게 (추천)</strong><br/><span class="desc">이름, 나이, 시간 등 명시적 충돌 위주</span></div></label>
-                <label class="check-mode-label"><input type="radio" name="consistency-level" value="deep"/><div><strong style="color: #2563eb">🔵 꼼꼼하게</strong><br/><span class="desc">심리나 간접적인 떡밥 모순까지 추론</span></div></label>
-                <label class="check-mode-label" style="display:none;"><input type="radio" name="consistency-level" value="strict"/></label>
-              </div>
-              <div style="margin-top: 15px; border-top: 1px dashed #cbd5e1; padding-top: 10px;">
-                <span style="font-size: 0.8rem; font-weight: bold; color: #475569">🎯 집중 점검 대상을 정해볼까요? (선택)</span>
-                <div class="row" style="margin-top: 8px"><input id="consistency-filter-entity" type="text" placeholder="특정 인물/장소 (예: 김철수)"/></div>
-                <div class="row"><input id="consistency-filter-time" type="text" placeholder="특정 시점/사건 (예: 프롤로그)"/></div>
-                <div class="row"><input id="consistency-filter-timeline" type="number" min="0" step="1" placeholder="타임라인 인덱스 (예: 12)"/></div>
-              </div>
-              <div style="margin-top: 12px; border-top: 1px dashed #cbd5e1; padding-top: 10px;">
-                <span style="font-size: 0.8rem; font-weight: bold; color: #475569">🔬 고급 설정</span>
-                <div class="row" style="margin-top: 8px">
-                  <label for="consistency-graph-mode" style="font-size:0.78rem; color:#64748b; min-width: 90px;">Graph Mode</label>
-                  <select id="consistency-graph-mode" style="flex:1; padding:6px; border:1px solid #cbd5e1; border-radius:6px;">
-                    <option value="off">off</option>
-                    <option value="manual">manual</option>
-                    <option value="auto">auto</option>
-                  </select>
-                </div>
-                <div class="row">
-                  <label for="consistency-verifier-mode" style="font-size:0.78rem; color:#64748b; min-width: 90px;">Verifier</label>
-                  <select id="consistency-verifier-mode" style="flex:1; padding:6px; border:1px solid #cbd5e1; border-radius:6px;">
-                    <option value="off">off</option>
-                    <option value="conservative_nli">conservative_nli</option>
-                  </select>
-                </div>
-                <div class="row">
-                  <label for="consistency-triage-mode" style="font-size:0.78rem; color:#64748b; min-width: 90px;">Triage</label>
-                  <select id="consistency-triage-mode" style="flex:1; padding:6px; border:1px solid #cbd5e1; border-radius:6px;">
-                    <option value="off">off</option>
-                    <option value="embedding_anomaly">embedding_anomaly</option>
-                  </select>
-                </div>
-                <label style="display: block; margin-top: 8px; font-size: 0.8rem; color: #64748b; cursor: pointer;">
-                  <input id="consistency-layer3-promotion" type="checkbox" style="margin-right: 6px"/>
-                  Layer3 verdict promotion 사용
-                </label>
-                <label style="display: block; margin-top: 4px; font-size: 0.8rem; color: #64748b; cursor: pointer;">
-                  <input id="consistency-loop-enabled" type="checkbox" style="margin-right: 6px"/>
-                  Verification loop 사용
-                </label>
-              </div>
-            </details>
-          </div>
-
-          <!-- SEARCH: 기억 검색 옵션 -->
-          <div id="assist-panel-SEARCH" class="assist-panel-content" style="display: none;">
-            <div style="margin-top:10px;">
-              <div class="row" style="margin-top: 8px"><input type="text" placeholder="검색어를 입력하세요..." style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:6px;"/></div>
-            </div>
-            <details class="assistant-advanced">
-              <summary>⚙️ 검색 범위 설정</summary>
-              <label style="display: block; margin-top: 8px; font-size: 0.8rem; color: #64748b;"><input type="checkbox" checked style="margin-right: 6px"/> 에피소드 본문 포함</label>
-              <label style="display: block; margin-top: 4px; font-size: 0.8rem; color: #64748b;"><input type="checkbox" checked style="margin-right: 6px"/> 설정 문서 포함</label>
-            </details>
-          </div>
-
-          <!-- PROPOSE: 문장 교정 옵션 -->
-          <div id="assist-panel-PROPOSE" class="assist-panel-content" style="display: none;">
-            <div style="margin-top: 10px;">
-              <span style="font-size: 0.85rem; font-weight: bold; color: #475569">어떤 방향으로 다듬어드릴까요?</span>
-              <div class="check-mode-group" style="margin-top: 8px">
-                <label class="check-mode-label" style="padding: 8px 10px;"><input type="radio" name="propose-level" value="spell" checked/><div><strong>단순 맞춤법/오탈자 교정</strong></div></label>
-                <label class="check-mode-label" style="padding: 8px 10px;"><input type="radio" name="propose-level" value="smooth"/><div><strong>매끄러운 윤문 (자연스럽게)</strong></div></label>
-                <label class="check-mode-label" style="padding: 8px 10px;"><input type="radio" name="propose-level" value="dramatic"/><div><strong>더 극적인 표사로 분위기 변경</strong></div></label>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div id="assistant-content" class="list-container">
-          <div style="text-align: center; color: #aaa; margin-top: 50px">
-            도우미가 대기 중입니다.
-          </div>
-        </div>
-      </aside>
-    </div>
-
-    <!-- Export Modal -->
-    <div id="export-modal" class="overlay">
-      <div class="modal">
-        <h2>문서 내보내기</h2>
-        <div class="form-group">
-          <label>형식 선택</label>
-          <div
-            class="radio-group"
-            style="display: flex; gap: 10px; margin-top: 5px"
-          >
-            <label style="cursor: pointer"
-              ><input type="radio" name="export-fmt" value="txt" checked />
-              텍스트 (.txt)</label
-            >
-            <label style="cursor: pointer"
-              ><input type="radio" name="export-fmt" value="docx" /> 문서
-              (.docx)</label
-            >
-          </div>
-        </div>
-        <div class="actions">
-          <button onclick="closeExportModal()">취소</button>
-          <button class="primary" onclick="handleExport()">내보내기</button>
         </div>
       </div>
+
+      <!-- Config Panel -->
+      <div id="config-panel" class="config-panel">
+        <h4 style="margin-top: 0">에디터 설정</h4>
+        <div class="config-row">
+          <span class="config-label">글자 크기</span>
+          <input type="range" class="config-input" min="14" max="24" value="18"
+            oninput="updateEditorConfig('fontSize', this.value + 'px')" />
+        </div>
+        <div class="config-row">
+          <span class="config-label">줄 간격</span>
+          <input type="range" class="config-input" min="1.2" max="2.5" step="0.1" value="1.8"
+            oninput="updateEditorConfig('lineHeight', this.value)" />
+        </div>
+        <div class="config-row">
+          <span class="config-label">자간</span>
+          <input type="range" class="config-input" min="-1" max="2" step="0.1" value="0"
+            oninput="updateEditorConfig('letterSpacing', this.value + 'px')" />
+        </div>
+        <div class="config-row">
+          <span class="config-label">폰트</span>
+          <select class="config-input" onchange="updateEditorConfig('fontFamily', this.value)">
+            <option value="'Noto Serif KR', serif">명조체 (Serif)</option>
+            <option value="'Noto Sans KR', sans-serif">고딕체 (Sans)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Editor Toolbar -->
+      <div id="editor-toolbar" class="editor-toolbar">
+        <button onclick="execCmd('bold')" title="굵게"><i data-lucide="bold"
+            style="width:16px; height:16px;"></i></button>
+        <button onclick="execCmd('italic')" title="기울임"><i data-lucide="italic"
+            style="width:16px; height:16px;"></i></button>
+        <button onclick="execCmd('underline')" title="밑줄"><i data-lucide="underline"
+            style="width:16px; height:16px;"></i></button>
+        <div class="divider"></div>
+        <button onclick="execCmd('justifyLeft')" title="왼쪽 정렬"><i data-lucide="align-left"
+            style="width:16px; height:16px;"></i></button>
+        <button onclick="execCmd('justifyCenter')" title="가운데 정렬"><i data-lucide="align-center"
+            style="width:16px; height:16px;"></i></button>
+        <button onclick="execCmd('justifyRight')" title="오른쪽 정렬"><i data-lucide="align-right"
+            style="width:16px; height:16px;"></i></button>
+        <div class="divider"></div>
+        <select onchange="updateEditorConfig('fontSize', this.value)" title="글자 크기">
+          <option value="14px">작게 (14px)</option>
+          <option value="18px" selected>보통 (18px)</option>
+          <option value="22px">크게 (22px)</option>
+        </select>
+        <select onchange="updateEditorConfig('lineHeight', this.value)" title="줄 간격">
+          <option value="1.5">좁게 (1.5)</option>
+          <option value="1.8" selected>보통 (1.8)</option>
+          <option value="2.2">넓게 (2.2)</option>
+        </select>
+      </div>
+
+      <!-- Editor -->
+      <div class="editor-container" style="position: relative;">
+        <div id="page-guides" class="page-guides" aria-hidden="true"></div>
+        <div id="editor" class="editor-pages" placeholder="여기에 내용을 작성하세요..."></div>
+
+        <!-- Memo Sidebar -->
+        <div id="memo-sidebar" class="memo-sidebar"></div>
+      </div>
+
+      <!-- Inline Tag Widget (Floating) -->
+      <div id="inline-tag-widget" class="action-popover" style="display: none; position: absolute; z-index: 60;">
+        <div
+          style="font-size: 0.75rem; color: #64748b; margin-bottom: 6px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; font-weight: 600;">
+          빠른 태그 / 메모</div>
+        <div style="display: flex; gap: 4px; margin-bottom: 4px;">
+          <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 0.75rem; flex: 1;"
+            onmousedown="event.preventDefault(); applyInlineTag('인물')">👤 인물</button>
+          <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 0.75rem; flex: 1;"
+            onmousedown="event.preventDefault(); applyInlineTag('사건')">⚡ 사건</button>
+          <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 0.75rem; flex: 1;"
+            onmousedown="event.preventDefault(); applyInlineTag('복선')">🔍 복선</button>
+        </div>
+        <div style="display: flex; gap: 4px;">
+          <button class="btn btn-primary"
+            style="padding: 4px 8px; font-size: 0.75rem; flex: 1; background: #f59e0b; border-color: #f59e0b;"
+            onmousedown="event.preventDefault(); applyInlineMemo()">📝 메모 추가</button>
+        </div>
+      </div>
+
+      <!-- Tag/Memo Remove Popover -->
+      <div id="tag-remove-popover" class="action-popover" style="display: none; position: absolute; z-index: 60;">
+        <div style="font-size: 0.75rem; color: #475569; margin-bottom: 6px;" id="tag-remove-title">부여된 태그</div>
+        <button class="btn btn-secondary"
+          style="padding: 4px 8px; font-size: 0.75rem; width: 100%; border-color: #ef4444; color: #ef4444;"
+          onmousedown="event.preventDefault(); removeInlineTagOrMemo()">❌ 태그 해제</button>
+      </div>
+
+      <!-- Action Popover (Consistency) -->
+      <div id="action-popover" class="action-popover" style="display: none; position: absolute; z-index: 60;">
+        <div style="font-size: 0.8rem; font-weight: bold; margin-bottom: 4px; color: #0f172a;" id="popover-title">정합성 검토
+        </div>
+        <div style="font-size: 0.75rem; color: #475569; margin-bottom: 8px;" id="popover-desc">문맥 모순 감지됨</div>
+        <div style="display: flex; gap: 6px;">
+          <button class="btn btn-primary" style="padding: 4px 8px; font-size: 0.75rem; flex:1;"
+            onmousedown="event.preventDefault(); handlePopoverAction('whitelist')">의도됨 (승인)</button>
+          <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 0.75rem; flex:1;"
+            onmousedown="event.preventDefault(); handlePopoverAction('ignore')">무시</button>
+        </div>
+      </div>
+
+      <!-- Editor Status Bar -->
+      <div id="editor-status-bar" class="editor-status-bar">
+        <div class="status-left">
+          <span>문서 상태: <span id="save-status-text" style="color: #10b981;">저장됨</span></span>
+        </div>
+        <div class="status-right">
+          <span id="char-count">0자 (공백포함)</span>
+          <span class="divider">|</span>
+          <span id="page-count">1 쪽</span>
+        </div>
+      </div>
+    </main>
+
+    <!-- Right Sidebar: Assistant -->
+    <aside class="sidebar right" id="assistant-sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title">작가 도우미</div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchAssistTab('CHECK')">
+          오류 점검
+        </button>
+        <button class="tab-btn" onclick="switchAssistTab('SEARCH')">
+          기억 검색
+        </button>
+        <button class="tab-btn" onclick="switchAssistTab('PROPOSE')">
+          문장 교정
+        </button>
+      </div>
+
+      <div style="padding: 15px; border-bottom: 1px solid #eee">
+        <button id="assist-action-btn" class="btn btn-primary" style="width: 100%" onclick="runAssistantAction()">오류
+          점검하기</button>
+
+        <!-- CHECK: 설정 정합성 점검 옵션 -->
+        <div id="assist-panel-CHECK" class="assist-panel-content" style="display: block;">
+          <label style="display: block; margin-top: 8px; font-size: 0.8rem; color: #64748b; cursor: pointer;">
+            <input id="toggle-show-ok" type="checkbox" style="margin-right: 6px" />
+            문제가 없는(OK) 단락도 함께 보기
+          </label>
+          <details class="assistant-advanced" open>
+            <summary>⚙️ 검토 옵션 (프리셋 선택형)</summary>
+            <div class="check-mode-group" style="margin-top: 10px" id="consistency-level-group">
+              <label class="check-mode-label"><input type="radio" name="consistency-level" value="quick" checked />
+                <div><strong style="color: #16a34a">🟢 가볍게 (추천)</strong><br /><span class="desc">이름, 나이, 시간 등 명시적 충돌
+                    위주</span></div>
+              </label>
+              <label class="check-mode-label"><input type="radio" name="consistency-level" value="deep" />
+                <div><strong style="color: #2563eb">🔵 꼼꼼하게</strong><br /><span class="desc">심리나 간접적인 떡밥 모순까지 추론</span>
+                </div>
+              </label>
+              <label class="check-mode-label"><input type="radio" name="consistency-level" value="strict" />
+                <div><strong style="color: #9333ea">🟣 매우 꼼꼼하게 (심층 검증)</strong><br /><span class="desc">정확하지만 1~3분 이상
+                    소요될 수 있습니다.</span></div>
+              </label>
+            </div>
+            <div style="margin-top: 6px; font-size: 0.75rem; color: #64748b;">
+              선택한 레벨에 맞춰 내부 검증 파라미터가 자동으로 적용됩니다.
+            </div>
+            <div id="intensity-warning"
+              style="display: none; margin-top: 8px; padding: 10px; background: #fef08a; border-left: 3px solid #eab308; border-radius: 4px; font-size: 0.75rem; color: #854d0e; transition: opacity 0.3s ease-in-out;">
+              <b style="display:block; margin-bottom: 2px;">⏳ 잠깐! 주의해주세요.</b>
+              이 옵션은 심층 교차 분석을 수행하므로 정합성 체크에 다소 시간이 소요될 수 있습니다. 작업은 백그라운드에서 안전하게 진행되므로 글쓰기를 계속하셔도 됩니다.
+            </div>
+            <div style="margin-top: 15px; border-top: 1px dashed #cbd5e1; padding-top: 10px;">
+              <span class="tooltip" title="입력하지 않으면 문서 전체를 대상으로 점검합니다."
+                style="font-size: 0.8rem; font-weight: bold; color: #475569; display: flex; align-items: center; gap: 4px; cursor: help;">🎯
+                집중 점검 대상을 정해볼까요? (선택) <i
+                  style="background: #e2e8f0; color: #475569; border-radius: 50%; width: 14px; height: 14px; display: inline-flex; justify-content: center; align-items: center; font-size: 10px; font-style: normal;">?</i></span>
+              <div class="row" style="margin-top: 8px"><input id="consistency-filter-entity" type="text"
+                  placeholder="특정 인물이나 장소 (예: 김철수, 숲)" /></div>
+              <div class="row"><input id="consistency-filter-time" type="text" placeholder="특정 시점이나 사건 (예: 프롤로그)" />
+              </div>
+              <div class="row"><input id="consistency-filter-timeline" type="number" min="0" step="1"
+                  placeholder="타임라인 인덱스 번호 (예: 12)" /></div>
+            </div>
+          </details>
+        </div>
+
+        <!-- SEARCH: 기억 검색 옵션 -->
+        <div id="assist-panel-SEARCH" class="assist-panel-content" style="display: none;">
+          <div style="margin-top:10px;">
+            <div class="row" style="margin-top: 8px"><input type="text" placeholder="검색어를 입력하세요..."
+                style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:6px;" /></div>
+          </div>
+          <details class="assistant-advanced">
+            <summary>⚙️ 검색 범위 설정</summary>
+            <label style="display: block; margin-top: 8px; font-size: 0.8rem; color: #64748b;"><input type="checkbox"
+                checked style="margin-right: 6px" /> 에피소드 본문 포함</label>
+            <label style="display: block; margin-top: 4px; font-size: 0.8rem; color: #64748b;"><input type="checkbox"
+                checked style="margin-right: 6px" /> 설정 문서 포함</label>
+          </details>
+        </div>
+
+        <!-- PROPOSE: 문장 교정 옵션 -->
+        <div id="assist-panel-PROPOSE" class="assist-panel-content" style="display: none;">
+          <div style="margin-top: 10px;">
+            <span style="font-size: 0.85rem; font-weight: bold; color: #475569">어떤 방향으로 다듬어드릴까요?</span>
+            <div class="check-mode-group" style="margin-top: 8px">
+              <label class="check-mode-label" style="padding: 8px 10px;"><input type="radio" name="propose-level"
+                  value="spell" checked />
+                <div><strong>단순 맞춤법/오탈자 교정</strong></div>
+              </label>
+              <label class="check-mode-label" style="padding: 8px 10px;"><input type="radio" name="propose-level"
+                  value="smooth" />
+                <div><strong>매끄러운 윤문 (자연스럽게)</strong></div>
+              </label>
+              <label class="check-mode-label" style="padding: 8px 10px;"><input type="radio" name="propose-level"
+                  value="dramatic" />
+                <div><strong>더 극적인 표사로 분위기 변경</strong></div>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="assistant-content" class="list-container">
+        <div style="text-align: center; color: #aaa; margin-top: 50px">
+          도우미가 대기 중입니다.
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Export Modal -->
+  <div id="export-modal" class="overlay">
+    <div class="modal">
+      <h2>문서 내보내기</h2>
+      <div class="form-group">
+        <label>형식 선택</label>
+        <div class="radio-group" style="display: flex; gap: 10px; margin-top: 5px">
+          <label style="cursor: pointer"><input type="radio" name="export-fmt" value="txt" checked />
+            텍스트 (.txt)</label>
+          <label style="cursor: pointer"><input type="radio" name="export-fmt" value="docx" /> 문서
+            (.docx)</label>
+        </div>
+      </div>
+      <div class="actions">
+        <button onclick="closeExportModal()">취소</button>
+        <button class="primary" onclick="handleExport()">내보내기</button>
+      </div>
     </div>
+  </div>
 
-        <script src="/assets/user_ui.state.js"></script>
-    <script src="/assets/user_ui.api.js"></script>
-    <script src="/assets/user_ui.editor.js"></script>
-    <script src="/assets/user_ui.docs_tree.js"></script>
-    <script src="/assets/user_ui.assistant.js"></script>
-    <script src="/assets/user_ui.jobs.js"></script>
-    <script src="/assets/user_ui.bootstrap.js"></script>
+  <script src="/assets/user_ui.state.js"></script>
+  <script src="/assets/user_ui.api.js"></script>
+  <script src="/assets/user_ui.editor.js"></script>
+  <script src="/assets/user_ui.docs_tree.js"></script>
+  <script src="/assets/user_ui.assistant.js"></script>
+  <script src="/assets/user_ui.jobs.js"></script>
+  <script src="/assets/user_ui.bootstrap.js"></script>
 
-  </body>
+</body>
+
 </html>

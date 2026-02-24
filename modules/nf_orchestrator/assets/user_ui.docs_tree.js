@@ -34,39 +34,6 @@
             timelineFilterInput.value =
               state.consistencyOptions.filters.timeline_idx || "";
           }
-          const graphModeInput = document.getElementById(
-            "consistency-graph-mode",
-          );
-          if (graphModeInput)
-            graphModeInput.value = _normalizeGraphMode(
-              state.consistencyOptions.graph_mode || "off",
-            );
-          const layer3Input = document.getElementById(
-            "consistency-layer3-promotion",
-          );
-          if (layer3Input)
-            layer3Input.checked = Boolean(
-              state.consistencyOptions.layer3_promotion,
-            );
-          const verifierInput = document.getElementById(
-            "consistency-verifier-mode",
-          );
-          if (verifierInput)
-            verifierInput.value = _normalizeVerifierMode(
-              state.consistencyOptions.verifier_mode || "off",
-            );
-          const triageInput = document.getElementById(
-            "consistency-triage-mode",
-          );
-          if (triageInput)
-            triageInput.value = _normalizeTriageMode(
-              state.consistencyOptions.triage_mode || "off",
-            );
-          const loopInput = document.getElementById("consistency-loop-enabled");
-          if (loopInput)
-            loopInput.checked = Boolean(
-              state.consistencyOptions.verification_loop,
-            );
 
           if (data.projects && Object.keys(data.projects).length > 0) {
             select.innerHTML = '<option value="">선택하세요</option>';
@@ -120,6 +87,9 @@
         document.getElementById("current-project-label").textContent = name;
         localStorage.setItem("last_project_id", pid);
         localStorage.setItem("last_project_name", name);
+        if (typeof updateStatusBar === "function") updateStatusBar();
+        if (typeof schedulePageGuideRender === "function")
+          schedulePageGuideRender();
         refreshDocList();
       }
 
@@ -163,131 +133,69 @@
         document
           .querySelectorAll(".tab-btn")
           .forEach((b) => b.classList.remove("active"));
-        event.target.classList.add("active");
+        if (event && event.target) event.target.classList.add("active");
+
+        const docList = document.getElementById("doc-list");
+        const timelineView = document.getElementById("timeline-view");
 
         if (type === "TIMELINE") {
-          renderTimeline();
+          docList.style.display = "none";
+          timelineView.style.display = "block";
+          renderTimelineView();
         } else {
+          docList.style.display = "block";
+          timelineView.style.display = "none";
           renderDocList();
         }
       }
 
-      async function renderTimeline() {
-        // Structure View (Git-like Vertical Graph)
-        // Uses state.docs to render chapters and episodes in linear order
-        const list = document.getElementById("doc-list");
-        list.innerHTML = "";
+      async function renderTimelineView() {
+        const container = document.getElementById("timeline-view");
+        container.innerHTML = "";
 
-        const docs = Object.values(state.docs).filter(
-          (d) => d.type === "EPISODE",
-        );
-
-        // Group by 'metadata.group'
-        const groups = {};
-        const noGroup = [];
-
-        docs.forEach((d) => {
-          const gName = (d.metadata && d.metadata.group) || "";
-          if (!gName || gName === "미분류") {
-            noGroup.push(d);
-          } else {
-            if (!groups[gName]) groups[gName] = [];
-            groups[gName].push(d);
-          }
+        // get instances of EPISODE, SETTING, or PLOT that have timeline info
+        const docs = Object.values(state.docs).filter((d) => {
+          return d.metadata && (d.metadata.time_key != null || d.metadata.timeline_idx != null);
         });
 
-        // Sort Groups (by order of first doc? or just alphanumeric?)
-        // We need a stable order. Let's sort keys for now.
-        // Ideally we should have a 'Chapter' entity with order.
-        // For now, heuristic: use the order of the first document in the group to sort groups.
-        const sortedGroupNames = Object.keys(groups).sort((a, b) => {
-          const docA = groups[a][0];
-          const docB = groups[b][0];
-          return (docA.metadata?.order || 0) - (docB.metadata?.order || 0);
-        });
+        // if there's no docs with timeline meta, fallback to showing EPISODEs in order
+        let displayDocs = docs.length > 0 ? docs : Object.values(state.docs).filter(d => d.type === "EPISODE");
 
-        let html = '<div class="structure-graph" style="padding: 20px 10px;">';
-
-        // Render Groups
-        sortedGroupNames.forEach((gName, gIdx) => {
-          const gDocs = groups[gName].sort(
-            (a, b) => (a.metadata?.order || 0) - (b.metadata?.order || 0),
-          );
-
-          // Group Node (Big Circle)
-          html += `
-            <div class="struct-node group-node" draggable="true" ondragstart="handleDragStart(event, null, '${gName}')" 
-                 oncontextmenu="openGroupCtxMenu(event, '${gName}')">
-                <div class="node-circle big"></div>
-                <div class="node-label"><strong>${gName}</strong></div>
-            </div>
-            <div class="struct-line"></div>
-          `;
-
-          // Episodes
-          gDocs.forEach((doc, dIdx) => {
-            const actsAsLast =
-              dIdx === gDocs.length - 1 &&
-              gIdx === sortedGroupNames.length - 1 &&
-              noGroup.length === 0;
-
-            html += `
-                <div class="struct-node doc-node" onclick="loadDoc('${doc.doc_id}')" draggable="true" 
-                     ondragstart="handleDragStart(event, '${doc.doc_id}')" ondrop="handleDropOnItem(event, '${doc.doc_id}', '${gName}')" ondragover="handleDragOver(event)">
-                    <div class="node-circle small ${state.currentDocId === doc.doc_id ? "active" : ""}"></div>
-                    <div class="node-label">${doc.title}</div>
-                </div>
-                ${!actsAsLast ? '<div class="struct-line"></div>' : ""}
-              `;
-          });
-        });
-
-        // Unclassified
-        if (noGroup.length > 0) {
-          noGroup.sort(
-            (a, b) => (a.metadata?.order || 0) - (b.metadata?.order || 0),
-          );
-          html += `
-            <div class="struct-node group-node">
-                <div class="node-circle big"></div>
-                <div class="node-label" style="opacity:0.7">미분류</div>
-            </div>
-            <div class="struct-line"></div>
-          `;
-          noGroup.forEach((doc, dIdx) => {
-            const isLast = dIdx === noGroup.length - 1;
-            html += `
-                <div class="struct-node doc-node" onclick="loadDoc('${doc.doc_id}')" draggable="true"
-                     ondragstart="handleDragStart(event, '${doc.doc_id}')" ondrop="handleDropOnItem(event, '${doc.doc_id}', '')" ondragover="handleDragOver(event)">
-                    <div class="node-circle small ${state.currentDocId === doc.doc_id ? "active" : ""}"></div>
-                    <div class="node-label">${doc.title}</div>
-                </div>
-                ${!isLast ? '<div class="struct-line"></div>' : ""}
-              `;
-          });
+        if (displayDocs.length === 0) {
+          container.innerHTML = '<div style="text-align:center; padding:20px 15px; color:#94a3b8; font-size:0.9rem; background:#f8fafc; border-radius:8px; margin-top:10px;">작품 내 주요 사건들을 시간순으로 기록하는 타임라인 뷰입니다. 문서에 시간/인덱스 메타데이터를 추가해보세요.</div>';
+          return;
         }
 
-        html += "</div>";
+        // Sort by timeline_idx first, then order, then created_at
+        displayDocs.sort((a, b) => {
+          const idxA = a.metadata?.timeline_idx ?? 9999;
+          const idxB = b.metadata?.timeline_idx ?? 9999;
+          if (idxA !== idxB) return idxA - idxB;
 
-        // Inject CSS for graph if not exists
-        if (!document.getElementById("graph-css")) {
-          const style = document.createElement("style");
-          style.id = "graph-css";
-          style.innerHTML = `
-            .structure-graph { position: relative; }
-            .struct-node { display: flex; align-items: center; position: relative; z-index: 2; padding: 5px 0; cursor: pointer; }
-            .struct-node:hover .node-label { color: var(--primary-color); }
-            .node-circle { border: 2px solid #555; background: white; border-radius: 50%; z-index: 2; }
-            .node-circle.big { width: 16px; height: 16px; border-width: 3px; margin-left: 2px; }
-            .node-circle.small { width: 10px; height: 10px; margin-left: 5px; background: #eee; }
-            .node-circle.small.active { background: var(--primary-color); border-color: var(--primary-color); }
-            .node-label { margin-left: 15px; font-size: 0.9rem; }
-            .struct-line { width: 2px; background: #ddd; margin-left: 9px; height: 20px; z-index: 1; }
+          const ordA = a.metadata?.order ?? 9999;
+          const ordB = b.metadata?.order ?? 9999;
+          if (ordA !== ordB) return ordA - ordB;
+
+          return new Date(a.created_at) - new Date(b.created_at);
+        });
+
+        const timelineHtml = displayDocs.map(doc => {
+          const timeLabel = doc.metadata?.time_key || (doc.metadata?.timeline_idx !== undefined ? `Index: ${doc.metadata.timeline_idx}` : "시점 미정");
+          const isActive = state.currentDocId === doc.doc_id ? "active" : "";
+          
+          return `
+            <div class="timeline-item ${isActive}" onclick="loadDoc('${doc.doc_id}')">
+              <div class="timeline-node"></div>
+              <div class="timeline-content">
+                <div class="timeline-time">${timeLabel}</div>
+                <div class="timeline-title">${doc.title}</div>
+                <div style="font-size: 0.7rem; color: #94a3b8; margin-top: 4px;">${doc.type}</div>
+              </div>
+            </div>
           `;
-          document.head.appendChild(style);
-        }
+        }).join("");
 
-        list.innerHTML = html;
+        container.innerHTML = `<div class="timeline-container">${timelineHtml}</div>`;
       }
 
       function renderDocList() {
@@ -665,7 +573,7 @@
         if (newTitle && newTitle !== doc.title) {
           // Optimistic Update
           state.docs[docId].title = newTitle;
-          if (state.currentNavTab === "TIMELINE") renderTimeline();
+          if (state.currentNavTab === "TIMELINE") renderTimelineView();
           else renderDocList();
 
           // If current doc, update input
@@ -728,8 +636,20 @@
               delete state.docs[docId];
               if (state.currentDocId === docId) {
                 state.currentDocId = null;
-                document.getElementById("editor").innerText = "";
+                if (typeof setEditorText === "function") {
+                  setEditorText("", { preserveCaret: false });
+                } else {
+                  document.getElementById("editor").innerText = "";
+                }
                 document.getElementById("doc-title-input").value = "";
+                state.isDirty = false;
+                state.memoDirty = false;
+                if (typeof resetMemoStateForDoc === "function") {
+                  resetMemoStateForDoc();
+                }
+                if (typeof updateStatusBar === "function") updateStatusBar();
+                if (typeof schedulePageGuideRender === "function")
+                  schedulePageGuideRender();
               }
               refreshDocList();
             },
@@ -823,8 +743,12 @@
 
       async function loadDoc(did) {
         // Safe Context Switch
-        if (state.currentDocId && state.isDirty) {
+        if (state.currentDocId && (state.isDirty || state.memoDirty)) {
           await saveDoc(true); // Wait for save to complete
+        }
+
+        if (typeof resetMemoStateForDoc === "function") {
+          resetMemoStateForDoc();
         }
 
         state.currentDocId = did;
@@ -852,11 +776,27 @@
           document.getElementById("doc-title-input").value =
             fullDoc.title || "";
           const loadedContent = fullDoc.content || "";
-          document.getElementById("editor").innerText = loadedContent;
+          if (typeof setEditorText === "function") {
+            setEditorText(loadedContent, { preserveCaret: false });
+          } else {
+            document.getElementById("editor").innerText = loadedContent;
+          }
           document.getElementById("editor").style.opacity = "1";
+
+          const loadedMeta =
+            fullDoc && typeof fullDoc.metadata === "object"
+              ? fullDoc.metadata
+              : {};
+          if (state.docs[did]) {
+            state.docs[did].metadata = loadedMeta;
+          }
+          if (typeof loadMemosFromMetadata === "function") {
+            loadMemosFromMetadata(loadedMeta.ui_memos || []);
+          }
 
           // Reset dirty state after load
           state.isDirty = false;
+          state.memoDirty = false;
           state.pendingConsistencySegments = [];
           state.lastSegmentFingerprints =
             _segmentTextForConsistency(loadedContent);
@@ -864,17 +804,31 @@
           clearInlineVerdictHighlights();
           document.getElementById("save-status").innerText = "저장됨";
           document.getElementById("save-status").style.color = "#aaa";
+          const saveStatusText = document.getElementById("save-status-text");
+          if (saveStatusText) {
+            saveStatusText.innerText = "저장됨";
+            saveStatusText.style.color = "#10b981";
+          }
 
           document.getElementById("doc-type-badge").innerText =
             fullDoc.type || "UNKNOWN";
 
           state.currentDocType = fullDoc.type;
 
+          if (typeof updateStatusBar === "function") updateStatusBar();
+          if (typeof schedulePageGuideRender === "function")
+            schedulePageGuideRender();
+          if (typeof renderMemos === "function") renderMemos();
+
           renderDocList();
           // hideLoading();
         } catch (e) {
           console.error("Load Doc Error", e);
-          document.getElementById("editor").innerText = "로드 실패";
+          if (typeof setEditorText === "function") {
+            setEditorText("로드 실패", { preserveCaret: false });
+          } else {
+            document.getElementById("editor").innerText = "로드 실패";
+          }
           document.getElementById("editor").style.opacity = "1";
         }
       }
@@ -951,7 +905,7 @@
       }
 
       async function exitProject() {
-        if (state.currentDocId && state.isDirty) {
+        if (state.currentDocId && (state.isDirty || state.memoDirty)) {
           await saveDoc(true);
         }
 
@@ -960,13 +914,25 @@
         state.projectName = "";
         state.currentDocId = null;
         state.docs = {};
+        state.isDirty = false;
+        state.memoDirty = false;
 
         // Clear UI
         document.getElementById("doc-list").innerHTML = "";
-        document.getElementById("editor").innerText = "";
+        if (typeof setEditorText === "function") {
+          setEditorText("", { preserveCaret: false });
+        } else {
+          document.getElementById("editor").innerText = "";
+        }
         document.getElementById("doc-title-input").value = "";
         document.getElementById("current-project-label").innerText = "-";
         document.getElementById("empty-state").style.display = "flex"; // Reset Placeholder
+        if (typeof resetMemoStateForDoc === "function") {
+          resetMemoStateForDoc();
+        }
+        if (typeof updateStatusBar === "function") updateStatusBar();
+        if (typeof schedulePageGuideRender === "function")
+          schedulePageGuideRender();
 
         // Show Modal
         document.getElementById("setup-modal").classList.add("active");

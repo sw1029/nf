@@ -67,28 +67,35 @@ def test_user_ui_has_background_consistency_hooks() -> None:
 
 
 @pytest.mark.unit
-def test_user_ui_exposes_advanced_consistency_controls() -> None:
+def test_user_ui_exposes_consistency_preset_controls() -> None:
     html = _user_ui_html_text()
     assert "consistency-filter-entity" in html
     assert "consistency-filter-time" in html
     assert "consistency-filter-timeline" in html
-    assert "consistency-graph-mode" in html
-    assert "consistency-layer3-promotion" in html
-    assert "consistency-verifier-mode" in html
-    assert "consistency-triage-mode" in html
-    assert "consistency-loop-enabled" in html
+    assert 'name="consistency-level"' in html
+    assert 'value="quick"' in html
+    assert 'value="deep"' in html
+    assert 'value="strict"' in html
+    assert "consistency-level-group" in html
+    assert "consistency-graph-mode" not in html
+    assert "consistency-layer3-promotion" not in html
+    assert "consistency-verifier-mode" not in html
+    assert "consistency-triage-mode" not in html
+    assert "consistency-loop-enabled" not in html
 
 
 @pytest.mark.unit
-def test_user_ui_consistency_mode_contract_values_and_checkbox_sync() -> None:
-    html = _user_ui_html_text()
+def test_user_ui_consistency_mode_contract_values_from_level_presets() -> None:
     bundle = _user_ui_bundle_text()
-    assert '<option value="auto">' in html
-    assert '<option value="manual">' in html
-    assert '<option value="conservative_nli">' in html
-    assert '<option value="embedding_anomaly">' in html
-    assert "layer3Input.checked" in bundle
-    assert "loopInput.checked" in bundle
+    assert "function _readConsistencyOptionsFromUi()" in bundle
+    assert 'if (selectedLevel === "deep") {' in bundle
+    assert 'graphMode = "auto";' in bundle
+    assert 'triageMode = "embedding_anomaly";' in bundle
+    assert 'if (selectedLevel === "strict") {' in bundle
+    assert 'verifierMode = "conservative_nli";' in bundle
+    assert "verificationLoop = true;" in bundle
+    assert "layer3_verdict_promotion: layer3Promotion" in bundle
+    assert "verification_loop: {" in bundle
     assert "value === 'on'" not in bundle
 
 
@@ -157,3 +164,60 @@ def test_user_ui_function_declarations_have_no_duplicates_after_split() -> None:
             duplicates.add(name)
         seen.add(name)
     assert not duplicates
+
+
+@pytest.mark.unit
+def test_user_ui_memo_metadata_anchor_contract() -> None:
+    bundle = _user_ui_bundle_text()
+    assert "ui_memos" in bundle
+    assert "serializeMemosForMetadata" in bundle
+    assert "loadMemosFromMetadata" in bundle
+    assert "syncMemoAnchorsFromDom" in bundle
+
+
+@pytest.mark.unit
+def test_user_ui_has_composition_handler_binding() -> None:
+    bundle = _user_ui_bundle_text()
+    assert "function handleComposition(active)" in bundle
+    assert 'editorHost.addEventListener(' in bundle
+    assert '"compositionstart"' in bundle
+    assert '"compositionend"' in bundle
+
+
+@pytest.mark.unit
+def test_user_ui_load_doc_updates_status_and_page_guides() -> None:
+    docs_tree = Path("modules/nf_orchestrator/assets/user_ui.docs_tree.js").read_text(encoding="utf-8")
+    editor = Path("modules/nf_orchestrator/assets/user_ui.editor.js").read_text(encoding="utf-8")
+    assert "loadMemosFromMetadata(loadedMeta.ui_memos || [])" in docs_tree
+    assert "updateStatusBar()" in docs_tree
+    assert "schedulePageGuideRender()" in docs_tree
+    assert "function renderPageGuides()" in editor
+
+
+@pytest.mark.unit
+def test_user_ui_paged_editor_and_overlay_sidebar_contract() -> None:
+    html = _user_ui_html_text()
+    editor = Path("modules/nf_orchestrator/assets/user_ui.editor.js").read_text(encoding="utf-8")
+    css = Path("modules/nf_orchestrator/assets/user_ui.styles.css").read_text(encoding="utf-8")
+    api = Path("modules/nf_orchestrator/assets/user_ui.api.js").read_text(encoding="utf-8")
+    assert 'id="editor" class="editor-pages"' in html
+    assert 'pageEl.className = "paper page-editor"' in editor
+    assert 'gap.className = "page-gap"' in editor
+    assert "gap.contentEditable = \"false\"" in editor
+    assert "function getEditorText()" in editor
+    assert "function setEditorText(text, opts = {})" in editor
+    assert "function paginateText(text)" in editor
+    assert "function captureSelectionGlobalOffset()" in editor
+    assert "function restoreSelectionGlobalOffset(offset)" in editor
+    assert "function layoutMemoSidebar()" in editor
+    assert "assistantSidebar.classList.contains(\"is-open\")" in editor
+    assert "window.layoutMemoSidebar = layoutMemoSidebar;" in editor
+    assert ".editor-pages {" in css
+    assert ".page-editor {" in css
+    assert ".page-gap {" in css
+    assert ".sidebar.right.is-open {" in css
+    assert "scrollbar-gutter: stable both-edges;" in css
+    assert "classList.toggle(\"is-open\")" in api
+    assert "layoutMemoSidebar()" in api
+    assert "renderMemos()" in api
+    assert "schedulePageGuideRender()" in api

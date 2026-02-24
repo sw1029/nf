@@ -21,16 +21,25 @@
       }
 
       // --- Loading & Success UI ---
+      function _setStatusLabels(text, color) {
+        const toolbar = document.getElementById("save-status");
+        if (toolbar) {
+          toolbar.innerText = text;
+          if (color) toolbar.style.color = color;
+        }
+        const bar = document.getElementById("save-status-text");
+        if (bar) {
+          bar.innerText = text;
+          if (color) bar.style.color = color;
+        }
+      }
+
       function showLoading(msg = "처리 중입니다...", blocking = false) {
         if (blocking || !state.projectId) {
           document.getElementById("loading-text").innerText = msg;
           document.getElementById("loading-overlay").classList.add("active");
         } else {
-          const el = document.getElementById("save-status");
-          if (el) {
-            el.innerText = msg;
-            el.style.color = "#3498db";
-          }
+          _setStatusLabels(msg, "#3498db");
         }
       }
 
@@ -43,23 +52,19 @@
             el.style.color === "#3498db")
         ) {
           // Only clear if we set it
-          el.innerText = "준비됨";
-          el.style.color = "#aaa";
+          _setStatusLabels("준비됨", "#aaa");
         }
       }
 
       function showSuccess(msg = "완료되었습니다.") {
         const el = document.getElementById("save-status");
-        if (el) {
-          el.innerText = msg;
-          el.style.color = "#2ecc71";
-          setTimeout(() => {
-            if (el.innerText === msg) {
-              el.innerText = "준비됨";
-              el.style.color = "#aaa";
-            }
-          }, 3000);
-        }
+        if (!el) return;
+        _setStatusLabels(msg, "#2ecc71");
+        setTimeout(() => {
+          if (el.innerText === msg) {
+            _setStatusLabels("준비됨", "#aaa");
+          }
+        }, 3000);
       }
 
       function closeSuccessPopup() {
@@ -72,5 +77,12 @@
 
       function toggleRightSidebar() {
         const sb = document.getElementById("assistant-sidebar");
-        sb.style.display = sb.style.display === "none" ? "flex" : "none";
+        if (!sb) return;
+        sb.classList.toggle("is-open");
+        requestAnimationFrame(() => {
+          if (typeof layoutMemoSidebar === "function") layoutMemoSidebar();
+          if (typeof renderMemos === "function") renderMemos();
+          if (typeof schedulePageGuideRender === "function")
+            schedulePageGuideRender();
+        });
       }
