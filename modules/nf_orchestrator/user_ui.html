@@ -1288,6 +1288,40 @@
                 <span style="font-size: 0.8rem; font-weight: bold; color: #475569">🎯 집중 점검 대상을 정해볼까요? (선택)</span>
                 <div class="row" style="margin-top: 8px"><input id="consistency-filter-entity" type="text" placeholder="특정 인물/장소 (예: 김철수)"/></div>
                 <div class="row"><input id="consistency-filter-time" type="text" placeholder="특정 시점/사건 (예: 프롤로그)"/></div>
+                <div class="row"><input id="consistency-filter-timeline" type="number" min="0" step="1" placeholder="타임라인 인덱스 (예: 12)"/></div>
+              </div>
+              <div style="margin-top: 12px; border-top: 1px dashed #cbd5e1; padding-top: 10px;">
+                <span style="font-size: 0.8rem; font-weight: bold; color: #475569">🔬 고급 설정</span>
+                <div class="row" style="margin-top: 8px">
+                  <label for="consistency-graph-mode" style="font-size:0.78rem; color:#64748b; min-width: 90px;">Graph Mode</label>
+                  <select id="consistency-graph-mode" style="flex:1; padding:6px; border:1px solid #cbd5e1; border-radius:6px;">
+                    <option value="off">off</option>
+                    <option value="manual">manual</option>
+                    <option value="auto">auto</option>
+                  </select>
+                </div>
+                <div class="row">
+                  <label for="consistency-verifier-mode" style="font-size:0.78rem; color:#64748b; min-width: 90px;">Verifier</label>
+                  <select id="consistency-verifier-mode" style="flex:1; padding:6px; border:1px solid #cbd5e1; border-radius:6px;">
+                    <option value="off">off</option>
+                    <option value="conservative_nli">conservative_nli</option>
+                  </select>
+                </div>
+                <div class="row">
+                  <label for="consistency-triage-mode" style="font-size:0.78rem; color:#64748b; min-width: 90px;">Triage</label>
+                  <select id="consistency-triage-mode" style="flex:1; padding:6px; border:1px solid #cbd5e1; border-radius:6px;">
+                    <option value="off">off</option>
+                    <option value="embedding_anomaly">embedding_anomaly</option>
+                  </select>
+                </div>
+                <label style="display: block; margin-top: 8px; font-size: 0.8rem; color: #64748b; cursor: pointer;">
+                  <input id="consistency-layer3-promotion" type="checkbox" style="margin-right: 6px"/>
+                  Layer3 verdict promotion 사용
+                </label>
+                <label style="display: block; margin-top: 4px; font-size: 0.8rem; color: #64748b; cursor: pointer;">
+                  <input id="consistency-loop-enabled" type="checkbox" style="margin-right: 6px"/>
+                  Verification loop 사용
+                </label>
               </div>
             </details>
           </div>
@@ -1560,7 +1594,7 @@
       }
 
       function _collectChangedSegments(prevSegments, nextSegments) {
-        const prevMap = new Map();
+        const prevBuckets = new Map();
         (Array.isArray(prevSegments) ? prevSegments : []).forEach((item) => {
           if (
             !item ||
@@ -1568,8 +1602,20 @@
             !Number.isInteger(item.end)
           )
             return;
-          prevMap.set(`${item.start}:${item.end}`, item.fingerprint || "");
+          const fingerprint =
+            typeof item.fingerprint === "string" && item.fingerprint
+              ? item.fingerprint
+              : _hashSegmentText(item.text || "");
+          if (!prevBuckets.has(fingerprint)) prevBuckets.set(fingerprint, []);
+          prevBuckets.get(fingerprint).push({
+            start: item.start,
+            end: item.end,
+          });
         });
+        prevBuckets.forEach((bucket) =>
+          bucket.sort((left, right) => left.start - right.start),
+        );
+
         const changed = [];
         (Array.isArray(nextSegments) ? nextSegments : []).forEach((item) => {
           if (
@@ -1579,11 +1625,26 @@
           )
             return;
           if (!item.closed) return;
-          const key = `${item.start}:${item.end}`;
-          const prevFingerprint = prevMap.get(key);
-          if (prevFingerprint !== item.fingerprint) {
+          const fingerprint =
+            typeof item.fingerprint === "string" && item.fingerprint
+              ? item.fingerprint
+              : _hashSegmentText(item.text || "");
+          const bucket = prevBuckets.get(fingerprint);
+          if (!Array.isArray(bucket) || bucket.length === 0) {
             changed.push(item);
+            return;
           }
+
+          let bestIdx = 0;
+          let bestDist = Math.abs(bucket[0].start - item.start);
+          for (let idx = 1; idx < bucket.length; idx += 1) {
+            const dist = Math.abs(bucket[idx].start - item.start);
+            if (dist < bestDist) {
+              bestDist = dist;
+              bestIdx = idx;
+            }
+          }
+          bucket.splice(bestIdx, 1);
         });
         return changed;
       }
@@ -1664,6 +1725,9 @@
           "consistency-filter-entity",
         );
         const timeInput = document.getElementById("consistency-filter-time");
+        const timelineInput = document.getElementById(
+          "consistency-filter-timeline",
+        );
 
         const filters = {};
         const entityId =
@@ -1674,8 +1738,18 @@
           timeInput && typeof timeInput.value === "string"
             ? timeInput.value.trim()
             : "";
+        const timelineIdxRaw =
+          timelineInput && typeof timelineInput.value === "string"
+            ? timelineInput.value.trim()
+            : "";
         if (entityId) filters.entity_id = entityId;
         if (timeKey) filters.time_key = timeKey;
+        if (timelineIdxRaw !== "") {
+          const parsedTimeline = Number.parseInt(timelineIdxRaw, 10);
+          if (Number.isInteger(parsedTimeline) && parsedTimeline >= 0) {
+            filters.timeline_idx = parsedTimeline;
+          }
+        }
 
         let selectedLevel = "quick";
         const levelRadios = document.getElementsByName("consistency-level");
@@ -1702,15 +1776,44 @@
           graphMode = "auto";
           layer3Promotion = true;
           verifierMode = "conservative_nli";
-          triageMode = "strict"; // Backend can handle 'strict' or map to internal representation
+          triageMode = "embedding_anomaly";
           verificationLoop = true;
+        }
+
+        const graphModeInput = document.getElementById(
+          "consistency-graph-mode",
+        );
+        if (graphModeInput && typeof graphModeInput.value === "string") {
+          graphMode = _normalizeGraphMode(graphModeInput.value.trim());
+        }
+        const layer3Input = document.getElementById(
+          "consistency-layer3-promotion",
+        );
+        if (layer3Input) {
+          layer3Promotion = Boolean(layer3Input.checked);
+        }
+        const verifierInput = document.getElementById(
+          "consistency-verifier-mode",
+        );
+        if (verifierInput && typeof verifierInput.value === "string") {
+          verifierMode = _normalizeVerifierMode(verifierInput.value.trim());
+        }
+        const triageInput = document.getElementById(
+          "consistency-triage-mode",
+        );
+        if (triageInput && typeof triageInput.value === "string") {
+          triageMode = _normalizeTriageMode(triageInput.value.trim());
+        }
+        const loopInput = document.getElementById("consistency-loop-enabled");
+        if (loopInput) {
+          verificationLoop = Boolean(loopInput.checked);
         }
 
         state.consistencyOptions = {
           filters: {
             entity_id: entityId,
             time_key: timeKey,
-            timeline_idx: "",
+            timeline_idx: timelineIdxRaw,
           },
           graph_mode: graphMode,
           layer3_promotion: layer3Promotion,
@@ -2061,6 +2164,28 @@
               state.showOkVerdicts = Boolean(showOkToggle.checked);
               renderVerdicts(state.lastVerdicts || []);
             });
+          }
+          const entityFilterInput = document.getElementById(
+            "consistency-filter-entity",
+          );
+          if (entityFilterInput && typeof entityFilterInput.value === "string")
+            entityFilterInput.value =
+              state.consistencyOptions.filters.entity_id || "";
+          const timeFilterInput = document.getElementById(
+            "consistency-filter-time",
+          );
+          if (timeFilterInput && typeof timeFilterInput.value === "string")
+            timeFilterInput.value =
+              state.consistencyOptions.filters.time_key || "";
+          const timelineFilterInput = document.getElementById(
+            "consistency-filter-timeline",
+          );
+          if (
+            timelineFilterInput &&
+            typeof timelineFilterInput.value === "string"
+          ) {
+            timelineFilterInput.value =
+              state.consistencyOptions.filters.timeline_idx || "";
           }
           const graphModeInput = document.getElementById(
             "consistency-graph-mode",
@@ -2780,8 +2905,11 @@
 
         // Type based on current tab
         let type = state.currentNavTab;
-        if (type === "SETTING") {
-          // Ask subtype? For now default to SETTING
+        if (type === "TIMELINE") {
+          type = "EPISODE";
+        }
+        if (!["EPISODE", "SETTING", "CHAR", "PLOT", "NOTE"].includes(type)) {
+          type = "EPISODE";
         }
 
         showLoading("문서 생성 중...");
@@ -3315,6 +3443,99 @@
           return;
         }
 
+        if (mode === "PROPOSE") {
+          contentPanel.innerHTML =
+            '<div style="text-align:center; padding:20px;"><img src="/assets/img.gif" width="30" alt="loading"><br>문장 제안을 생성 중입니다...</div>';
+          try {
+            const editor = document.getElementById("editor");
+            const selectedText = window.getSelection
+              ? String(window.getSelection().toString() || "").trim()
+              : "";
+            const sourceText = (selectedText || editor.innerText || "").trim();
+            if (!sourceText) {
+              contentPanel.innerHTML =
+                '<div style="padding:20px; text-align:center;">제안할 문장이 없습니다.</div>';
+              return;
+            }
+
+            const levelInput = document.querySelector(
+              'input[name="propose-level"]:checked',
+            );
+            const level =
+              levelInput && typeof levelInput.value === "string"
+                ? levelInput.value
+                : "spell";
+            let suggestMode = "LOCAL_RULE";
+            if (level === "smooth" || level === "dramatic") {
+              suggestMode = "LOCAL_GEN";
+            }
+
+            const suggestJob = await api("/jobs", "POST", {
+              type: "SUGGEST",
+              project_id: state.projectId,
+              inputs: {
+                mode: suggestMode,
+                claim_text: sourceText.slice(0, 2000),
+                include_citations: true,
+                range: { doc_id: state.currentDocId },
+                k: 5,
+              },
+            });
+            const jobId = suggestJob?.job?.job_id;
+            if (!jobId) throw new Error("suggest job id missing");
+            await waitForJob(jobId);
+
+            const jobRes = await api(`/jobs/${jobId}`);
+            const result =
+              jobRes &&
+              jobRes.job &&
+              typeof jobRes.job.result === "object" &&
+              jobRes.job.result
+                ? jobRes.job.result
+                : {};
+            const suggestedText =
+              typeof result.text === "string" ? result.text : "";
+            const citations = Array.isArray(result.citations)
+              ? result.citations
+              : [];
+            if (!suggestedText) {
+              contentPanel.innerHTML =
+                '<div style="padding:20px; text-align:center;">제안 결과가 비어 있습니다.</div>';
+              return;
+            }
+
+            let html = `
+              <div class="analysis-card info">
+                <div style="font-weight:700; margin-bottom:8px;">제안 결과</div>
+                <div style="white-space:pre-wrap; line-height:1.6;">${escapeHtml(suggestedText)}</div>
+              </div>
+            `;
+            if (citations.length > 0) {
+              html += `<div class="analysis-card" style="margin-top:10px;"><div style="font-weight:600; margin-bottom:6px;">근거</div>`;
+              citations.slice(0, 5).forEach((citation) => {
+                const docId = citation?.doc_id || "";
+                const title =
+                  docId && state.docs[docId] && state.docs[docId].title
+                    ? state.docs[docId].title
+                    : docId || "문서";
+                const snippet = citation?.snippet_text || "";
+                html += `
+                  <div style="padding:8px 0; border-top:1px dashed #e2e8f0;">
+                    <div style="font-size:0.82rem; font-weight:600;">${escapeHtml(title)}</div>
+                    <div style="font-size:0.8rem; color:#64748b; margin-top:4px;">${escapeHtml(snippet)}</div>
+                  </div>
+                `;
+              });
+              html += "</div>";
+            }
+            contentPanel.innerHTML = html;
+          } catch (e) {
+            console.error(e);
+            contentPanel.innerHTML = `<div style="color:red; padding:20px;">제안 생성 실패: ${e.message}</div>`;
+          }
+          return;
+        }
+
         // CHECK Mode
         contentPanel.innerHTML =
           '<div style="text-align:center; padding:20px;"><img src="/assets/img.gif" width="40" alt="loading"><br>AI가 분석 중입니다... <span id="check-progress">0%</span></div>';
@@ -3797,31 +4018,16 @@
             },
           });
 
-          // Wait for job completion
-          await waitForJob(res.job.job_id);
+          const jobId = res?.job?.job_id;
+          if (!jobId) throw new Error("export job id missing");
+          await waitForJob(jobId);
 
-          // Get Result (Assuming job result contains URL or content)
-          const jobRes = await api(`/jobs/${res.job.job_id}`);
-          if (jobRes.job.result && jobRes.job.result.url) {
-            window.open(jobRes.job.result.url, "_blank");
-          } else if (jobRes.job.result && jobRes.job.result.content) {
-            // Manual download if content is returned directly
-            const mimeType =
-              format === "docx"
-                ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                : "text/plain";
-            const blob = new Blob([jobRes.job.result.content], {
-              type: mimeType,
-            });
-            const link = document.createElement("a");
-            link.href = URL.createObjectURL(blob);
-            link.download = `export_${state.currentDocId}.${format}`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-          } else {
-            alert("내보내기 완료 (다운로드 URL 없음)");
-          }
+          const downloadPath = `/jobs/${encodeURIComponent(jobId)}/artifact`;
+          const link = document.createElement("a");
+          link.href = downloadPath;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
 
           hideLoading();
           closeExportModal();
@@ -4046,8 +4252,15 @@
         const listContainer = document.getElementById("jobs-list-content");
         listContainer.innerHTML =
           '<div style="text-align:center; color:#94a3b8; font-size:0.85rem; padding:10px;">불러오는 중...</div>';
+        if (!state.projectId) {
+          listContainer.innerHTML =
+            '<div style="text-align:center; color:#94a3b8; font-size:0.85rem; padding:10px;">프로젝트를 먼저 선택하세요.</div>';
+          return;
+        }
         try {
-          const res = await api("/jobs?limit=5");
+          const res = await api(
+            `/jobs?project_id=${encodeURIComponent(state.projectId)}&limit=5`,
+          );
           const jobs = res.jobs || [];
           if (jobs.length === 0) {
             listContainer.innerHTML =
@@ -4059,11 +4272,12 @@
           let activeCount = 0;
           let html = "";
           jobs.forEach((job) => {
-            if (["PENDING", "RUNNING"].includes(job.status)) activeCount++;
+            if (["QUEUED", "RUNNING"].includes(job.status)) activeCount++;
 
             let statusColor = "#64748b";
             let pgColor = "#e2e8f0";
-            let progress = job.progress || 0;
+            let progress =
+              typeof job.progress === "number" ? job.progress : 0;
 
             if (job.status === "SUCCEEDED") {
               statusColor = "#16a34a";
@@ -4071,12 +4285,18 @@
               pgColor = "#22c55e";
             } else if (job.status === "FAILED") {
               statusColor = "#dc2626";
+              progress = 100;
               pgColor = "#ef4444";
             } else if (job.status === "RUNNING") {
               statusColor = "#2563eb";
+              progress = Math.max(25, progress || 0);
               pgColor = "#3b82f6";
+            } else if (job.status === "QUEUED") {
+              statusColor = "#2563eb";
+              progress = Math.max(8, progress || 0);
             } else if (job.status === "CANCELED") {
               statusColor = "#d97706";
+              progress = 100;
             }
 
             html += `

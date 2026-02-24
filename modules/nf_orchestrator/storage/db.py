@@ -297,6 +297,18 @@ def _initialize(conn: sqlite3.Connection) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS whitelist_annotation (
+            annotation_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            claim_fingerprint TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            intent_type TEXT NOT NULL,
+            reason TEXT,
+            meta_json TEXT,
+            created_at TEXT NOT NULL
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS ignore_item (
             iid TEXT PRIMARY KEY,
             project_id TEXT NOT NULL,
@@ -366,6 +378,7 @@ def _initialize(conn: sqlite3.Connection) -> None:
     _ensure_columns(conn, "jobs", "max_attempts", "max_attempts INTEGER NOT NULL DEFAULT 1")
     _ensure_columns(conn, "jobs", "error_code", "error_code TEXT")
     _ensure_columns(conn, "jobs", "error_message", "error_message TEXT")
+    _ensure_columns(conn, "jobs", "result_json", "result_json TEXT")
     _ensure_columns(conn, "documents", "metadata_json", "metadata_json TEXT")
     _ensure_columns(conn, "verdict_log", "claim_fingerprint", "claim_fingerprint TEXT")
     _ensure_columns(conn, "verdict_log", "unknown_reasons_json", "unknown_reasons_json TEXT")
@@ -393,6 +406,7 @@ def _ensure_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_entity_mention_lookup ON entity_mention_span(project_id, doc_id, entity_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_time_anchor_lookup ON time_anchor(project_id, doc_id, time_key, timeline_idx, status)",
         "CREATE INDEX IF NOT EXISTS idx_whitelist_lookup ON whitelist_item(project_id, claim_fingerprint, scope)",
+        "CREATE INDEX IF NOT EXISTS idx_whitelist_annotation_lookup ON whitelist_annotation(project_id, claim_fingerprint, scope, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_ignore_lookup ON ignore_item(project_id, claim_fingerprint, scope, kind)",
         "CREATE INDEX IF NOT EXISTS idx_extraction_mapping_lookup ON extraction_mappings(project_id, enabled, priority, slot_key)",
     )

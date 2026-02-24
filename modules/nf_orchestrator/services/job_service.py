@@ -50,6 +50,14 @@ class JobServiceImpl:
         with db.connect(self._db_path) as conn:
             return job_repo.get_job(conn, job_id)
 
+    def list(self, *, project_id: str | None = None, limit: int = 20) -> list[Job]:
+        with db.connect(self._db_path) as conn:
+            return job_repo.list_jobs(conn, project_id=project_id, limit=limit)
+
+    def set_result(self, job_id: str, result: dict[str, Any] | None) -> None:
+        with db.connect(self._db_path) as conn:
+            job_repo.set_job_result(conn, job_id, result=result)
+
     def list_events(self, job_id: str, *, after_seq: int = 0) -> list[tuple[int, JobEvent]]:
         with db.connect(self._db_path) as conn:
             return job_repo.list_job_events(conn, job_id, after_seq=after_seq)

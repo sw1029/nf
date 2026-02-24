@@ -151,12 +151,14 @@ class QueryServiceImpl:
             scope = verdict.input_doc_id
             whitelisted = whitelist_repo.is_whitelisted(conn, project_id, fingerprint, scope=scope)
             ignored = ignore_repo.is_ignored(conn, project_id, fingerprint, scope=scope, kind="CONSISTENCY")
+            annotation = whitelist_repo.get_whitelist_annotation(conn, project_id, fingerprint, scope=scope)
             return {
                 "verdict": verdict,
                 "evidence": evidence_items,
                 "claim_fingerprint": fingerprint,
                 "whitelisted": whitelisted,
                 "ignored": ignored,
+                "whitelist_annotation": annotation,
                 "unknown_reasons": list(verdict.unknown_reasons),
                 "fact_paths": fact_paths,
             }

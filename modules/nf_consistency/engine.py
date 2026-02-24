@@ -1252,7 +1252,8 @@ def _base_retrieval_score(result: dict[str, Any]) -> float:
     except (TypeError, ValueError):
         raw_score = 0.0
     if source == "fts":
-        return 1.0 / (1.0 + max(0.0, raw_score))
+        # FTS(BM25)는 낮을수록 좋은 방향이므로 절댓값 기반으로 [0,1] 강도로 정규화한다.
+        return _clamp01(1.0 / (1.0 + abs(raw_score)))
     return max(0.0, min(1.0, raw_score))
 
 
@@ -1412,6 +1413,129 @@ def _filter_self_evidence_results(
     return filtered, removed
 
 
+def _overlaps_any_span(span_start: int, span_end: int, spans: list[tuple[int, int]]) -> bool:
+    for other_start, other_end in spans:
+        if span_start < other_end and other_start < span_end:
+            return True
+    return False
+
+
+def _load_user_tag_spans(
+    conn,
+    *,
+    project_id: str,
+    doc_id: str,
+    snapshot_id: str,
+    cache: dict[tuple[str, str], list[tuple[int, int]]],
+) -> list[tuple[int, int]]:
+    key = (doc_id, snapshot_id)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    rows = conn.execute(
+        """
+        SELECT span_start, span_end
+        FROM tag_assignment
+        WHERE project_id = ? AND doc_id = ? AND snapshot_id = ? AND created_by = ?
+        """,
+        (project_id, doc_id, snapshot_id, FactSource.USER.value),
+    ).fetchall()
+    spans: list[tuple[int, int]] = []
+    for row in rows:
+        try:
+            start = int(row["span_start"])
+            end = int(row["span_end"])
+        except (TypeError, ValueError):
+            continue
+        if end <= start:
+            continue
+        spans.append((start, end))
+    cache[key] = spans
+    return spans
+
+
+def _load_approved_evidence_spans(
+    conn,
+    *,
+    project_id: str,
+    doc_id: str,
+    snapshot_id: str,
+    cache: dict[tuple[str, str], list[tuple[int, int]]],
+) -> list[tuple[int, int]]:
+    key = (doc_id, snapshot_id)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    rows = conn.execute(
+        """
+        SELECT e.span_start AS span_start, e.span_end AS span_end
+        FROM evidence e
+        JOIN schema_facts sf ON sf.evidence_eid = e.eid
+        WHERE sf.project_id = ? AND e.doc_id = ? AND e.snapshot_id = ? AND sf.status = ?
+        """,
+        (project_id, doc_id, snapshot_id, FactStatus.APPROVED.value),
+    ).fetchall()
+    spans: list[tuple[int, int]] = []
+    for row in rows:
+        try:
+            start = int(row["span_start"])
+            end = int(row["span_end"])
+        except (TypeError, ValueError):
+            continue
+        if end <= start:
+            continue
+        spans.append((start, end))
+    cache[key] = spans
+    return spans
+
+
+def _promote_confirmed_evidence(
+    conn,
+    *,
+    project_id: str,
+    results: list[dict[str, Any]],
+    user_tag_span_cache: dict[tuple[str, str], list[tuple[int, int]]],
+    approved_evidence_span_cache: dict[tuple[str, str], list[tuple[int, int]]],
+) -> None:
+    for row in results:
+        evidence = row.get("evidence")
+        if not isinstance(evidence, dict):
+            continue
+        if bool(evidence.get("confirmed", False)):
+            continue
+
+        doc_id_raw = evidence.get("doc_id")
+        snapshot_id_raw = evidence.get("snapshot_id")
+        if not isinstance(doc_id_raw, str) or not doc_id_raw:
+            continue
+        if not isinstance(snapshot_id_raw, str) or not snapshot_id_raw:
+            continue
+        try:
+            span_start = int(evidence.get("span_start", 0))
+            span_end = int(evidence.get("span_end", 0))
+        except (TypeError, ValueError):
+            continue
+        if span_end <= span_start:
+            continue
+
+        user_spans = _load_user_tag_spans(
+            conn,
+            project_id=project_id,
+            doc_id=doc_id_raw,
+            snapshot_id=snapshot_id_raw,
+            cache=user_tag_span_cache,
+        )
+        approved_spans = _load_approved_evidence_spans(
+            conn,
+            project_id=project_id,
+            doc_id=doc_id_raw,
+            snapshot_id=snapshot_id_raw,
+            cache=approved_evidence_span_cache,
+        )
+        if _overlaps_any_span(span_start, span_end, user_spans) or _overlaps_any_span(span_start, span_end, approved_spans):
+            evidence["confirmed"] = True
+
+
 def _build_verdict_links(
     *,
     verdict_id: str,
@@ -1473,7 +1597,7 @@ def _compute_reliability(
     confirmed = max(0, int(breakdown.confirmed_evidence))
     fts_component = 0.0
     if evidence_count > 0:
-        fts_component = _clamp01(1.0 / (1.0 + max(0.0, float(breakdown.fts_strength))))
+        fts_component = _clamp01(float(breakdown.fts_strength))
     evidence_count_component = _clamp01(evidence_count / float(_FINAL_K))
     confirmed_component = _clamp01(confirmed / float(max(1, evidence_count)))
     model_component = _clamp01(float(breakdown.model_score))
@@ -1686,6 +1810,8 @@ class ConsistencyEngineImpl:
             )
             retrieval_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
             slot_compare_cache: dict[tuple[str, str, str], Verdict | None] = {}
+            user_tag_span_cache: dict[tuple[str, str], list[tuple[int, int]]] = {}
+            approved_evidence_span_cache: dict[tuple[str, str], list[tuple[int, int]]] = {}
 
             verdicts: list[VerdictLog] = []
             for claim in claims:
@@ -1854,6 +1980,13 @@ class ConsistencyEngineImpl:
                         req_stats["self_evidence_filtered_count"] = int(
                             req_stats.get("self_evidence_filtered_count", 0)
                         ) + filtered_count
+                _promote_confirmed_evidence(
+                    conn,
+                    project_id=project_id,
+                    results=candidate_results,
+                    user_tag_span_cache=user_tag_span_cache,
+                    approved_evidence_span_cache=approved_evidence_span_cache,
+                )
                 reranked_results, rerank_meta = _rerank_results_for_consistency(
                     results=candidate_results,
                     claim_text=claim_text,
@@ -1928,8 +2061,8 @@ class ConsistencyEngineImpl:
                         verdict = Verdict.UNKNOWN
                         unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
 
-                    fts_strength = float(current_results[0]["score"]) if current_results else 0.0
-                    promotion_fts_strength = _base_retrieval_score(current_results[0]) if current_results else 0.0
+                    fts_strength = _base_retrieval_score(current_results[0]) if current_results else 0.0
+                    promotion_fts_strength = fts_strength
                     model_score = (
                         float(current_rerank_meta.get("entail_score", 0.0))
                         if settings.enable_layer3_model
@@ -2077,6 +2210,13 @@ class ConsistencyEngineImpl:
                                 req_stats["self_evidence_filtered_count"] = int(
                                     req_stats.get("self_evidence_filtered_count", 0)
                                 ) + filtered_count
+                        _promote_confirmed_evidence(
+                            conn,
+                            project_id=project_id,
+                            results=candidate_results,
+                            user_tag_span_cache=user_tag_span_cache,
+                            approved_evidence_span_cache=approved_evidence_span_cache,
+                        )
                         reranked_results, rerank_meta = _rerank_results_for_consistency(
                             results=candidate_results,
                             claim_text=claim_text,

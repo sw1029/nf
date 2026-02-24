@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -17,7 +18,21 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--debug-token", default="", help="Debug UI token (default: random).")
     parser.add_argument("--api-token", default="", help="Optional NF_ORCHESTRATOR_TOKEN for API calls.")
     parser.add_argument("--no-browser", action="store_true", help="Do not open a browser automatically.")
+    parser.add_argument("--no-worker", action="store_true", help="Do not start a worker process.")
+    parser.add_argument("--poll-interval", type=float, default=1.0, help="Worker poll interval seconds.")
+    parser.add_argument("--lease-seconds", type=int, default=30, help="Worker lease seconds.")
     return parser.parse_args()
+
+
+def _spawn_worker(repo_root: Path, *, poll_interval: float, lease_seconds: int) -> subprocess.Popen[bytes]:
+    env = os.environ.copy()
+    pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(repo_root) + (os.pathsep + pythonpath if pythonpath else "")
+    code = (
+        "from modules.nf_workers import run_worker\n"
+        f"run_worker(poll_interval={poll_interval!r}, lease_seconds={lease_seconds!r})\n"
+    )
+    return subprocess.Popen([sys.executable, "-c", code], env=env)
 
 
 def main() -> int:
@@ -47,8 +62,27 @@ def main() -> int:
 
     from modules.nf_orchestrator import run_orchestrator
 
-    run_orchestrator(args.host, args.port)
-    return 0
+    worker_proc: subprocess.Popen[bytes] | None = None
+    if not args.no_worker:
+        worker_proc = _spawn_worker(
+            repo_root,
+            poll_interval=args.poll_interval,
+            lease_seconds=args.lease_seconds,
+        )
+        print(f"- Worker PID: {worker_proc.pid}")
+
+    try:
+        run_orchestrator(args.host, args.port, start_worker=False)
+        return 0
+    except KeyboardInterrupt:
+        return 130
+    finally:
+        if worker_proc is not None:
+            worker_proc.terminate()
+            try:
+                worker_proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                worker_proc.kill()
 
 
 if __name__ == "__main__":

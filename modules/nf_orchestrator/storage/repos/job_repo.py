@@ -17,7 +17,20 @@ def _add_seconds(ts: str, seconds: int) -> str:
     return (parsed + timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _load_json_object(raw: str | None) -> dict[str, Any] | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _row_to_job(row: Any) -> Job:
+    result = _load_json_object(row["result_json"] if "result_json" in row.keys() else None)
+    error_code_raw = row["error_code"] if "error_code" in row.keys() else None
+    error_message_raw = row["error_message"] if "error_message" in row.keys() else None
     return Job(
         job_id=row["job_id"],
         type=JobType(row["type"]),
@@ -27,6 +40,9 @@ def _row_to_job(row: Any) -> Job:
         queued_at=row["queued_at"],
         started_at=row["started_at"],
         finished_at=row["finished_at"],
+        result=result,
+        error_code=error_code_raw if isinstance(error_code_raw, str) else None,
+        error_message=error_message_raw if isinstance(error_message_raw, str) else None,
     )
 
 
@@ -51,9 +67,9 @@ def create_job(
         """
         INSERT INTO jobs (
             job_id, project_id, type, status, created_at, queued_at,
-            inputs_json, params_json, cancel_requested, priority
+            inputs_json, params_json, cancel_requested, priority, error_code, error_message, result_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, NULL, NULL)
         """,
         (
             job_id,
@@ -75,6 +91,9 @@ def create_job(
         status=JobStatus.QUEUED,
         created_at=ts,
         queued_at=ts,
+        result=None,
+        error_code=None,
+        error_message=None,
     )
 
 
@@ -83,6 +102,24 @@ def get_job(conn, job_id: str) -> Job | None:
     if row is None:
         return None
     return _row_to_job(row)
+
+
+def list_jobs(
+    conn,
+    *,
+    project_id: str | None = None,
+    limit: int = 20,
+) -> list[Job]:
+    cap = max(1, min(200, int(limit)))
+    query = "SELECT * FROM jobs"
+    params: list[Any] = []
+    if isinstance(project_id, str) and project_id.strip():
+        query += " WHERE project_id = ?"
+        params.append(project_id.strip())
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(cap)
+    rows = conn.execute(query, params).fetchall()
+    return [_row_to_job(row) for row in rows]
 
 
 def get_job_payloads(conn, job_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -324,5 +361,14 @@ def set_job_error(conn, job_id: str, *, error_code: str, error_message: str) -> 
     conn.execute(
         "UPDATE jobs SET error_code = ?, error_message = ? WHERE job_id = ?",
         (error_code, error_message, job_id),
+    )
+    conn.commit()
+
+
+def set_job_result(conn, job_id: str, *, result: dict[str, Any] | None) -> None:
+    payload = json.dumps(result, ensure_ascii=False) if isinstance(result, dict) else None
+    conn.execute(
+        "UPDATE jobs SET result_json = ? WHERE job_id = ?",
+        (payload, job_id),
     )
     conn.commit()

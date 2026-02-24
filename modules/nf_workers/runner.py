@@ -95,8 +95,11 @@ class WorkerContext:
         self.params = params
         self._db_path = db_path
         self._lease_seconds = lease_seconds
+        self._last_payload: dict[str, Any] | None = None
 
     def emit(self, event: JobEvent) -> None:
+        if isinstance(event.payload, dict):
+            self._last_payload = dict(event.payload)
         with db.connect(self._db_path) as conn:
             job_repo.add_job_event(
                 conn,
@@ -112,6 +115,9 @@ class WorkerContext:
     def check_cancelled(self) -> bool:
         with db.connect(self._db_path) as conn:
             return job_repo.is_cancel_requested(conn, self.job_id)
+
+    def result_payload(self) -> dict[str, Any] | None:
+        return dict(self._last_payload) if isinstance(self._last_payload, dict) else None
 
 
 def run_worker(
@@ -202,6 +208,7 @@ def run_worker(
                 )
                 _run_job(job.type, ctx)
                 with db.connect(db_path) as conn:
+                    job_repo.set_job_result(conn, job.job_id, result=ctx.result_payload())
                     job_repo.update_job_status(conn, job.job_id, JobStatus.SUCCEEDED)
                 ctx.emit(
                     JobEvent(
@@ -215,6 +222,7 @@ def run_worker(
                 )
             except CancelledError:
                 with db.connect(db_path) as conn:
+                    job_repo.set_job_result(conn, job.job_id, result=None)
                     job_repo.update_job_status(conn, job.job_id, JobStatus.CANCELED)
                 ctx.emit(
                     JobEvent(
@@ -228,6 +236,7 @@ def run_worker(
                 )
             except Exception as exc:  # noqa: BLE001
                 with db.connect(db_path) as conn:
+                    job_repo.set_job_result(conn, job.job_id, result=None)
                     job_repo.set_job_error(conn, job.job_id, error_code="INTERNAL_ERROR", error_message=str(exc))
                     job_repo.update_job_status(conn, job.job_id, JobStatus.FAILED)
                 ctx.emit(
@@ -1282,7 +1291,14 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
     )
 
 
-def _run_consistency_preflight(ctx: WorkerContext, *, doc_id: str, snapshot_id: str, preflight: dict[str, Any]) -> None:
+def _run_consistency_preflight(
+    ctx: WorkerContext,
+    *,
+    doc_id: str,
+    snapshot_id: str,
+    preflight: dict[str, Any],
+    graph_mode: str = "off",
+) -> None:
     ensure_ingest = bool(preflight.get("ensure_ingest"))
     ensure_index_fts = bool(preflight.get("ensure_index_fts"))
     if not ensure_ingest and not ensure_index_fts:
@@ -1395,12 +1411,20 @@ def _run_consistency_preflight(ctx: WorkerContext, *, doc_id: str, snapshot_id: 
             )
         )
         for target_doc_id in index_targets:
+            index_params = dict(ctx.params) if isinstance(ctx.params, dict) else {}
+            if graph_mode in {"manual", "auto"}:
+                grouping_raw = index_params.get("grouping")
+                grouping = dict(grouping_raw) if isinstance(grouping_raw, dict) else {}
+                grouping["entity_mentions"] = True
+                grouping["time_anchors"] = True
+                grouping["graph_extract"] = True
+                index_params["grouping"] = grouping
             _handle_index_fts(
                 WorkerContext(
                     job_id=ctx.job_id,
                     project_id=ctx.project_id,
                     payload={"scope": target_doc_id},
-                    params=ctx.params,
+                    params=index_params,
                     db_path=ctx._db_path,
                     lease_seconds=ctx._lease_seconds,
                 )
@@ -1412,6 +1436,11 @@ def _handle_consistency(ctx: WorkerContext) -> None:
     engine = ConsistencyEngineImpl(db_path=ctx._db_path)
     req = dict(ctx.payload)
     req.setdefault("project_id", ctx.project_id)
+    params = ctx.params if isinstance(ctx.params, dict) else {}
+    consistency_params_for_preflight = params.get("consistency") if isinstance(params.get("consistency"), dict) else {}
+    graph_mode_for_preflight = str(consistency_params_for_preflight.get("graph_mode", "off")).strip().lower()
+    if graph_mode_for_preflight not in {"off", "manual", "auto"}:
+        graph_mode_for_preflight = "off"
     preflight = _parse_consistency_preflight(req)
 
     # Resolve 'latest' snapshot.
@@ -1445,11 +1474,16 @@ def _handle_consistency(ctx: WorkerContext) -> None:
             pass
     req["filters"] = scoped_filters
 
-    _run_consistency_preflight(ctx, doc_id=doc_id, snapshot_id=snapshot_id, preflight=preflight)
+    _run_consistency_preflight(
+        ctx,
+        doc_id=doc_id,
+        snapshot_id=snapshot_id,
+        preflight=preflight,
+        graph_mode=graph_mode_for_preflight,
+    )
 
     req["preflight"] = preflight
     req.setdefault("schema_scope", preflight["schema_scope"])
-    params = ctx.params if isinstance(ctx.params, dict) else {}
     req["extraction"] = _parse_extraction_profile(params)
     consistency_params = params.get("consistency")
     if isinstance(consistency_params, dict):

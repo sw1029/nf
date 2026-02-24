@@ -107,8 +107,9 @@ def _build_openapi_spec() -> dict[str, Any]:
             },
             "/projects/{project_id}/whitelist": {"post": {"summary": "Add whitelist item"}, "delete": {"summary": "Delete whitelist item"}},
             "/projects/{project_id}/ignore": {"post": {"summary": "Add ignore item"}, "delete": {"summary": "Delete ignore item"}},
-            "/jobs": {"post": {"summary": "Submit job"}},
+            "/jobs": {"get": {"summary": "List jobs"}, "post": {"summary": "Submit job"}},
             "/jobs/{job_id}": {"get": {"summary": "Get job"}},
+            "/jobs/{job_id}/artifact": {"get": {"summary": "Download job artifact"}},
             "/jobs/{job_id}/cancel": {"post": {"summary": "Cancel job"}},
             "/jobs/{job_id}/events": {"get": {"summary": "Stream job events"}},
             "/query/retrieval": {"post": {"summary": "FTS-only retrieval"}},
@@ -967,11 +968,28 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             claim_text = payload.get("claim_text")
             scope = payload.get("scope")
             note = payload.get("note")
+            intent_type = payload.get("intent_type")
+            reason = payload.get("reason")
+            meta = payload.get("meta")
             if not isinstance(claim_text, str) or not claim_text.strip():
                 raise AppError(ErrorCode.VALIDATION_ERROR, "claim_text가 필요합니다")
             if not isinstance(scope, str) or not scope.strip():
                 raise AppError(ErrorCode.VALIDATION_ERROR, "scope가 필요합니다")
-            item = self.server.whitelist_service.add_item(project_id, claim_text, scope.strip(), note)
+            if intent_type is not None and not isinstance(intent_type, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "intent_type은 문자열이어야 합니다")
+            if reason is not None and not isinstance(reason, str):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "reason은 문자열이어야 합니다")
+            if meta is not None and not isinstance(meta, dict):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "meta는 객체여야 합니다")
+            item = self.server.whitelist_service.add_item(
+                project_id,
+                claim_text,
+                scope.strip(),
+                note,
+                intent_type=intent_type.strip() if isinstance(intent_type, str) else None,
+                reason=reason.strip() if isinstance(reason, str) and reason.strip() else None,
+                meta=meta if isinstance(meta, dict) else None,
+            )
             self._send_json(HTTPStatus.CREATED, {"whitelist": item})
             return
         if self.command == "DELETE":
@@ -1250,6 +1268,21 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
 
     def _handle_jobs(self, segments: list[str]) -> None:
         if len(segments) == 1:
+            if self.command == "GET":
+                params = parse_qs(urlparse(self.path).query)
+                project_id_raw = params.get("project_id", [""])[0]
+                limit_raw = params.get("limit", ["20"])[0]
+                project_id = project_id_raw.strip() if isinstance(project_id_raw, str) else ""
+                try:
+                    limit = int(limit_raw)
+                except (TypeError, ValueError) as exc:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "limit는 정수여야 합니다") from exc
+                jobs = self.server.job_service.list(
+                    project_id=project_id if project_id else None,
+                    limit=limit,
+                )
+                self._send_json(HTTPStatus.OK, {"jobs": dump_json(jobs)})
+                return
             if self.command != "POST":
                 self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
                 return
@@ -1309,6 +1342,14 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
                 return
             self._stream_job_events(job_id)
+            return
+
+        if len(segments) == 3 and segments[2] == "artifact":
+            job_id = segments[1]
+            if self.command != "GET":
+                self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+                return
+            self._send_job_artifact(job_id)
             return
 
         self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
@@ -1760,6 +1801,43 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             if drop_after and sent >= drop_after:
                 return
         self.wfile.write(b": keep-alive\n\n")
+
+    def _send_job_artifact(self, job_id: str) -> None:
+        job = self.server.job_service.get(job_id)
+        if job is None:
+            self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "잡을 찾을 수 없습니다")
+            return
+        result = job.result if isinstance(job.result, dict) else {}
+        artifact_path_raw = result.get("artifact_path")
+        if not isinstance(artifact_path_raw, str) or not artifact_path_raw.strip():
+            self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "artifact를 찾을 수 없습니다")
+            return
+
+        artifact_path = Path(artifact_path_raw).resolve()
+        export_root = docstore.DEFAULT_EXPORT_PATH.resolve()
+        try:
+            artifact_path.relative_to(export_root)
+        except ValueError:
+            self._send_app_error(HTTPStatus.FORBIDDEN, ErrorCode.POLICY_VIOLATION, "허용되지 않는 artifact 경로")
+            return
+        if not artifact_path.exists() or not artifact_path.is_file():
+            self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "artifact 파일이 없습니다")
+            return
+
+        ctype = "application/octet-stream"
+        suffix = artifact_path.suffix.lower()
+        if suffix == ".txt":
+            ctype = "text/plain; charset=utf-8"
+        elif suffix == ".docx":
+            ctype = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        filename = artifact_path.name
+        content = artifact_path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Content-Disposition", f"attachment; filename=\"{filename}\"")
+        self.end_headers()
+        self.wfile.write(content)
 
     def _write_sse_event(self, seq: int, event: JobEvent, *, fragment_ms: int = 0) -> None:
         payload = json.dumps(dump_json(event), ensure_ascii=False)

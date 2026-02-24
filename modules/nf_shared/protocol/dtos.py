@@ -78,6 +78,12 @@ class Verdict(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class WhitelistIntentType(str, Enum):
+    INTENDED_CONFLICT = "INTENDED_CONFLICT"
+    INTENTIONAL_LIE = "INTENTIONAL_LIE"
+    NARRATIVE_TRICK = "NARRATIVE_TRICK"
+
+
 class JobType(str, Enum):
     INGEST = "INGEST"
     INDEX_FTS = "INDEX_FTS"
@@ -387,6 +393,18 @@ class VerdictEvidenceLink:
 
 
 @dataclass(frozen=True)
+class WhitelistAnnotation:
+    annotation_id: str
+    project_id: ProjectID
+    claim_fingerprint: str
+    scope: str
+    intent_type: WhitelistIntentType
+    reason: str | None
+    meta: Mapping[str, Any] | None
+    created_at: AppTimestamp
+
+
+@dataclass(frozen=True)
 class Job:
     job_id: JobID
     type: JobType
@@ -396,6 +414,9 @@ class Job:
     queued_at: AppTimestamp | None = None
     started_at: AppTimestamp | None = None
     finished_at: AppTimestamp | None = None
+    result: Mapping[str, Any] | None = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 @dataclass(frozen=True)
