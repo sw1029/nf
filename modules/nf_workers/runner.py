@@ -46,6 +46,7 @@ from modules.nf_schema.units import normalize_value
 from modules.nf_schema.policy import enforce_fact_status_policy
 from modules.nf_schema.validators import validate_fact_value
 from modules.nf_shared.config import load_config
+from modules.nf_workers.runtime import resource_guard
 from modules.nf_shared.protocol.dtos import (
     EvidenceMatchType,
     EvidenceRole,
@@ -256,55 +257,15 @@ def run_worker(
 
 
 def _memory_pressure(max_ram_mb: int) -> bool:
-    if max_ram_mb <= 0:
-        return False
-    usage_mb = _get_process_rss_mb()
-    if usage_mb <= 0:
-        return False
-    return usage_mb > max_ram_mb
+    return resource_guard.memory_pressure(max_ram_mb)
 
 
 def _get_process_rss_mb() -> float:
-    if resource is not None:
-        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        if sys.platform == "darwin":
-            return float(usage) / (1024 * 1024)
-        return float(usage) / 1024
-
-    if sys.platform.startswith("win"):
-        try:
-            import ctypes
-            import ctypes.wintypes
-
-            class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
-                _fields_ = [
-                    ("cb", ctypes.wintypes.DWORD),
-                    ("PageFaultCount", ctypes.wintypes.DWORD),
-                    ("PeakWorkingSetSize", ctypes.wintypes.SIZE_T),
-                    ("WorkingSetSize", ctypes.wintypes.SIZE_T),
-                    ("QuotaPeakPagedPoolUsage", ctypes.wintypes.SIZE_T),
-                    ("QuotaPagedPoolUsage", ctypes.wintypes.SIZE_T),
-                    ("QuotaPeakNonPagedPoolUsage", ctypes.wintypes.SIZE_T),
-                    ("QuotaNonPagedPoolUsage", ctypes.wintypes.SIZE_T),
-                    ("PagefileUsage", ctypes.wintypes.SIZE_T),
-                    ("PeakPagefileUsage", ctypes.wintypes.SIZE_T),
-                ]
-
-            counters = PROCESS_MEMORY_COUNTERS()
-            counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
-            handle = ctypes.windll.kernel32.GetCurrentProcess()
-            ok = ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb)
-            if ok:
-                return float(counters.WorkingSetSize) / (1024 * 1024)
-        except Exception:  # noqa: BLE001
-            return 0.0
-
-    return 0.0
+    return resource_guard.get_process_rss_mb()
 
 
 def _estimate_index_mb(text: str, chunk_count: int) -> float:
-    text_mb = len(text.encode("utf-8")) / (1024 * 1024)
-    return text_mb * 2.0 + chunk_count * 0.001
+    return resource_guard.estimate_index_mb(text, chunk_count)
 
 
 def _elapsed_ms(start_perf: float) -> int:
@@ -766,21 +727,37 @@ def _run_job(job_type: JobType, ctx: WorkerContext) -> None:
         raise CancelledError("cancel requested")
 
     if job_type == JobType.INGEST:
-        _handle_ingest(ctx)
+        from modules.nf_workers.jobs import ingest as ingest_job
+
+        ingest_job.run(ctx)
     elif job_type == JobType.INDEX_FTS:
-        _handle_index_fts(ctx)
+        from modules.nf_workers.jobs import index_fts as index_fts_job
+
+        index_fts_job.run(ctx)
     elif job_type == JobType.CONSISTENCY:
-        _handle_consistency(ctx)
+        from modules.nf_workers.jobs import consistency as consistency_job
+
+        consistency_job.run(ctx)
     elif job_type == JobType.RETRIEVE_VEC:
-        _handle_retrieve_vec(ctx)
+        from modules.nf_workers.jobs import retrieve_vec as retrieve_vec_job
+
+        retrieve_vec_job.run(ctx)
     elif job_type == JobType.SUGGEST:
-        _handle_suggest(ctx)
+        from modules.nf_workers.jobs import suggest as suggest_job
+
+        suggest_job.run(ctx)
     elif job_type == JobType.EXPORT:
-        _handle_export(ctx)
+        from modules.nf_workers.jobs import export as export_job
+
+        export_job.run(ctx)
     elif job_type == JobType.PROOFREAD:
-        _handle_proofread(ctx)
+        from modules.nf_workers.jobs import proofread as proofread_job
+
+        proofread_job.run(ctx)
     elif job_type == JobType.INDEX_VEC:
-        _handle_index_vec(ctx)
+        from modules.nf_workers.jobs import index_vec as index_vec_job
+
+        index_vec_job.run(ctx)
     else:
         raise RuntimeError(f"unsupported job type: {job_type}")
 

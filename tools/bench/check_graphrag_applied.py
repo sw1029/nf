@@ -8,109 +8,35 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib import error, parse, request
+from urllib import parse
+
+_THIS_DIR = Path(__file__).resolve().parent
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
+
+from http_client import ApiClient as SharedApiClient, wait_for_job as shared_wait_for_job  # noqa: E402
+from sse import read_job_events as shared_read_job_events  # noqa: E402
 
 
 def now_ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-class ApiClient:
-    def __init__(self, base_url: str, *, timeout: float = 60.0) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
-
-    def _request(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        url = self.base_url + path
-        data = None
-        headers = {"Content-Type": "application/json"}
-        if body is not None:
-            data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-        req = request.Request(url=url, method=method, data=data, headers=headers)
-        try:
-            with request.urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read().decode("utf-8", errors="ignore")
-                return json.loads(raw) if raw else {}
-        except error.HTTPError as exc:
-            payload = exc.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"HTTP {exc.code} {path}: {payload}") from exc
-
-    def get(self, path: str) -> dict[str, Any]:
-        return self._request("GET", path)
-
-    def post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        return self._request("POST", path, body)
+class ApiClient(SharedApiClient):
+    pass
 
 
 def _wait_for_job(client: ApiClient, job_id: str, *, timeout_sec: float = 1200.0) -> str:
-    start = time.perf_counter()
-    while True:
-        res = client.get(f"/jobs/{parse.quote(job_id)}")
-        status = str((res.get("job") or {}).get("status") or "")
-        if status in {"SUCCEEDED", "FAILED", "CANCELED"}:
-            return status
-        if (time.perf_counter() - start) > timeout_sec:
-            return "TIMEOUT"
-        time.sleep(0.5)
+    return shared_wait_for_job(client, job_id, timeout_sec=timeout_sec).status
 
 
 def _read_job_events(client: ApiClient, job_id: str, *, after_seq: int = 0) -> list[tuple[int, dict[str, Any]]]:
-    url = client.base_url + f"/jobs/{parse.quote(job_id)}/events?after={after_seq}"
-    req = request.Request(url=url, method="GET")
-
-    events: list[tuple[int, dict[str, Any]]] = []
-    current_id: int | None = None
-    data_lines: list[str] = []
-
-    def flush() -> None:
-        nonlocal current_id, data_lines
-        if not data_lines:
-            current_id = None
-            return
-        raw = "\n".join(data_lines).strip()
-        data_lines = []
-        if not raw:
-            current_id = None
-            return
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            current_id = None
-            return
-        if isinstance(payload, dict):
-            events.append((int(current_id or 0), payload))
-        current_id = None
-
-    try:
-        with request.urlopen(req, timeout=client.timeout) as resp:
-            while True:
-                raw_line = resp.readline()
-                if not raw_line:
-                    break
-                line = raw_line.decode("utf-8", errors="ignore").rstrip("\r\n")
-                if line.startswith(":"):
-                    if line.startswith(": keep-alive"):
-                        break
-                    continue
-                if line.startswith("id:"):
-                    try:
-                        current_id = int(line.split(":", 1)[1].strip())
-                    except (TypeError, ValueError):
-                        current_id = None
-                    continue
-                if line.startswith("data:"):
-                    data_lines.append(line.split(":", 1)[1].lstrip())
-                    continue
-                if not line.strip():
-                    flush()
-    except TimeoutError:
-        pass
-    except error.HTTPError as exc:
-        payload = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"HTTP {exc.code} /jobs/{job_id}/events: {payload}") from exc
-
-    flush()
-    return events
+    return shared_read_job_events(
+        base_url=client.base_url,
+        job_id=job_id,
+        after_seq=after_seq,
+        timeout=client.timeout,
+    )
 
 
 def _collect_grouping_counts(db_path: Path, project_id: str) -> dict[str, int]:

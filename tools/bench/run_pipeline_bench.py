@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib import error, parse, request
+from urllib import parse
 
 _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
@@ -25,21 +25,18 @@ from common import (  # noqa: E402
     now_ts,
     sha256_obj,
 )
+from http_client import (  # noqa: E402
+    ApiClient as SharedApiClient,
+    JobRun as SharedJobRun,
+    submit_and_wait as shared_submit_and_wait,
+    wait_for_job as shared_wait_for_job,
+)
+from sse import parse_sse_events as shared_parse_sse_events, read_job_events as shared_read_job_events  # noqa: E402
+from stats import percentile as shared_percentile  # noqa: E402
 
 
 def percentile(values: list[float], p: float) -> float:
-    if not values:
-        return 0.0
-    if p <= 0:
-        return min(values)
-    if p >= 100:
-        return max(values)
-    ordered = sorted(values)
-    rank = (len(ordered) - 1) * (p / 100.0)
-    low = int(rank)
-    high = min(len(ordered) - 1, low + 1)
-    w = rank - low
-    return ordered[low] * (1.0 - w) + ordered[high] * w
+    return shared_percentile(values, p)
 
 
 def _as_int(value: Any, default: int = 0) -> int:
@@ -49,158 +46,24 @@ def _as_int(value: Any, default: int = 0) -> int:
         return default
 
 
-class ApiClient:
-    def __init__(self, base_url: str, *, timeout: float = 60.0) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
-
-    def _request(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        url = self.base_url + path
-        data = None
-        headers = {"Content-Type": "application/json"}
-        if body is not None:
-            data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-        req = request.Request(url=url, method=method, data=data, headers=headers)
-        try:
-            with request.urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read().decode("utf-8")
-                if not raw:
-                    return {}
-                return json.loads(raw)
-        except error.HTTPError as exc:
-            payload = exc.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"HTTP {exc.code} {path}: {payload}") from exc
-
-    def get(self, path: str) -> dict[str, Any]:
-        return self._request("GET", path)
-
-    def post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        return self._request("POST", path, body)
-
-    def get_text(self, path: str) -> str:
-        url = self.base_url + path
-        req = request.Request(url=url, method="GET")
-        try:
-            with request.urlopen(req, timeout=self.timeout) as resp:
-                return resp.read().decode("utf-8", errors="ignore")
-        except error.HTTPError as exc:
-            payload = exc.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"HTTP {exc.code} {path}: {payload}") from exc
+class ApiClient(SharedApiClient):
+    pass
 
 
-@dataclass
-class JobRun:
-    job_id: str
-    status: str
-    elapsed_ms: float
+JobRun = SharedJobRun
 
 
 def parse_sse_events(raw: str) -> list[tuple[int, dict[str, Any]]]:
-    if not raw:
-        return []
-    out: list[tuple[int, dict[str, Any]]] = []
-    current_id: int | None = None
-    data_lines: list[str] = []
-
-    def flush() -> None:
-        nonlocal current_id, data_lines
-        if not data_lines:
-            current_id = None
-            return
-        data_raw = "\n".join(data_lines).strip()
-        data_lines = []
-        if not data_raw:
-            current_id = None
-            return
-        try:
-            payload = json.loads(data_raw)
-        except json.JSONDecodeError:
-            current_id = None
-            return
-        if isinstance(payload, dict):
-            out.append((int(current_id or 0), payload))
-        current_id = None
-
-    for line in raw.splitlines():
-        if line.startswith(":"):
-            continue
-        if line.startswith("id:"):
-            try:
-                current_id = int(line.split(":", 1)[1].strip())
-            except (TypeError, ValueError):
-                current_id = None
-            continue
-        if line.startswith("data:"):
-            data_lines.append(line.split(":", 1)[1].lstrip())
-            continue
-        if not line.strip():
-            flush()
-    flush()
-    return out
+    return shared_parse_sse_events(raw)
 
 
 def get_job_events(client: ApiClient, job_id: str, *, after_seq: int = 0) -> list[tuple[int, dict[str, Any]]]:
-    # NOTE:
-    # /jobs/{id}/events is an SSE endpoint and may keep the connection open
-    # with "Connection: keep-alive". Reading until EOF can block and timeout.
-    # Parse incrementally and stop on the keep-alive heartbeat comment.
-    url = client.base_url + f"/jobs/{parse.quote(job_id)}/events?after={after_seq}"
-    req = request.Request(url=url, method="GET")
-
-    out: list[tuple[int, dict[str, Any]]] = []
-    current_id: int | None = None
-    data_lines: list[str] = []
-
-    def flush() -> None:
-        nonlocal current_id, data_lines
-        if not data_lines:
-            current_id = None
-            return
-        data_raw = "\n".join(data_lines).strip()
-        data_lines = []
-        if not data_raw:
-            current_id = None
-            return
-        try:
-            payload = json.loads(data_raw)
-        except json.JSONDecodeError:
-            current_id = None
-            return
-        if isinstance(payload, dict):
-            out.append((int(current_id or 0), payload))
-        current_id = None
-
-    try:
-        with request.urlopen(req, timeout=client.timeout) as resp:
-            while True:
-                raw_line = resp.readline()
-                if not raw_line:
-                    break
-                line = raw_line.decode("utf-8", errors="ignore").rstrip("\r\n")
-                if line.startswith(":"):
-                    if line.startswith(": keep-alive"):
-                        break
-                    continue
-                if line.startswith("id:"):
-                    try:
-                        current_id = int(line.split(":", 1)[1].strip())
-                    except (TypeError, ValueError):
-                        current_id = None
-                    continue
-                if line.startswith("data:"):
-                    data_lines.append(line.split(":", 1)[1].lstrip())
-                    continue
-                if not line.strip():
-                    flush()
-    except TimeoutError:
-        # Degrade gracefully: benchmark should continue even if SSE tail closes late.
-        pass
-    except error.HTTPError as exc:
-        payload = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"HTTP {exc.code} /jobs/{job_id}/events: {payload}") from exc
-
-    flush()
-    return out
+    return shared_read_job_events(
+        base_url=client.base_url,
+        job_id=job_id,
+        after_seq=after_seq,
+        timeout=client.timeout,
+    )
 
 
 @dataclass
@@ -221,16 +84,7 @@ class BenchRunResult:
 
 
 def wait_for_job(client: ApiClient, job_id: str, *, poll_sec: float = 0.5, timeout_sec: float = 7200.0) -> JobRun:
-    start = time.perf_counter()
-    while True:
-        res = client.get(f"/jobs/{parse.quote(job_id)}")
-        job = res.get("job") or {}
-        status = str(job.get("status") or "")
-        if status in {"SUCCEEDED", "FAILED", "CANCELED"}:
-            return JobRun(job_id=job_id, status=status, elapsed_ms=(time.perf_counter() - start) * 1000.0)
-        if (time.perf_counter() - start) > timeout_sec:
-            return JobRun(job_id=job_id, status="TIMEOUT", elapsed_ms=(time.perf_counter() - start) * 1000.0)
-        time.sleep(poll_sec)
+    return shared_wait_for_job(client, job_id, poll_sec=poll_sec, timeout_sec=timeout_sec)
 
 
 def submit_and_wait(
@@ -242,17 +96,14 @@ def submit_and_wait(
     params: dict[str, Any] | None = None,
     timeout_sec: float = 7200.0,
 ) -> JobRun:
-    payload = {
-        "type": job_type,
-        "project_id": project_id,
-        "inputs": inputs,
-        "params": params or {},
-    }
-    created = client.post("/jobs", payload)
-    job_id = str((created.get("job") or {}).get("job_id"))
-    if not job_id:
-        raise RuntimeError(f"failed to create job: {job_type}")
-    return wait_for_job(client, job_id, timeout_sec=timeout_sec)
+    return shared_submit_and_wait(
+        client,
+        project_id=project_id,
+        job_type=job_type,
+        inputs=inputs,
+        params=params,
+        timeout_sec=timeout_sec,
+    )
 
 
 def load_dataset(path: Path, *, limit: int | None = None) -> list[dict[str, Any]]:

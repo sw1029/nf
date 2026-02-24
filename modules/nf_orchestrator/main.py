@@ -28,6 +28,7 @@ from modules.nf_orchestrator.services.timeline_service import TimelineServiceImp
 from modules.nf_orchestrator.services.whitelist_service import WhitelistServiceImpl
 from modules.nf_orchestrator.storage import db, docstore
 from modules.nf_orchestrator.storage.repos import job_repo
+from modules.nf_orchestrator.controllers import http_response as controller_http_response
 from modules.nf_retrieval.vector import shard_store
 from modules.nf_shared.config import load_config
 from modules.nf_shared.errors import AppError, ErrorCode
@@ -1150,6 +1151,10 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
              return
              
         ctype = "application/octet-stream"
+        if filename.lower().endswith(".js"):
+            ctype = "application/javascript"
+        elif filename.lower().endswith(".css"):
+            ctype = "text/css; charset=utf-8"
         if filename.lower().endswith(".gif"):
             ctype = "image/gif"
         elif filename.lower().endswith(".png"):
@@ -2106,12 +2111,7 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
         return False
 
     def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        controller_http_response.send_json(self, status, payload)
 
     def _send_app_error(
         self,
@@ -2120,8 +2120,7 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
         message: str,
         details: dict[str, Any] | None = None,
     ) -> None:
-        err = AppError(code, message, details)
-        self._send_json(status, err.to_dict())
+        controller_http_response.send_app_error(self, status, code, message, details)
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
         return
