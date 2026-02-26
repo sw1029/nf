@@ -67,6 +67,7 @@ function _getPageHeightPx(editor) {
 let repaginateFrame = null;
 let pageMeasureEl = null;
 let pendingRepaginateAfterComposition = false;
+let floatingPopoverFrame = null;
 
 function _normalizeEditorText(value) {
   return String(value ?? "").replace(/\r\n/g, "\n");
@@ -175,7 +176,14 @@ function _ensurePageMeasureEl(metrics, editor) {
 
 function _sliceFitsPage(text, start, end, metrics) {
   const content = text.slice(start, end);
-  pageMeasureEl.textContent = content.length > 0 ? content : "\u200b";
+  if (content.length === 0) {
+    pageMeasureEl.innerHTML = "<br>";
+  } else {
+    pageMeasureEl.textContent = content;
+    if (content.endsWith("\n")) {
+      pageMeasureEl.appendChild(document.createElement("br"));
+    }
+  }
   return pageMeasureEl.scrollHeight <= metrics.innerHeight + 0.5;
 }
 
@@ -275,7 +283,10 @@ function renderPagedEditor(pages) {
   const list = Array.isArray(pages) && pages.length
     ? pages
     : [{ start: 0, end: 0, text: "" }];
-  const placeholder = editor.getAttribute("placeholder") || "여기에 내용을 작성하세요...";
+  const defaultPlaceholder = state.currentNavTab === "SETTING" ? "등장인물의 이름, 형태, 소속, 특징, 성격 등을 서술형이나 개조식으로 꼼꼼히 작성해 두면 AI가 정합성 점검 시 참고합니다..." :
+    state.currentNavTab === "PLOT" ? "핵심 사건과 줄거리 라인을 작성하세요..." :
+      "이야기를 펼쳐보세요...";
+  const placeholder = editor.getAttribute("placeholder") || defaultPlaceholder;
 
   const fragment = document.createDocumentFragment();
   list.forEach((page, idx) => {
@@ -291,6 +302,9 @@ function renderPagedEditor(pages) {
     }
     const pageText = typeof page.text === "string" ? page.text : "";
     pageEl.textContent = pageText;
+    if (pageText === "" || pageText.endsWith("\n")) {
+      pageEl.appendChild(document.createElement("br"));
+    }
     fragment.appendChild(pageEl);
 
     if (idx < list.length - 1) {
@@ -408,9 +422,69 @@ function _moveCaretToPageEdge(page, toEnd) {
   if (typeof page.focus === "function") page.focus();
 }
 
+function _insertTextAtSelection(text) {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return false;
+  const range = selection.getRangeAt(0);
+  range.deleteContents();
+  const node = document.createTextNode(String(text || ""));
+  range.insertNode(node);
+  range.setStart(node, node.nodeValue.length);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return true;
+}
+
+function _insertPlainNewlineAtCaret() {
+  return _insertTextAtSelection("\n");
+}
+
+function _handlePaste(event) {
+  const page = event.target?.closest?.(".page-editor");
+  if (!page) return;
+
+  event.preventDefault();
+
+  let text = (event.clipboardData || window.clipboardData).getData("text/plain");
+  if (!text) return;
+
+  text = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  if (_insertTextAtSelection(text)) {
+    if (typeof handleInput === "function") handleInput();
+    _scheduleRepaginateFromDom();
+    _scheduleFloatingPopoverReposition();
+  }
+}
+
+function _scheduleFloatingPopoverReposition() {
+  if (floatingPopoverFrame !== null) return;
+  floatingPopoverFrame = requestAnimationFrame(() => {
+    floatingPopoverFrame = null;
+    if (typeof repositionInlineTagWidget === "function")
+      repositionInlineTagWidget();
+    if (typeof repositionTagRemovePopover === "function")
+      repositionTagRemovePopover();
+    if (typeof repositionActionPopover === "function")
+      repositionActionPopover();
+  });
+}
+
 function _handlePageBoundaryKeydown(event) {
   const page = event.target?.closest?.(".page-editor");
   if (!page || !_isCollapsedSelectionIn(page)) return;
+
+  if (event.key === "Enter") {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    event.preventDefault();
+    if (_insertPlainNewlineAtCaret()) {
+      handleInput();
+      _scheduleRepaginateFromDom();
+      _scheduleFloatingPopoverReposition();
+    }
+    return;
+  }
 
   if (event.key === "ArrowRight" || event.key === "ArrowDown") {
     if (!_isCaretAtPageBoundary(page, true)) return;
@@ -452,25 +526,22 @@ function layoutMemoSidebar() {
   const minVisibleWidth = 120;
 
   const scrollbarReserve = _getScrollbarWidth(editorContainer) + edgePadding;
-  let overlayReserve = 0;
-  if (assistantSidebar && assistantSidebar.classList.contains("is-open")) {
-    const editorContainerRect = editorContainer.getBoundingClientRect();
-    const assistantRect = assistantSidebar.getBoundingClientRect();
-    const overlap = Math.max(
-      0,
-      editorContainerRect.right - Math.max(editorContainerRect.left, assistantRect.left),
-    );
-    overlayReserve = overlap + edgePadding;
-  }
   const editorRight = editor.offsetLeft + editor.offsetWidth;
   const laneStart = editorRight + laneGap;
-  const laneEnd = editorContainer.clientWidth - scrollbarReserve - overlayReserve;
+  const assistantSidebarWidth =
+    assistantSidebar && assistantSidebar.classList.contains("is-open")
+      ? Math.max(0, assistantSidebar.offsetWidth || 320)
+      : 0;
+  const laneEnd =
+    editorContainer.clientWidth - scrollbarReserve - assistantSidebarWidth;
   const availableWidth = laneEnd - laneStart;
 
-  if (availableWidth < minVisibleWidth) {
-    sidebar.style.display = "none";
-    sidebar.style.width = "0px";
-    return false;
+  if (availableWidth < 80) {
+    sidebar.style.display = "";
+    sidebar.style.left = "auto";
+    sidebar.style.right = `${scrollbarReserve + 10}px`;
+    sidebar.style.width = `${preferredWidth}px`;
+    return true;
   }
 
   let width = Math.min(maxWidth, Math.max(minWidth, availableWidth));
@@ -879,6 +950,7 @@ document.addEventListener("DOMContentLoaded", () => {
       "scroll",
       () => {
         _scheduleMemoRender();
+        _scheduleFloatingPopoverReposition();
       },
       { passive: true },
     );
@@ -923,12 +995,21 @@ document.addEventListener("DOMContentLoaded", () => {
     );
 
     editorHost.addEventListener("keydown", _handlePageBoundaryKeydown, true);
+    editorHost.addEventListener("paste", _handlePaste, true);
   }
 
   window.addEventListener("resize", () => {
     layoutMemoSidebar();
     _scheduleMemoRender();
     schedulePageGuideRender();
+    _scheduleFloatingPopoverReposition();
+  });
+
+  window.addEventListener("nf:layout-changed", () => {
+    layoutMemoSidebar();
+    _scheduleMemoRender();
+    schedulePageGuideRender();
+    _scheduleFloatingPopoverReposition();
   });
 
   setEditorText("", { preserveCaret: false });
@@ -1111,14 +1192,117 @@ function loadEditorConfig() {
 }
 
 // --- Inline Tagging (Drag & Float) ---
+let _selectionTimeout = null;
+
+function _positionFloatingPopover(popover, rect, opts = {}) {
+  if (!popover || !rect) return false;
+  if (typeof positionPopoverInMainContent === "function") {
+    return positionPopoverInMainContent(popover, rect, opts);
+  }
+
+  const align = opts.align === "start" || opts.align === "end"
+    ? opts.align
+    : "center";
+  const vertical = opts.vertical === "below" ? "below" : "above";
+  const gap = Number.isFinite(Number(opts.gap)) ? Number(opts.gap) : 8;
+
+  let left = rect.left;
+  if (align === "center") left = rect.left + rect.width / 2;
+  if (align === "end") left = rect.right;
+  const top =
+    vertical === "below"
+      ? rect.bottom + window.scrollY + gap
+      : rect.top + window.scrollY - gap;
+
+  popover.style.left = `${left + window.scrollX}px`;
+  popover.style.top = `${top}px`;
+  popover.style.transform = align === "center" ? "translate(-50%, -100%)" : "none";
+  return true;
+}
+
+function repositionInlineTagWidget() {
+  const widget = document.getElementById("inline-tag-widget");
+  if (!widget || widget.style.display !== "block") return false;
+
+  let rect = null;
+  if (state.savedSelectionRange && typeof state.savedSelectionRange.getBoundingClientRect === "function") {
+    rect = state.savedSelectionRange.getBoundingClientRect();
+  }
+  if (!rect || (!rect.width && !rect.height)) {
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
+      rect = selection.getRangeAt(0).getBoundingClientRect();
+    }
+  }
+  if (!rect || (!rect.width && !rect.height)) return false;
+
+  return _positionFloatingPopover(widget, rect, {
+    align: "center",
+    vertical: "above",
+    gap: 10,
+    margin: 8,
+  });
+}
+
+function repositionTagRemovePopover() {
+  const removePopover = document.getElementById("tag-remove-popover");
+  const anchorNode = state.targetNodeToRemove;
+  if (!removePopover || removePopover.style.display !== "block" || !anchorNode) {
+    return false;
+  }
+  if (typeof anchorNode.getBoundingClientRect !== "function") return false;
+  const rect = anchorNode.getBoundingClientRect();
+  if (!rect || (!rect.width && !rect.height)) return false;
+
+  return _positionFloatingPopover(removePopover, rect, {
+    align: "center",
+    vertical: "above",
+    gap: 10,
+    margin: 8,
+  });
+}
+
+window.repositionInlineTagWidget = repositionInlineTagWidget;
+window.repositionTagRemovePopover = repositionTagRemovePopover;
+
+document.addEventListener("selectionchange", () => {
+  clearTimeout(_selectionTimeout);
+  _selectionTimeout = setTimeout(() => {
+    const editor = document.getElementById("editor");
+    const widget = document.getElementById("inline-tag-widget");
+    if (!editor || !widget) return;
+
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !editor.contains(selection.anchorNode)) {
+      if (widget.style.display === "block" && !widget.contains(document.activeElement)) {
+        widget.style.display = "none";
+      }
+      if (!selection || selection.isCollapsed) state.savedSelectionRange = null;
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return;
+
+    widget.style.display = "block";
+    state.savedSelectionRange = range.cloneRange();
+    _positionFloatingPopover(widget, rect, {
+      align: "center",
+      vertical: "above",
+      gap: 10,
+      margin: 8,
+    });
+  }, 300);
+});
+
+// For clicks on existing tags
 document.addEventListener("mouseup", (e) => {
-  const editor = document.getElementById("editor");
   const widget = document.getElementById("inline-tag-widget");
   const removePopover = document.getElementById("tag-remove-popover");
-  if (!editor || !widget) return;
 
   if (
-    widget.contains(e.target) ||
+    (widget && widget.contains(e.target)) ||
     (removePopover && removePopover.contains(e.target))
   ) {
     return;
@@ -1128,11 +1312,7 @@ document.addEventListener("mouseup", (e) => {
     e.target.classList.contains("inline-tag-marked") ||
     e.target.classList.contains("inline-memo-marked")
   ) {
-    const rect = e.target.getBoundingClientRect();
     if (removePopover) {
-      removePopover.style.left = `${rect.left + window.scrollX + rect.width / 2}px`;
-      removePopover.style.top = `${rect.top + window.scrollY - 10}px`;
-      removePopover.style.transform = "translate(-50%, -100%)";
       removePopover.style.display = "block";
       const titleEl = document.getElementById("tag-remove-title");
       if (titleEl) {
@@ -1142,7 +1322,8 @@ document.addEventListener("mouseup", (e) => {
       }
     }
     state.targetNodeToRemove = e.target;
-    widget.style.display = "none";
+    repositionTagRemovePopover();
+    if (widget) widget.style.display = "none";
     return;
   }
 
@@ -1150,22 +1331,8 @@ document.addEventListener("mouseup", (e) => {
     removePopover.style.display = "none";
     state.targetNodeToRemove = null;
   }
-
-  const selection = window.getSelection();
-  if (!selection || selection.isCollapsed || !editor.contains(selection.anchorNode)) {
-    widget.style.display = "none";
-    return;
-  }
-
-  const range = selection.getRangeAt(0);
-  const rect = range.getBoundingClientRect();
-  widget.style.left = `${rect.left + window.scrollX + rect.width / 2}px`;
-  widget.style.top = `${rect.top + window.scrollY - 10}px`;
-  widget.style.transform = "translate(-50%, -100%)";
-  widget.style.display = "block";
-
-  state.savedSelectionRange = range.cloneRange();
 });
+
 
 document.addEventListener("mousedown", (e) => {
   const editor = document.getElementById("editor");
@@ -1213,11 +1380,9 @@ window.applyInlineTag = function (tagType) {
 
   const span = document.createElement("span");
   span.className = "inline-tag-marked";
-  span.style.backgroundColor = "#fef3c7";
-  span.style.borderBottom = "2px solid #f59e0b";
-  span.style.padding = "0 2px";
-  span.style.borderRadius = "2px";
+  span.dataset.tagType = tagType;
   span.title = `태그: ${tagType}`;
+
 
   const fragment = state.savedSelectionRange.extractContents();
   span.appendChild(fragment);

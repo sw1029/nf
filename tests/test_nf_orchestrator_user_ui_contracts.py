@@ -221,3 +221,36 @@ def test_user_ui_paged_editor_and_overlay_sidebar_contract() -> None:
     assert "layoutMemoSidebar()" in api
     assert "renderMemos()" in api
     assert "schedulePageGuideRender()" in api
+
+
+@pytest.mark.unit
+def test_user_ui_sidebar_and_tab_handlers_use_explicit_event_and_open_close_contract() -> None:
+    html = _user_ui_html_text()
+    docs_tree = Path("modules/nf_orchestrator/assets/user_ui.docs_tree.js").read_text(encoding="utf-8")
+    assistant = Path("modules/nf_orchestrator/assets/user_ui.assistant.js").read_text(encoding="utf-8")
+    api = Path("modules/nf_orchestrator/assets/user_ui.api.js").read_text(encoding="utf-8")
+
+    assert "switchNavTab(event, 'EPISODE')" in html
+    assert "switchAssistTab(event, 'CHECK')" in html
+    assert 'onclick="openRightSidebar()"' in html
+    assert 'onclick="closeRightSidebar()"' in html
+    assert "function switchNavTab(eventOrType, maybeType)" in docs_tree
+    assert "function switchAssistTab(eventOrMode, maybeMode)" in assistant
+    assert "function openRightSidebar()" in api
+    assert "function closeRightSidebar()" in api
+    assert 'if (event.key !== "Escape") return;' in api
+
+
+@pytest.mark.unit
+def test_user_ui_enter_and_popover_positioning_contract() -> None:
+    editor = Path("modules/nf_orchestrator/assets/user_ui.editor.js").read_text(encoding="utf-8")
+    assistant = Path("modules/nf_orchestrator/assets/user_ui.assistant.js").read_text(encoding="utf-8")
+    api = Path("modules/nf_orchestrator/assets/user_ui.api.js").read_text(encoding="utf-8")
+
+    assert 'if (event.key === "Enter") {' in editor
+    assert "_insertPlainNewlineAtCaret()" in editor
+    assert "positionPopoverInMainContent" in editor
+    assert "window.repositionInlineTagWidget = repositionInlineTagWidget;" in editor
+    assert "window.repositionTagRemovePopover = repositionTagRemovePopover;" in editor
+    assert "window.repositionActionPopover = repositionActionPopover;" in assistant
+    assert "function positionPopoverInMainContent(popover, anchorRect, opts = {})" in api

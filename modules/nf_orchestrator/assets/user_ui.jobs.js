@@ -1,6 +1,11 @@
 ﻿// --- UI/Widget Toggles ---
 function toggleLeftSidebar() {
   document.getElementById("nav-sidebar").classList.toggle("mobile-open");
+  if (typeof _notifyLayoutDependents === "function") {
+    _notifyLayoutDependents();
+  } else {
+    window.dispatchEvent(new Event("nf:layout-changed"));
+  }
 }
 
 function toggleJobsPanel() {

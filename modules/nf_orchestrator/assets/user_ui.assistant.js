@@ -1,9 +1,26 @@
 ﻿// --- Assistant ---
-function switchAssistTab(mode) {
+function switchAssistTab(eventOrMode, maybeMode) {
+  const mode =
+    typeof eventOrMode === "string" ? eventOrMode : String(maybeMode || "");
+  const evt =
+    typeof eventOrMode === "object" && eventOrMode !== null
+      ? eventOrMode
+      : null;
+  if (!mode) return;
   document
     .querySelectorAll("#assistant-sidebar .tab-btn")
     .forEach((b) => b.classList.remove("active"));
-  event.target.classList.add("active");
+  const targetBtn = evt?.currentTarget || evt?.target?.closest?.(".tab-btn");
+  if (targetBtn) {
+    targetBtn.classList.add("active");
+  } else {
+    const tabs = Array.from(
+      document.querySelectorAll("#assistant-sidebar .tab-btn"),
+    );
+    const tabIndexByMode = { CHECK: 0, SEARCH: 1, PROPOSE: 2 };
+    const idx = tabIndexByMode[mode];
+    if (Number.isInteger(idx) && tabs[idx]) tabs[idx].classList.add("active");
+  }
 
   state.assistantMode = mode;
 
@@ -1003,6 +1020,26 @@ function highlightSpan(spanStart, spanEnd) {
   if (anchor && typeof anchor.scrollIntoView === "function") {
     anchor.scrollIntoView({ behavior: "smooth", block: "center" });
   }
+
+  // Visual pulse feedback
+  try {
+    const pulseSpan = document.createElement("span");
+    pulseSpan.className = "pulse-animation";
+    range.surroundContents(pulseSpan);
+    setTimeout(() => {
+      if (pulseSpan.parentNode) {
+        const parent = pulseSpan.parentNode;
+        while (pulseSpan.firstChild) {
+          parent.insertBefore(pulseSpan.firstChild, pulseSpan);
+        }
+        parent.removeChild(pulseSpan);
+        if (editor) editor.normalize();
+      }
+    }, 2000);
+  } catch (e) {
+    // Range crosses node boundaries, animation skipped
+  }
+
   editor.focus();
   return true;
 }
@@ -1026,21 +1063,79 @@ function highlightText(quote) {
   return highlightSpan(idx, idx + quote.length);
 }
 
+let actionPopoverFrame = null;
+
+function _clearActionPopoverState() {
+  state.activePopoverVerdict = null;
+  state.actionPopoverAnchorRange = null;
+  state.actionPopoverAnchorTarget = null;
+}
+
+function _positionActionPopoverAtRect(popover, rect) {
+  if (!popover || !rect) return false;
+  if (typeof positionPopoverInMainContent === "function") {
+    return positionPopoverInMainContent(popover, rect, {
+      align: "center",
+      vertical: "below",
+      gap: 10,
+      margin: 8,
+    });
+  }
+  popover.style.left = `${rect.left + window.scrollX}px`;
+  popover.style.top = `${rect.bottom + window.scrollY + 10}px`;
+  popover.style.transform = "translate(-50%, 0)";
+  return true;
+}
+
+function repositionActionPopover() {
+  const popover = document.getElementById("action-popover");
+  if (!popover || popover.style.display !== "block") return false;
+
+  let rect = null;
+  if (state.actionPopoverAnchorRange && typeof state.actionPopoverAnchorRange.getBoundingClientRect === "function") {
+    rect = state.actionPopoverAnchorRange.getBoundingClientRect();
+  }
+  if (
+    (!rect || (!rect.width && !rect.height)) &&
+    state.actionPopoverAnchorTarget &&
+    typeof state.actionPopoverAnchorTarget.getBoundingClientRect === "function"
+  ) {
+    rect = state.actionPopoverAnchorTarget.getBoundingClientRect();
+  }
+  if (!rect || (!rect.width && !rect.height)) return false;
+
+  return _positionActionPopoverAtRect(popover, rect);
+}
+
+function _scheduleActionPopoverReposition() {
+  if (actionPopoverFrame !== null) return;
+  actionPopoverFrame = requestAnimationFrame(() => {
+    actionPopoverFrame = null;
+    repositionActionPopover();
+  });
+}
+
+window.repositionActionPopover = repositionActionPopover;
+
 // --- Action Popover Logic ---
 document.addEventListener("DOMContentLoaded", () => {
   // Consistency Level warning toggle
   const levelRadios = document.getElementsByName("consistency-level");
   const warningDiv = document.getElementById("intensity-warning");
   if (levelRadios && warningDiv) {
-    levelRadios.forEach(r => {
+    levelRadios.forEach((r) => {
       r.addEventListener("change", (e) => {
         if (e.target.value === "strict" && e.target.checked) {
           warningDiv.style.display = "block";
           warningDiv.style.opacity = "0";
-          setTimeout(() => { warningDiv.style.opacity = "1"; }, 10);
+          setTimeout(() => {
+            warningDiv.style.opacity = "1";
+          }, 10);
         } else {
           warningDiv.style.opacity = "0";
-          setTimeout(() => { warningDiv.style.display = "none"; }, 300);
+          setTimeout(() => {
+            warningDiv.style.display = "none";
+          }, 300);
         }
       });
     });
@@ -1050,44 +1145,72 @@ document.addEventListener("DOMContentLoaded", () => {
   if (editor) {
     editor.addEventListener("click", (e) => {
       const selection = window.getSelection();
-      if (!selection.isCollapsed) return;
+      if (!selection || !selection.isCollapsed) return;
 
       const textNodes = _collectEditorTextNodes(editor);
-      const pos = _getOffsetFromCaret(selection.anchorNode, selection.anchorOffset, textNodes);
+      const pos = _getOffsetFromCaret(
+        selection.anchorNode,
+        selection.anchorOffset,
+        textNodes,
+      );
       if (pos === null) return;
 
       const verdicts = Array.isArray(state.lastVerdicts) ? state.lastVerdicts : [];
-      const clickedVerdict = verdicts.find(v => {
+      const clickedVerdict = verdicts.find((v) => {
         const s = v.segment_span?.start;
         const end = v.segment_span?.end;
-        return Number.isInteger(s) && Number.isInteger(end) && pos >= s && pos <= end && (v.verdict === 'VIOLATE' || v.verdict === 'UNKNOWN');
+        return Number.isInteger(s) &&
+          Number.isInteger(end) &&
+          pos >= s &&
+          pos <= end &&
+          (v.verdict === "VIOLATE" || v.verdict === "UNKNOWN");
       });
 
       const popover = document.getElementById("action-popover");
-      if (popover) {
-        if (clickedVerdict) {
-          let rect = null;
-          if (selection.rangeCount > 0) {
-            rect = selection.getRangeAt(0).getBoundingClientRect();
-          } else {
-            return;
-          }
+      if (!popover) return;
 
-          popover.style.display = 'block';
-          popover.style.left = `${rect.left + window.scrollX}px`;
-          popover.style.top = `${rect.bottom + window.scrollY + 10}px`;
+      if (clickedVerdict) {
+        if (selection.rangeCount <= 0) return;
+        const range = selection.getRangeAt(0).cloneRange();
+        state.actionPopoverAnchorRange = range;
+        state.actionPopoverAnchorTarget =
+          e.target instanceof Element ? e.target : null;
 
-          document.getElementById("popover-title").innerText = verdictLabel(clickedVerdict.verdict);
-          const claim = clickedVerdict.claim_text || "내용 없음";
-          document.getElementById("popover-desc").innerText = claim.length > 30 ? claim.substring(0, 30) + '...' : claim;
+        popover.style.display = "block";
+        repositionActionPopover();
 
-          state.activePopoverVerdict = clickedVerdict;
-        } else {
-          popover.style.display = 'none';
+        const titleEl = document.getElementById("popover-title");
+        if (titleEl) titleEl.innerText = verdictLabel(clickedVerdict.verdict);
+
+        const descEl = document.getElementById("popover-desc");
+        const claim = clickedVerdict.claim_text || "내용 없음";
+        if (descEl) {
+          descEl.innerText =
+            claim.length > 30 ? `${claim.substring(0, 30)}...` : claim;
         }
+
+        state.activePopoverVerdict = clickedVerdict;
+        return;
       }
+
+      popover.style.display = "none";
+      _clearActionPopoverState();
     });
   }
+
+  const editorContainer = document.querySelector(".editor-container");
+  if (editorContainer) {
+    editorContainer.addEventListener(
+      "scroll",
+      () => {
+        _scheduleActionPopoverReposition();
+      },
+      { passive: true },
+    );
+  }
+
+  window.addEventListener("resize", _scheduleActionPopoverReposition);
+  window.addEventListener("nf:layout-changed", _scheduleActionPopoverReposition);
 });
 
 function _getOffsetFromCaret(node, offset, textNodes) {
@@ -1111,15 +1234,17 @@ window.handlePopoverAction = async function (action) {
     await markVerdictAsIgnored(claim);
   }
   const popover = document.getElementById("action-popover");
-  if (popover) popover.style.display = 'none';
-  state.activePopoverVerdict = null;
+  if (popover) popover.style.display = "none";
+  _clearActionPopoverState();
 };
 
 document.addEventListener("mousedown", (e) => {
   const popover = document.getElementById("action-popover");
+  const editor = document.getElementById("editor");
   if (popover && popover.style.display === "block") {
-    if (!popover.contains(e.target) && !document.getElementById("editor").contains(e.target)) {
+    if (!popover.contains(e.target) && (!editor || !editor.contains(e.target))) {
       popover.style.display = "none";
+      _clearActionPopoverState();
     }
   }
 });

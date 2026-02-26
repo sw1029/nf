@@ -192,7 +192,13 @@
         font-weight: 600;
         border: none;
         outline: none;
-        width: 400px;
+        width: auto;
+        min-width: 100px;
+        flex: 1;
+        max-width: 400px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        overflow: hidden;
         color: var(--text-primary);
         background: transparent;
       }
@@ -837,7 +843,44 @@
       }
 
       .action-popover button {
-        white-space: nowrap;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+      }
+
+      .inline-tag-marked {
+        background-color: #fef3c7;
+        border-bottom: 2px solid #f59e0b;
+        padding: 0 4px;
+        border-radius: 3px;
+        cursor: pointer;
+        transition: background-color 0.2s ease-in-out;
+      }
+
+      .inline-tag-marked:hover {
+        background-color: #fde68a;
+      }
+
+      .inline-memo-marked {
+        cursor: pointer;
+        transition: filter 0.2s ease-in-out;
+      }
+
+      .inline-memo-marked:hover {
+        filter: brightness(0.95);
+      }
+
+      @keyframes highlightPulse {
+        0% {
+          background-color: rgba(250, 204, 21, 0.8);
+        }
+
+        100% {
+          background-color: transparent;
+        }
+      }
+
+      .pulse-animation {
+        animation: highlightPulse 2s ease-out;
+        border-radius: 4px;
       }
 
       /* Timeline View */
@@ -1056,7 +1099,7 @@
         background-color: rgba(245, 158, 11, 0.3);
       }
 
-      @media (max-width: 768px) {
+      @media (max-width: 1100px) {
         .sidebar {
           position: absolute;
           left: -300px;

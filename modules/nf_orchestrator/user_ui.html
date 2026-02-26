@@ -94,14 +94,14 @@
       </div>
 
       <div class="tabs">
-        <button class="tab-btn active" onclick="switchNavTab('EPISODE')">
+        <button class="tab-btn active" onclick="switchNavTab(event, 'EPISODE')">
           본문
         </button>
-        <button class="tab-btn" onclick="switchNavTab('SETTING')">
+        <button class="tab-btn" onclick="switchNavTab(event, 'SETTING')">
           설정
         </button>
-        <button class="tab-btn" onclick="switchNavTab('PLOT')">구상</button>
-        <button class="tab-btn" onclick="switchNavTab('TIMELINE')">
+        <button class="tab-btn" onclick="switchNavTab(event, 'PLOT')">구상</button>
+        <button class="tab-btn" onclick="switchNavTab(event, 'TIMELINE')">
           타임라인
         </button>
       </div>
@@ -126,9 +126,17 @@
         <!-- Rendered via JS for visual time axis -->
       </div>
 
-      <div style="padding: 20px; border-top: 1px solid var(--border-color)">
-        <button class="btn btn-secondary" style="width: 100%" onclick="exitProject()">
-          프로젝트 나가기
+      <div
+        style="padding: 20px; border-top: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 8px;">
+        <button class="btn btn-secondary"
+          style="width: 100%; display: flex; justify-content: center; align-items: center; gap: 6px;"
+          onclick="openGlobalSettings()">
+          <i data-lucide="settings" style="width:16px; height:16px;"></i> 환경설정
+        </button>
+        <button class="btn btn-secondary"
+          style="width: 100%; display: flex; justify-content: center; align-items: center; gap: 6px;"
+          onclick="exitProject()">
+          <i data-lucide="log-out" style="width:16px; height:16px;"></i> 프로젝트 나가기
         </button>
       </div>
     </aside>
@@ -147,13 +155,15 @@
             display: flex;
             flex-direction: column;
             justify-content: center;
+
             align-items: center;
             color: #ccc;
           ">
         <div style="margin-bottom: 20px; color:#cbd5e1;">
           <i data-lucide="book-open" style="width:64px; height:64px;" stroke-width="1.5"></i>
         </div>
-        <div style="font-size: 1.2rem">문서를 선택하거나 새로 만드세요</div>
+        <div id="empty-state-title" style="font-size: 1.2rem">문서를 선택하거나 새로 만드세요</div>
+        <div id="empty-state-hint" style="font-size: 0.9rem; margin-top: 8px;">작품을 시작해보세요.</div>
         <div style="margin-top: 20px">
           <button class="btn btn-primary" onclick="createNewDoc()">
             새 문서 만들기
@@ -214,7 +224,7 @@
           </button>
           <button class="btn btn-icon"
             style="background: #f1f5f9; color: var(--accent-primary); display:flex; align-items:center; padding: 6px 12px; gap:4px;"
-            onclick="toggleRightSidebar()" title="AI 작가 도우미 메뉴">
+            onclick="openRightSidebar()" title="AI 작가 도우미 메뉴">
             <i data-lucide="sparkles" style="width:16px; height:16px;"></i>
             <span style="font-size: 0.8rem; font-weight: bold; margin-left: 2px">도우미</span>
           </button>
@@ -390,18 +400,21 @@
 
     <!-- Right Sidebar: Assistant -->
     <aside class="sidebar right" id="assistant-sidebar">
-      <div class="sidebar-header">
+      <div class="sidebar-header" style="justify-content: space-between; align-items: center; display: flex;">
         <div class="sidebar-title">작가 도우미</div>
+        <button class="btn btn-icon" onclick="closeRightSidebar()" title="닫기" style="padding: 4px; margin-left: auto;">
+          <i data-lucide="x" style="width:18px; height:18px; color: #64748b;"></i>
+        </button>
       </div>
 
       <div class="tabs">
-        <button class="tab-btn active" onclick="switchAssistTab('CHECK')">
+        <button class="tab-btn active" onclick="switchAssistTab(event, 'CHECK')">
           오류 점검
         </button>
-        <button class="tab-btn" onclick="switchAssistTab('SEARCH')">
+        <button class="tab-btn" onclick="switchAssistTab(event, 'SEARCH')">
           기억 검색
         </button>
-        <button class="tab-btn" onclick="switchAssistTab('PROPOSE')">
+        <button class="tab-btn" onclick="switchAssistTab(event, 'PROPOSE')">
           문장 교정
         </button>
       </div>
@@ -498,6 +511,28 @@
         </div>
       </div>
     </aside>
+  </div>
+
+  <!-- Global Settings Modal -->
+  <div id="global-settings-modal" class="overlay">
+    <div class="modal">
+      <h2>환경설정</h2>
+      <div class="form-group" style="margin-top: 15px;">
+        <label>API Key (선택)</label>
+        <input type="password" id="global-api-key" placeholder="sk-..."
+          style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px;" />
+        <div style="font-size: 0.8rem; color: #64748b; margin-top: 5px;">* 설정하지 않으면 시스템 기본값을 사용합니다.</div>
+      </div>
+      <div class="form-group" style="margin-top: 15px;">
+        <label>사용할 AI 모델 (선택)</label>
+        <input type="text" id="global-local-model" placeholder="예: gpt-4o, llama3"
+          style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px;" />
+      </div>
+      <div class="actions" style="margin-top: 25px; display: flex; gap: 10px; justify-content: flex-end;">
+        <button class="btn btn-secondary" onclick="closeGlobalSettings()">취소</button>
+        <button class="btn btn-primary" onclick="saveGlobalSettings()">저장</button>
+      </div>
+    </div>
   </div>
 
   <!-- Export Modal -->
