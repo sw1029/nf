@@ -124,6 +124,8 @@ def test_user_ui_wait_for_job_prefers_sse_and_falls_back_to_polling() -> None:
     assert "_waitForJobByPolling" in bundle
     assert "EventSource" in bundle
     assert "/jobs/${encodeURIComponent(jobId)}/events" in bundle
+    assert "SSE_IDLE_TIMEOUT_MS = 30000" in bundle
+    assert "JOB_TOTAL_TIMEOUT_MS = 300000" in bundle
 
 
 @pytest.mark.unit
@@ -150,6 +152,16 @@ def test_user_ui_assets_and_inline_handler_exports_exist() -> None:
         "window.toggleJobsPanel",
     ):
         assert handler in bootstrap
+    assert "window.handleExport = handleJobExport;" in bootstrap
+
+
+@pytest.mark.unit
+def test_user_ui_retry_worker_and_segment_rules_contracts() -> None:
+    bundle = _user_ui_bundle_text()
+    assert "/jobs/${encodeURIComponent(jobId)}/retry" in bundle
+    assert "프론트엔드 모의" not in bundle
+    assert "/assets/user_ui.pagination.worker.js" in bundle
+    assert "/query/segment-rules" in bundle
 
 
 @pytest.mark.unit

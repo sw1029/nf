@@ -54,6 +54,10 @@ class JobServiceImpl:
         with db.connect(self._db_path) as conn:
             return job_repo.list_jobs(conn, project_id=project_id, limit=limit)
 
+    def get_payloads(self, job_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        with db.connect(self._db_path) as conn:
+            return job_repo.get_job_payloads(conn, job_id)
+
     def set_result(self, job_id: str, result: dict[str, Any] | None) -> None:
         with db.connect(self._db_path) as conn:
             job_repo.set_job_result(conn, job_id, result=result)

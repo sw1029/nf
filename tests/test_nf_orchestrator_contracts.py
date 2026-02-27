@@ -28,4 +28,4 @@ def test_orchestrator_job_service_methods() -> None:
     assert hasattr(contracts.JobService, "submit")
     assert hasattr(contracts.JobService, "cancel")
     assert hasattr(contracts.JobService, "get")
-
+    assert hasattr(contracts.JobService, "get_payloads")

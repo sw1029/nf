@@ -172,6 +172,22 @@ def test_segment_text_handles_decimal_ellipsis_and_quote_tail() -> None:
         "Next line.",
     ]
 
+def test_segment_text_keeps_abbreviation_token_in_same_sentence() -> None:
+    text = "Dr. Kim arrived. Next scene."
+    segments = consistency_engine._segment_text(text)
+    assert [segment for _, _, segment in segments] == [
+        "Dr. Kim arrived.",
+        "Next scene.",
+    ]
+
+def test_segment_text_keeps_ordinal_token_in_same_sentence() -> None:
+    text = "He ranked 1st. in class. Final note."
+    segments = consistency_engine._segment_text(text)
+    assert [segment for _, _, segment in segments] == [
+        "He ranked 1st. in class.",
+        "Final note.",
+    ]
+
 def test_resolve_graph_mode_keeps_legacy_compatibility() -> None:
     assert consistency_engine._resolve_graph_mode({}, legacy_enabled=False) == "off"
     assert consistency_engine._resolve_graph_mode({}, legacy_enabled=True) == "manual"

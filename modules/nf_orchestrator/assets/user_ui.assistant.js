@@ -78,15 +78,31 @@ function _eventStatusText(eventObj) {
   return "";
 }
 
+const SSE_IDLE_TIMEOUT_MS = 30000;
+const JOB_TOTAL_TIMEOUT_MS = 300000;
+const POLL_INTERVAL_MS = 1000;
+
+function _jobWaitTimeoutError(code) {
+  const err = new Error("작업 대기 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.");
+  err.code = code || "job-wait-timeout";
+  return err;
+}
+
 async function _waitForJobByPolling(
   jobId,
   onProgress,
   onStatus,
   startPct = 10,
+  startedAtMs = Date.now(),
 ) {
   let percentage = Math.max(0, Math.min(95, Number(startPct) || 10));
   return new Promise((resolve, reject) => {
     const check = async () => {
+      if (Date.now() - startedAtMs > JOB_TOTAL_TIMEOUT_MS) {
+        if (onStatus) onStatus("작업 대기 시간 초과");
+        reject(_jobWaitTimeoutError("job-wait-timeout"));
+        return;
+      }
       try {
         const res = await api(`/jobs/${jobId}`);
         const job = res.job || {};
@@ -107,7 +123,7 @@ async function _waitForJobByPolling(
         percentage = Math.min(95, percentage + 8);
         if (onProgress) onProgress(percentage);
         if (onStatus) onStatus(`상태: ${status || "RUNNING"}`);
-        setTimeout(check, 1000);
+        setTimeout(check, POLL_INTERVAL_MS);
       } catch (e) {
         reject(e);
       }
@@ -116,7 +132,7 @@ async function _waitForJobByPolling(
   });
 }
 
-async function _waitForJobViaSse(jobId, onProgress, onStatus) {
+async function _waitForJobViaSse(jobId, onProgress, onStatus, startedAtMs = Date.now()) {
   if (typeof EventSource === "undefined") {
     throw new Error("eventsource-not-supported");
   }
@@ -129,17 +145,31 @@ async function _waitForJobViaSse(jobId, onProgress, onStatus) {
     let fallbackPct = 10;
     let statusErrorCount = 0;
     let lastStatusText = "";
+    let idleTimer = null;
+
+    const armIdleTimer = () => {
+      if (idleTimer !== null) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        finish(() => reject(_jobWaitTimeoutError("sse-idle-timeout")));
+      }, SSE_IDLE_TIMEOUT_MS);
+    };
 
     const finish = (cb) => {
       if (done) return;
       done = true;
       clearInterval(statusTimer);
+      if (idleTimer !== null) clearTimeout(idleTimer);
+      clearTimeout(totalTimer);
       source.close();
       cb();
     };
 
     const checkStatus = async () => {
       if (done) return;
+      if (Date.now() - startedAtMs > JOB_TOTAL_TIMEOUT_MS) {
+        finish(() => reject(_jobWaitTimeoutError("job-wait-timeout")));
+        return;
+      }
       try {
         const res = await api(`/jobs/${jobId}`);
         const job = res.job || {};
@@ -177,13 +207,20 @@ async function _waitForJobViaSse(jobId, onProgress, onStatus) {
       }
     };
 
+    const remainingMs = Math.max(1, JOB_TOTAL_TIMEOUT_MS - (Date.now() - startedAtMs));
+    const totalTimer = setTimeout(() => {
+      finish(() => reject(_jobWaitTimeoutError("job-wait-timeout")));
+    }, remainingMs);
+
+    armIdleTimer();
     const statusTimer = setInterval(() => {
       void checkStatus();
-    }, 1000);
+    }, POLL_INTERVAL_MS);
     void checkStatus();
 
     source.onmessage = (evt) => {
       hasMessage = true;
+      armIdleTimer();
       let payload;
       try {
         payload = JSON.parse(evt.data);
@@ -204,18 +241,20 @@ async function _waitForJobViaSse(jobId, onProgress, onStatus) {
     };
 
     source.onerror = () => {
-      if (!done && !hasMessage) {
-        finish(() => reject(new Error("sse-unavailable")));
+      if (!done) {
+        finish(() => reject(new Error(hasMessage ? "sse-error" : "sse-unavailable")));
       }
     };
   });
 }
 
 async function waitForJob(jobId, onProgress, onStatus) {
+  const startedAtMs = Date.now();
   try {
-    return await _waitForJobViaSse(jobId, onProgress, onStatus);
+    return await _waitForJobViaSse(jobId, onProgress, onStatus, startedAtMs);
   } catch (_sseError) {
-    return _waitForJobByPolling(jobId, onProgress, onStatus);
+    if (onStatus) onStatus("실시간 연결 불안정: 폴링으로 전환합니다");
+    return _waitForJobByPolling(jobId, onProgress, onStatus, 10, startedAtMs);
   }
 }
 

@@ -280,3 +280,22 @@
 ### 13.3 중기(실험 경로)
 - RAPTOR skeleton은 플러그인 레벨로 유지하고 기본 파이프라인에는 연결하지 않음.
 - graph/rule/vector 결합 비율은 additive 파라미터로만 노출(기본 계약 불변).
+
+## 14) 2026-02-27 최신 성능 요약 자동화 반영
+
+- 기준 산출물:
+  - `verify/benchmarks/latest_metrics_summary.json`
+  - `verify/benchmarks/latest_metrics_summary.md`
+- 생성 시각(UTC): `2026-02-27T06:12:56Z`
+- 종합 판정: `FAIL`
+
+| dataset | latest_run_utc | consistency_p95(ms) | retrieval_fts_p95(ms) | 직전 대비(consistency) | 직전 대비(retrieval_fts) | 판정 |
+|---|---|---:|---:|---:|---:|---|
+| DS-200 | 2026-02-22T10:31:28Z | 5479.58 | 677.13 | -36.39% | -40.81% | PASS |
+| DS-400 | - | - | - | - | - | MISSING |
+| DS-800 | 2026-02-21T22:42:22Z | 10753.75 | 1142.84 | +24.92% | +22.80% | FAIL(HARD_FAIL) |
+
+요약 해석:
+- DS-200은 두 지표 모두 개선.
+- DS-400은 최신 벤치 데이터 부재로 비교 불가.
+- DS-800은 두 지표 모두 직전 대비 20% 초과 악화로 hard fail 규칙에 해당.

@@ -1,6 +1,9 @@
 ﻿// --- Project Management ---
 async function init() {
   loadEditorConfig();
+  if (typeof loadSegmentRulesFromServer === "function") {
+    await loadSegmentRulesFromServer();
+  }
   try {
     const data = await api("/projects");
     const select = document.getElementById("project-select");
@@ -685,6 +688,9 @@ function confirmDeleteDoc(docId) {
           if (typeof resetMemoStateForDoc === "function") {
             resetMemoStateForDoc();
           }
+          if (typeof resetInlineTagStateForDoc === "function") {
+            resetInlineTagStateForDoc();
+          }
           if (typeof updateStatusBar === "function") updateStatusBar();
           if (typeof schedulePageGuideRender === "function")
             schedulePageGuideRender();
@@ -788,8 +794,12 @@ async function loadDoc(did) {
   if (typeof resetMemoStateForDoc === "function") {
     resetMemoStateForDoc();
   }
+  if (typeof resetInlineTagStateForDoc === "function") {
+    resetInlineTagStateForDoc();
+  }
 
   state.currentDocId = did;
+  state.currentDocSnapshotId = null;
   const doc = state.docs[did];
 
   // UI Feedback
@@ -820,16 +830,39 @@ async function loadDoc(did) {
       document.getElementById("editor").innerText = loadedContent;
     }
     document.getElementById("editor").style.opacity = "1";
+    state.currentDocSnapshotId =
+      typeof fullDoc.head_snapshot_id === "string" &&
+      fullDoc.head_snapshot_id.trim()
+        ? fullDoc.head_snapshot_id.trim()
+        : null;
 
     const loadedMeta =
       fullDoc && typeof fullDoc.metadata === "object"
         ? fullDoc.metadata
         : {};
     if (state.docs[did]) {
-      state.docs[did].metadata = loadedMeta;
+      state.docs[did] = {
+        ...state.docs[did],
+        ...fullDoc,
+        metadata: loadedMeta,
+      };
     }
     if (typeof loadMemosFromMetadata === "function") {
       loadMemosFromMetadata(loadedMeta.ui_memos || []);
+    }
+    if (
+      typeof restoreInlineTagsFromAssignments === "function" &&
+      state.currentDocSnapshotId
+    ) {
+      try {
+        const assignmentsRes = await api(
+          `/projects/${encodeURIComponent(state.projectId)}/tags/assignments?doc_id=${encodeURIComponent(did)}&snapshot_id=${encodeURIComponent(state.currentDocSnapshotId)}`,
+        );
+        restoreInlineTagsFromAssignments(assignmentsRes.assignments || []);
+      } catch (assignmentError) {
+        console.warn("failed to load inline tag assignments", assignmentError);
+        restoreInlineTagsFromAssignments([]);
+      }
     }
 
     // Reset dirty state after load
@@ -878,7 +911,7 @@ function openExportModal() {
 function closeExportModal() {
   document.getElementById("export-modal").classList.remove("active");
 }
-async function handleExport() {
+async function handleJobExport() {
   if (!state.currentDocId) return alert("문서를 열어주세요");
   const format = document.querySelector(
     'input[name="export-fmt"]:checked',
@@ -911,9 +944,19 @@ async function handleExport() {
   } catch (e) {
     hideLoading();
     console.error(e);
+    if (typeof handleLocalExport === "function") {
+      try {
+        handleLocalExport();
+        return;
+      } catch (fallbackError) {
+        console.error("local export fallback failed", fallbackError);
+      }
+    }
     alert("내보내기 실패: " + e.message);
   }
 }
+
+window.handleJobExport = handleJobExport;
 
 async function createNewChapter() {
   const chapterName = prompt("새 챕터(그룹) 이름을 입력하세요");
@@ -967,6 +1010,9 @@ async function exitProject() {
   document.getElementById("empty-state").style.display = "flex"; // Reset Placeholder
   if (typeof resetMemoStateForDoc === "function") {
     resetMemoStateForDoc();
+  }
+  if (typeof resetInlineTagStateForDoc === "function") {
+    resetInlineTagStateForDoc();
   }
   if (typeof updateStatusBar === "function") updateStatusBar();
   if (typeof schedulePageGuideRender === "function")

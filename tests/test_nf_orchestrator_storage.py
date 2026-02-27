@@ -6,7 +6,8 @@ import pytest
 from modules.nf_orchestrator.services.job_service import JobServiceImpl
 from modules.nf_orchestrator.services.project_service import ProjectServiceImpl
 from modules.nf_orchestrator.storage import db as storage_db
-from modules.nf_shared.protocol.dtos import JobEventLevel, JobType
+from modules.nf_orchestrator.storage.repos import job_repo
+from modules.nf_shared.protocol.dtos import JobEventLevel, JobStatus, JobType
 
 
 @pytest.mark.unit
@@ -48,6 +49,26 @@ def test_job_service_events(tmp_path: Path) -> None:
 
     follow_up = service.list_events(job.job_id, after_seq=last_seq)
     assert any(event.level == JobEventLevel.WARN for _, event in follow_up)
+
+
+@pytest.mark.unit
+def test_job_service_payload_roundtrip_and_retry_eligible_states(tmp_path: Path) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    service = JobServiceImpl(db_path)
+
+    inputs = {"scope": "doc-123"}
+    params = {"consistency": {"verification_loop": {"enabled": False}}}
+    job = service.submit("project-1", JobType.INDEX_FTS, inputs, params)
+
+    loaded_inputs, loaded_params = service.get_payloads(job.job_id)
+    assert loaded_inputs == inputs
+    assert loaded_params == params
+
+    with storage_db.connect(db_path) as conn:
+        updated = job_repo.update_job_status(conn, job.job_id, JobStatus.FAILED)
+    assert updated is not None
+    assert updated.status is JobStatus.FAILED
+    assert updated.status in {JobStatus.FAILED, JobStatus.CANCELED}
 
 
 @pytest.mark.unit

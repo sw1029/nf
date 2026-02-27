@@ -81,7 +81,7 @@ async function fetchRecentJobs() {
       }
 
       let retryButton = "";
-      if (job.status === "FAILED") {
+      if (job.status === "FAILED" || job.status === "CANCELED") {
         retryButton = `<button class="retry-job-btn" onclick="retryJob('${job.job_id}')" title="재시도">🔄 재시도</button>`;
       }
 
@@ -121,12 +121,16 @@ async function fetchRecentJobs() {
 window.retryJob = async function (jobId) {
   if (!state.projectId) return;
   try {
-    const res = await api(`/jobs/${jobId}/cancel`, "POST"); // Ensure it's dead, then we can re-enqueue or the backend handles retry
-    // The backend currently might not have a direct /retry endpoint. Let's just alert the user or assume re-running is handled differently if no endpoint exists.
-    // For UX demonstration, we can try to re-run consistency check if it was a consistency job, but we don't know the exact payload.
-    // In a real implementation we'd POST to /jobs/{jobId}/retry. For now, fetch jobs again.
-    alert("작업 재시도 요청을 보냈습니다 (프론트엔드 모의).");
-    fetchRecentJobs();
+    const res = await api(`/jobs/${encodeURIComponent(jobId)}/retry`, "POST");
+    const nextJobId = res?.job?.job_id;
+    if (typeof showSuccess === "function") {
+      const preview =
+        typeof nextJobId === "string" && nextJobId
+          ? `${nextJobId.split("-")[0]}...`
+          : "";
+      showSuccess(preview ? `재시도 작업 생성: ${preview}` : "재시도 작업 생성");
+    }
+    await fetchRecentJobs();
   } catch (e) {
     alert("재시도 실패: " + e.message);
   }

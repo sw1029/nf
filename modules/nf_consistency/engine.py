@@ -29,6 +29,13 @@ from modules.nf_retrieval.graph.rerank import expand_candidate_docs_with_graph
 from modules.nf_retrieval.vector.manifest import vector_search
 from modules.nf_schema.identity import build_alias_index, find_entity_candidates
 from modules.nf_shared.config import load_config
+from modules.nf_shared.sentence_rules import (
+    SENTENCE_END_CHARS,
+    SENTENCE_MAX_TAIL_SCAN,
+    SENTENCE_TAIL_CHARS,
+    is_abbreviation_boundary,
+    is_decimal_boundary,
+)
 from modules.nf_shared.protocol.dtos import (
     EvidenceMatchType,
     EvidenceRole,
@@ -93,21 +100,8 @@ _SCHEMA_TYPE_SLOT_KEYS: dict[str, str] = {
     "rel": "relation",
     "bool": "death",
 }
-_SENTENCE_END_CHARS = {".", "!", "?", "\n", "\u3002", "\uff01", "\uff1f", "\u2026", "\uff0e"}
-_SENTENCE_TAIL_CHARS = {
-    ".",
-    "\u2026",
-    "'",
-    '"',
-    ")",
-    "]",
-    "}",
-    "\u2019",
-    "\u201d",
-    "\u300d",
-    "\u300f",
-    "\u300b",
-}
+_SENTENCE_END_CHAR_SET = set(SENTENCE_END_CHARS)
+_SENTENCE_TAIL_CHAR_SET = set(SENTENCE_TAIL_CHARS)
 _STRING_EQUIVALENTS = {
     "\uc655\uad81": "\uad81",
     "\uc775\uc77c": "\ub2e4\uc74c\ub0a0",
@@ -197,17 +191,23 @@ def _segment_text(text: str) -> list[tuple[int, int, str]]:
     idx = 0
     while idx < text_len:
         ch = text[idx]
-        if ch not in _SENTENCE_END_CHARS:
+        if ch not in _SENTENCE_END_CHAR_SET:
             idx += 1
             continue
-        if ch == "." and 0 < idx < text_len - 1 and text[idx - 1].isdigit() and text[idx + 1].isdigit():
+        if ch == "." and (is_decimal_boundary(text, idx) or is_abbreviation_boundary(text, idx)):
             idx += 1
             continue
         seg_end = idx
         if ch != "\n":
             seg_end = idx + 1
-            while seg_end < text_len and text[seg_end] in _SENTENCE_TAIL_CHARS:
+            tail_scan = 0
+            while (
+                seg_end < text_len
+                and tail_scan < SENTENCE_MAX_TAIL_SCAN
+                and text[seg_end] in _SENTENCE_TAIL_CHAR_SET
+            ):
                 seg_end += 1
+                tail_scan += 1
         append_segment(cursor, seg_end)
         cursor = idx + 1 if ch == "\n" else seg_end
         idx = cursor

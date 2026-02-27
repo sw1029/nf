@@ -68,6 +68,9 @@ let repaginateFrame = null;
 let pageMeasureEl = null;
 let pendingRepaginateAfterComposition = false;
 let floatingPopoverFrame = null;
+let paginationWorker = null;
+let paginationWorkerSeq = 0;
+const PAGINATION_WORKER_TEXT_THRESHOLD = 4000;
 
 function _normalizeEditorText(value) {
   return String(value ?? "").replace(/\r\n/g, "\n");
@@ -196,6 +199,89 @@ function _snapBreakPoint(text, start, candidate) {
     if (/[,.!?;:。！？]/.test(ch)) return idx;
   }
   return candidate;
+}
+
+function _updatePageCharBudget(textLength, pageCount) {
+  const oldBudget = Number.parseInt(String(state.pageCharBudget ?? ""), 10);
+  const baseline = Number.isInteger(oldBudget) && oldBudget > 0 ? oldBudget : 1800;
+  const safePages = Math.max(1, Number.isInteger(pageCount) ? pageCount : 1);
+  const observed = Math.max(1, Math.round(textLength / safePages));
+  const next = Math.round(0.8 * baseline + 0.2 * observed);
+  state.pageCharBudget = Math.max(600, Math.min(6000, next));
+}
+
+function _hasPageOverflow() {
+  const editor = document.getElementById("editor");
+  if (!editor) return false;
+  const pages = _getPageNodes(editor);
+  return pages.some((page) => page.scrollHeight > page.clientHeight + 1);
+}
+
+function _getPaginationWorker() {
+  if (!state.usePaginationWorker) return null;
+  if (typeof Worker === "undefined") return null;
+  if (paginationWorker) return paginationWorker;
+  try {
+    paginationWorker = new Worker("/assets/user_ui.pagination.worker.js");
+  } catch (error) {
+    console.warn("pagination worker unavailable", error);
+    paginationWorker = null;
+  }
+  return paginationWorker;
+}
+
+function _sanitizeWorkerPages(text, rawPages) {
+  const list = Array.isArray(rawPages) ? rawPages : [];
+  const totalLen = text.length;
+  const normalized = list
+    .map((page) => {
+      const start = Number.parseInt(String(page?.start ?? ""), 10);
+      const end = Number.parseInt(String(page?.end ?? ""), 10);
+      if (!Number.isInteger(start) || !Number.isInteger(end)) return null;
+      const safeStart = Math.max(0, Math.min(totalLen, start));
+      const safeEnd = Math.max(safeStart, Math.min(totalLen, end));
+      return {
+        start: safeStart,
+        end: safeEnd,
+        text: text.slice(safeStart, safeEnd),
+      };
+    })
+    .filter((page) => page && page.end > page.start);
+  if (normalized.length === 0) {
+    return [{ start: 0, end: 0, text: "" }];
+  }
+  return normalized;
+}
+
+function _paginateTextViaWorker(text, requestId) {
+  const worker = _getPaginationWorker();
+  if (!worker) return Promise.resolve(null);
+  const normalized = _normalizeEditorText(text);
+  const budgetRaw = Number.parseInt(String(state.pageCharBudget ?? ""), 10);
+  const budget = Number.isInteger(budgetRaw) && budgetRaw > 0 ? budgetRaw : 1800;
+  return new Promise((resolve) => {
+    const onMessage = (event) => {
+      const data = event?.data || {};
+      if (data.request_id !== requestId) return;
+      worker.removeEventListener("message", onMessage);
+      worker.removeEventListener("error", onError);
+      const pages = _sanitizeWorkerPages(normalized, data.pages);
+      resolve(pages);
+    };
+    const onError = () => {
+      worker.removeEventListener("message", onMessage);
+      worker.removeEventListener("error", onError);
+      resolve(null);
+    };
+    worker.addEventListener("message", onMessage);
+    worker.addEventListener("error", onError);
+    worker.postMessage({
+      request_id: requestId,
+      text: normalized,
+      page_char_budget: budget,
+      break_chars: [".", ",", "!", "?", ";", ":", "。", "！", "？"],
+    });
+  });
 }
 
 function paginateText(text) {
@@ -341,6 +427,9 @@ function setEditorText(text, opts = {}) {
   state.editorText = normalized;
   const pages = paginateText(normalized);
   renderPagedEditor(pages);
+  if (Array.isArray(state.inlineTags) && state.inlineTags.length > 0) {
+    _renderInlineTagsFromState();
+  }
   if (preserveCaret && Number.isInteger(prevOffset)) {
     restoreSelectionGlobalOffset(prevOffset);
   }
@@ -348,21 +437,51 @@ function setEditorText(text, opts = {}) {
   renderPageGuides();
 }
 
-function _repaginateFromDom() {
+async function _repaginateFromDom(requestId) {
   const offset = captureSelectionGlobalOffset();
   const wasMemoDirty = Boolean(state.memoDirty);
+  const wasInlineTagDirty = Boolean(state.inlineTagDirty);
   syncMemoAnchorsFromDom();
+  syncInlineTagsFromDom();
   const memoSnapshot = state.memos.map((memo) => ({ ...memo }));
+  const inlineTagSnapshot = state.inlineTags.map((tag) => ({ ...tag }));
   const normalized = getEditorText();
-  const pages = paginateText(normalized);
-  renderPagedEditor(pages);
-  if (memoSnapshot.length > 0) {
-    _loadMemosFromMetadata(memoSnapshot);
-    state.memoDirty = wasMemoDirty;
+
+  const applyRenderedState = (pagesToRender) => {
+    renderPagedEditor(pagesToRender);
+    if (inlineTagSnapshot.length > 0) {
+      state.inlineTags = inlineTagSnapshot;
+      _renderInlineTagsFromState();
+      state.inlineTagDirty = wasInlineTagDirty;
+    }
+    if (memoSnapshot.length > 0) {
+      _loadMemosFromMetadata(memoSnapshot);
+      state.memoDirty = wasMemoDirty;
+    }
+    if (Number.isInteger(offset)) restoreSelectionGlobalOffset(offset);
+    _scheduleMemoRender();
+    renderPageGuides();
+  };
+
+  const useWorkerPath =
+    Boolean(state.usePaginationWorker) &&
+    normalized.length >= PAGINATION_WORKER_TEXT_THRESHOLD;
+  let pages = null;
+  if (useWorkerPath) {
+    pages = await _paginateTextViaWorker(normalized, requestId);
+    if (requestId !== paginationWorkerSeq) return;
   }
-  if (Number.isInteger(offset)) restoreSelectionGlobalOffset(offset);
-  _scheduleMemoRender();
-  renderPageGuides();
+  if (!Array.isArray(pages) || pages.length === 0) {
+    pages = paginateText(normalized);
+  }
+  applyRenderedState(pages);
+  _updatePageCharBudget(normalized.length, pages.length);
+
+  if (useWorkerPath && _hasPageOverflow()) {
+    const fallbackPages = paginateText(normalized);
+    applyRenderedState(fallbackPages);
+    _updatePageCharBudget(normalized.length, fallbackPages.length);
+  }
 }
 
 function _scheduleRepaginateFromDom() {
@@ -373,7 +492,8 @@ function _scheduleRepaginateFromDom() {
   if (repaginateFrame !== null) return;
   repaginateFrame = requestAnimationFrame(() => {
     repaginateFrame = null;
-    _repaginateFromDom();
+    const requestId = ++paginationWorkerSeq;
+    void _repaginateFromDom(requestId);
   });
 }
 
@@ -772,6 +892,289 @@ function _selectionWithinSinglePage(range) {
   return startPage === endPage;
 }
 
+const INLINE_TAG_TYPE_TO_PATH = {
+  인물: "사용자태그/인물",
+  사건: "사용자태그/사건",
+  복선: "사용자태그/복선",
+};
+
+const INLINE_TAG_PATH_TO_TYPE = Object.entries(INLINE_TAG_TYPE_TO_PATH).reduce(
+  (acc, [tagType, tagPath]) => {
+    acc[String(tagPath)] = String(tagType);
+    return acc;
+  },
+  {},
+);
+
+function _tagPathForInlineType(tagType) {
+  return INLINE_TAG_TYPE_TO_PATH[String(tagType || "").trim()] || "";
+}
+
+function _inlineTypeForTagPath(tagPath) {
+  const key = String(tagPath || "").trim();
+  return INLINE_TAG_PATH_TO_TYPE[key] || key || "태그";
+}
+
+function _inlineTagLabel(record) {
+  if (!record || typeof record !== "object") return "태그";
+  const tagType =
+    typeof record.tag_type === "string" && record.tag_type.trim()
+      ? record.tag_type.trim()
+      : _inlineTypeForTagPath(record.tag_path);
+  return tagType || "태그";
+}
+
+function _stripInlineTagMarkup(editor) {
+  if (!editor) return;
+  const spans = editor.querySelectorAll(".inline-tag-marked");
+  spans.forEach((span) => {
+    const parent = span.parentNode;
+    if (!parent) return;
+    while (span.firstChild) {
+      parent.insertBefore(span.firstChild, span);
+    }
+    parent.removeChild(span);
+  });
+  if (spans.length > 0) editor.normalize();
+}
+
+function _refreshInlineTagDirtyFlag() {
+  state.inlineTagDirty = state.inlineTags.some((tag) => tag.sync_state !== "synced");
+}
+
+function _normalizeInlineTagRecords(rawList, textLen = null) {
+  const source = Array.isArray(rawList) ? rawList : [];
+  const limit = Number.isInteger(textLen) ? Math.max(0, textLen) : null;
+  const normalized = source
+    .map((raw, idx) => {
+      const startRaw = Number.parseInt(String(raw?.start ?? raw?.span_start ?? ""), 10);
+      const endRaw = Number.parseInt(String(raw?.end ?? raw?.span_end ?? ""), 10);
+      if (!Number.isInteger(startRaw) || !Number.isInteger(endRaw)) return null;
+      let start = startRaw;
+      let end = endRaw;
+      if (limit !== null) {
+        start = Math.max(0, Math.min(limit, start));
+        end = Math.max(0, Math.min(limit, end));
+      }
+      if (end <= start) return null;
+      const localIdRaw =
+        typeof raw?.local_id === "string" && raw.local_id.trim()
+          ? raw.local_id.trim()
+          : typeof raw?.assign_id === "string" && raw.assign_id.trim()
+            ? raw.assign_id.trim()
+            : `itag_${Date.now()}_${idx}`;
+      const tagPathRaw =
+        typeof raw?.tag_path === "string" && raw.tag_path.trim()
+          ? raw.tag_path.trim()
+          : _tagPathForInlineType(raw?.tag_type);
+      return {
+        local_id: localIdRaw,
+        assign_id:
+          typeof raw?.assign_id === "string" && raw.assign_id.trim()
+            ? raw.assign_id.trim()
+            : null,
+        doc_id:
+          typeof raw?.doc_id === "string" && raw.doc_id.trim()
+            ? raw.doc_id.trim()
+            : state.currentDocId || null,
+        snapshot_id:
+          typeof raw?.snapshot_id === "string" && raw.snapshot_id.trim()
+            ? raw.snapshot_id.trim()
+            : state.currentDocSnapshotId || null,
+        start,
+        end,
+        tag_path: tagPathRaw,
+        tag_type:
+          typeof raw?.tag_type === "string" && raw.tag_type.trim()
+            ? raw.tag_type.trim()
+            : _inlineTypeForTagPath(tagPathRaw),
+        user_value:
+          typeof raw?.user_value === "string"
+            ? raw.user_value
+            : typeof raw?.text === "string"
+              ? raw.text
+              : "",
+        sync_state:
+          raw?.sync_state === "synced" || (typeof raw?.assign_id === "string" && raw.assign_id.trim())
+            ? "synced"
+            : "pending",
+      };
+    })
+    .filter((item) => item && item.end > item.start)
+    .sort((left, right) => {
+      if (left.start !== right.start) return left.start - right.start;
+      if (left.end !== right.end) return left.end - right.end;
+      return left.local_id.localeCompare(right.local_id);
+    });
+  return normalized;
+}
+
+function _renderInlineTagsFromState() {
+  const editor = document.getElementById("editor");
+  if (!editor) return;
+  _stripInlineTagMarkup(editor);
+  const textLen = getEditorText().length;
+  const normalized = _normalizeInlineTagRecords(state.inlineTags, textLen);
+  const toRender = [...normalized].sort((left, right) => {
+    if (left.start !== right.start) return right.start - left.start;
+    return right.end - left.end;
+  });
+
+  for (const tag of toRender) {
+    const textNodes = _collectEditorTextNodesLocal(editor);
+    if (!textNodes.length) continue;
+    const startPos = _positionForOffsetLocal(textNodes, tag.start);
+    const endPos = _positionForOffsetLocal(textNodes, tag.end);
+    if (!startPos || !endPos) continue;
+
+    const range = document.createRange();
+    range.setStart(startPos.node, startPos.offset);
+    range.setEnd(endPos.node, endPos.offset);
+
+    const span = document.createElement("span");
+    span.className = "inline-tag-marked";
+    span.dataset.inlineTagId = tag.local_id;
+    span.dataset.tagType = _inlineTagLabel(tag);
+    span.dataset.tagPath = tag.tag_path || "";
+    if (tag.assign_id) span.dataset.assignId = tag.assign_id;
+    span.title = `태그: ${_inlineTagLabel(tag)}`;
+
+    try {
+      range.surroundContents(span);
+    } catch (_error) {
+      const fragment = range.extractContents();
+      span.appendChild(fragment);
+      range.insertNode(span);
+    }
+  }
+
+  state.inlineTags = normalized;
+  _refreshInlineTagDirtyFlag();
+}
+
+function syncInlineTagsFromDom() {
+  const editor = document.getElementById("editor");
+  if (!editor || !Array.isArray(state.inlineTags)) return;
+  const next = [];
+  state.inlineTags.forEach((tag) => {
+    const span = editor.querySelector(`.inline-tag-marked[data-inline-tag-id="${tag.local_id}"]`);
+    if (!span) return;
+
+    const beforeRange = document.createRange();
+    beforeRange.selectNodeContents(editor);
+    beforeRange.setEndBefore(span);
+    const start = beforeRange.toString().length;
+
+    const spanRange = document.createRange();
+    spanRange.selectNodeContents(span);
+    const length = spanRange.toString().length;
+    if (length <= 0) return;
+
+    next.push({
+      ...tag,
+      start,
+      end: start + length,
+      user_value: spanRange.toString(),
+    });
+  });
+  state.inlineTags = _normalizeInlineTagRecords(next, getEditorText().length);
+  _refreshInlineTagDirtyFlag();
+}
+
+async function _syncInlineTagAssignment(tag) {
+  if (!state.projectId || !state.currentDocId || !tag) return false;
+  const snapshotId = state.currentDocSnapshotId;
+  if (!snapshotId) return false;
+  try {
+    const res = await api(
+      `/projects/${encodeURIComponent(state.projectId)}/tags/assignments`,
+      "POST",
+      {
+        doc_id: state.currentDocId,
+        snapshot_id: snapshotId,
+        span_start: tag.start,
+        span_end: tag.end,
+        tag_path: tag.tag_path,
+        user_value: tag.user_value || "",
+        created_by: "USER",
+      },
+    );
+    const assignment = res?.assignment || {};
+    tag.assign_id =
+      typeof assignment.assign_id === "string" && assignment.assign_id
+        ? assignment.assign_id
+        : tag.assign_id;
+    tag.snapshot_id = snapshotId;
+    tag.sync_state = "synced";
+    return true;
+  } catch (error) {
+    console.warn("inline tag sync failed", error);
+    tag.sync_state = "pending";
+    return false;
+  }
+}
+
+async function syncPendingInlineTags() {
+  if (!Array.isArray(state.inlineTags) || state.inlineTags.length === 0) {
+    state.inlineTagDirty = false;
+    return;
+  }
+  const queue = state.inlineTags.filter((tag) => tag.sync_state !== "synced");
+  for (const tag of queue) {
+    await _syncInlineTagAssignment(tag);
+  }
+  state.inlineTags = _normalizeInlineTagRecords(state.inlineTags, getEditorText().length);
+  _refreshInlineTagDirtyFlag();
+}
+
+async function syncInlineTagsAfterSnapshot(snapshotId) {
+  if (!snapshotId || !Array.isArray(state.inlineTags) || state.inlineTags.length === 0) {
+    state.currentDocSnapshotId = snapshotId || state.currentDocSnapshotId;
+    state.inlineTagDirty = false;
+    return;
+  }
+  syncInlineTagsFromDom();
+  state.currentDocSnapshotId = snapshotId;
+  state.inlineTags = state.inlineTags.map((tag) => ({
+    ...tag,
+    assign_id: null,
+    snapshot_id: snapshotId,
+    sync_state: "pending",
+  }));
+  _refreshInlineTagDirtyFlag();
+  await syncPendingInlineTags();
+  _renderInlineTagsFromState();
+}
+
+function restoreInlineTagsFromAssignments(assignments) {
+  const editor = document.getElementById("editor");
+  if (!editor) return;
+  _stripInlineTagMarkup(editor);
+  const textLen = getEditorText().length;
+  const normalized = _normalizeInlineTagRecords(
+    (Array.isArray(assignments) ? assignments : []).map((item) => ({
+      local_id:
+        typeof item?.assign_id === "string" && item.assign_id
+          ? item.assign_id
+          : `itag_${Date.now()}`,
+      assign_id: item?.assign_id || null,
+      doc_id: item?.doc_id || state.currentDocId,
+      snapshot_id: item?.snapshot_id || state.currentDocSnapshotId,
+      start: item?.span_start,
+      end: item?.span_end,
+      tag_path: item?.tag_path || "",
+      tag_type: _inlineTypeForTagPath(item?.tag_path || ""),
+      user_value:
+        typeof item?.user_value === "string" ? item.user_value : "",
+      sync_state: "synced",
+    })),
+    textLen,
+  );
+  state.inlineTags = normalized;
+  state.inlineTagDirty = false;
+  _renderInlineTagsFromState();
+}
+
 function _serializeMemosForMetadata() {
   syncMemoAnchorsFromDom();
   return state.memos.map((memo) => ({
@@ -877,6 +1280,10 @@ function _markMemoDirty(delayMs = 1200) {
 window.serializeMemosForMetadata = _serializeMemosForMetadata;
 window.loadMemosFromMetadata = _loadMemosFromMetadata;
 window.syncMemoAnchorsFromDom = syncMemoAnchorsFromDom;
+window.syncInlineTagsFromDom = syncInlineTagsFromDom;
+window.syncPendingInlineTags = syncPendingInlineTags;
+window.syncInlineTagsAfterSnapshot = syncInlineTagsAfterSnapshot;
+window.restoreInlineTagsFromAssignments = restoreInlineTagsFromAssignments;
 window.schedulePageGuideRender = schedulePageGuideRender;
 window.updateStatusBar = updateStatusBar;
 window.layoutMemoSidebar = layoutMemoSidebar;
@@ -898,7 +1305,14 @@ window.resetMemoStateForDoc = function () {
   if (sidebar) sidebar.innerHTML = "";
 };
 
-function handleExport() {
+window.resetInlineTagStateForDoc = function () {
+  const editor = document.getElementById("editor");
+  if (editor) _stripInlineTagMarkup(editor);
+  state.inlineTags = [];
+  state.inlineTagDirty = false;
+};
+
+function handleLocalExport() {
   if (!state.currentDocId) {
     alert("먼저 문서를 열어주세요.");
     return closeExportModal();
@@ -930,6 +1344,8 @@ function handleExport() {
   }
   closeExportModal();
 }
+
+window.handleLocalExport = handleLocalExport;
 
 function execCmd(command, value = null) {
   document.execCommand(command, false, value);
@@ -986,7 +1402,8 @@ document.addEventListener("DOMContentLoaded", () => {
         handleComposition(false);
         if (pendingRepaginateAfterComposition) {
           pendingRepaginateAfterComposition = false;
-          _repaginateFromDom();
+          const requestId = ++paginationWorkerSeq;
+          void _repaginateFromDom(requestId);
         } else {
           _scheduleRepaginateFromDom();
         }
@@ -1027,7 +1444,11 @@ document.addEventListener("keydown", (e) => {
 });
 
 setInterval(() => {
-  if (state.currentDocId && (state.isDirty || state.memoDirty) && !state.isComposing) {
+  if (
+    state.currentDocId &&
+    (state.isDirty || state.memoDirty || state.inlineTagDirty) &&
+    !state.isComposing
+  ) {
     void saveDoc(false);
   }
 }, 5000);
@@ -1079,8 +1500,9 @@ window.collectGarbageMemos = function () {
 
 async function saveDoc(immediate = false) {
   if (!state.currentDocId) return;
-  if (!state.isDirty && !state.memoDirty) return;
+  if (!state.isDirty && !state.memoDirty && !state.inlineTagDirty) return;
   if (state.isComposing && !immediate) return;
+  syncInlineTagsFromDom();
 
   const titleInputEl = document.getElementById("doc-title-input");
   const content = getEditorText();
@@ -1088,6 +1510,7 @@ async function saveDoc(immediate = false) {
 
   const shouldSaveContent = Boolean(state.isDirty);
   const shouldSaveMemos = Boolean(state.memoDirty);
+  const shouldSyncInlineTags = Boolean(state.inlineTagDirty);
 
   let memoPayload = null;
   if (shouldSaveMemos) {
@@ -1124,11 +1547,28 @@ async function saveDoc(immediate = false) {
   }
 
   try {
-    await api(
+    const prevSnapshotId = state.currentDocSnapshotId;
+    const res = await api(
       `/projects/${state.projectId}/documents/${state.currentDocId}`,
       "PATCH",
       payload,
     );
+    const updatedDoc =
+      res && typeof res.document === "object" && res.document
+        ? res.document
+        : null;
+    if (updatedDoc && state.docs[state.currentDocId]) {
+      state.docs[state.currentDocId] = {
+        ...state.docs[state.currentDocId],
+        ...updatedDoc,
+      };
+    }
+    const snapshotIdRaw = updatedDoc?.head_snapshot_id;
+    const nextSnapshotId =
+      typeof snapshotIdRaw === "string" && snapshotIdRaw.trim()
+        ? snapshotIdRaw.trim()
+        : prevSnapshotId;
+    state.currentDocSnapshotId = nextSnapshotId || null;
 
     if (shouldSaveContent) {
       const nextSegments = _segmentTextForConsistency(content);
@@ -1141,6 +1581,11 @@ async function saveDoc(immediate = false) {
     }
     if (shouldSaveMemos) {
       state.memoDirty = false;
+    }
+    if (nextSnapshotId && nextSnapshotId !== prevSnapshotId) {
+      await syncInlineTagsAfterSnapshot(nextSnapshotId);
+    } else if (shouldSyncInlineTags) {
+      await syncPendingInlineTags();
     }
 
     _setSaveStatus("저장됨", "#aaa");
@@ -1174,7 +1619,8 @@ function updateEditorConfig(key, value) {
 
   localStorage.setItem("nf_editor_config", JSON.stringify(state.editorConfig));
 
-  _repaginateFromDom();
+  const requestId = ++paginationWorkerSeq;
+  void _repaginateFromDom(requestId);
   schedulePageGuideRender();
   _scheduleMemoRender();
 }
@@ -1372,6 +1818,17 @@ window.applyInlineTag = function (tagType) {
     state.savedSelectionRange = null;
     return;
   }
+  const offsets = _offsetsFromRange(editor, state.savedSelectionRange);
+  if (!offsets || offsets.end <= offsets.start) {
+    state.savedSelectionRange = null;
+    return;
+  }
+  const tagPath = _tagPathForInlineType(tagType);
+  if (!tagPath) {
+    alert("지원하지 않는 태그 유형입니다.");
+    state.savedSelectionRange = null;
+    return;
+  }
 
   const selection = window.getSelection();
   if (!selection) return;
@@ -1379,8 +1836,11 @@ window.applyInlineTag = function (tagType) {
   selection.addRange(state.savedSelectionRange);
 
   const span = document.createElement("span");
+  const localId = `itag_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   span.className = "inline-tag-marked";
+  span.dataset.inlineTagId = localId;
   span.dataset.tagType = tagType;
+  span.dataset.tagPath = tagPath;
   span.title = `태그: ${tagType}`;
 
 
@@ -1390,6 +1850,24 @@ window.applyInlineTag = function (tagType) {
 
   _insertCaretAfterNode(span);
   state.savedSelectionRange = null;
+  const selectedText = span.textContent || "";
+  state.inlineTags = _normalizeInlineTagRecords([
+    ...state.inlineTags,
+    {
+      local_id: localId,
+      assign_id: null,
+      doc_id: state.currentDocId,
+      snapshot_id: state.currentDocSnapshotId,
+      start: offsets.start,
+      end: offsets.end,
+      tag_path: tagPath,
+      tag_type: tagType,
+      user_value: selectedText,
+      sync_state: "pending",
+    },
+  ]);
+  _refreshInlineTagDirtyFlag();
+  void syncPendingInlineTags();
 
   updateStatusBar();
 };
@@ -1452,11 +1930,31 @@ window.removeInlineTagOrMemo = function () {
 
   const node = state.targetNodeToRemove;
   if (!node || !node.parentNode) return;
+  const isTag = node.classList.contains("inline-tag-marked");
 
   if (node.classList.contains("inline-memo-marked")) {
     const memoId = node.dataset.memoId;
     state.memos = state.memos.filter((memo) => memo.id !== memoId);
     _markMemoDirty(800);
+  }
+  if (isTag) {
+    const localId = node.dataset.inlineTagId || "";
+    const record = state.inlineTags.find((tag) => tag.local_id === localId);
+    state.inlineTags = state.inlineTags.filter((tag) => tag.local_id !== localId);
+    _refreshInlineTagDirtyFlag();
+    if (
+      state.projectId &&
+      record &&
+      typeof record.assign_id === "string" &&
+      record.assign_id
+    ) {
+      void api(
+        `/projects/${encodeURIComponent(state.projectId)}/tags/assignments/${encodeURIComponent(record.assign_id)}`,
+        "DELETE",
+      ).catch((error) => {
+        console.warn("inline tag delete failed", error);
+      });
+    }
   }
 
   const parent = node.parentNode;

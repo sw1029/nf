@@ -32,12 +32,14 @@ from modules.nf_orchestrator.controllers import http_response as controller_http
 from modules.nf_retrieval.vector import shard_store
 from modules.nf_shared.config import load_config
 from modules.nf_shared.errors import AppError, ErrorCode
+from modules.nf_shared.sentence_rules import build_sentence_rules_payload
 from modules.nf_shared.protocol.dtos import (
     DocumentType,
     EntityKind,
     FactSource,
     FactStatus,
     JobEvent,
+    JobStatus,
     JobType,
     SchemaLayer,
     SchemaType,
@@ -112,8 +114,10 @@ def _build_openapi_spec() -> dict[str, Any]:
             "/jobs/{job_id}": {"get": {"summary": "Get job"}},
             "/jobs/{job_id}/artifact": {"get": {"summary": "Download job artifact"}},
             "/jobs/{job_id}/cancel": {"post": {"summary": "Cancel job"}},
+            "/jobs/{job_id}/retry": {"post": {"summary": "Retry job"}},
             "/jobs/{job_id}/events": {"get": {"summary": "Stream job events"}},
             "/query/retrieval": {"post": {"summary": "FTS-only retrieval"}},
+            "/query/segment-rules": {"get": {"summary": "Get sentence segmentation rules"}},
             "/query/evidence/{eid}": {"get": {"summary": "Get evidence"}},
             "/query/verdicts": {"post": {"summary": "List verdicts"}},
             "/query/verdicts/{vid}": {"get": {"summary": "Get verdict detail"}},
@@ -1175,6 +1179,14 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
              self._send_app_error(HTTPStatus.INTERNAL_SERVER_ERROR, ErrorCode.INTERNAL_ERROR, "파일 읽기 실패")
 
     def _handle_query(self, segments: list[str]) -> None:
+        if len(segments) == 2 and segments[1] == "segment-rules":
+            if self.command != "GET":
+                self._send_app_error(
+                    HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드"
+                )
+                return
+            self._send_json(HTTPStatus.OK, {"rules": build_sentence_rules_payload()})
+            return
         if len(segments) == 2 and segments[1] == "retrieval":
             if self.command != "POST":
                 self._send_app_error(
@@ -1339,6 +1351,40 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "잡을 찾을 수 없습니다")
                 return
             self._send_json(HTTPStatus.OK, {"job": dump_json(job)})
+            return
+
+        if len(segments) == 3 and segments[2] == "retry":
+            job_id = segments[1]
+            if self.command != "POST":
+                self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+                return
+            prior_job = self.server.job_service.get(job_id)
+            if prior_job is None:
+                self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "잡을 찾을 수 없습니다")
+                return
+            if prior_job.status not in {JobStatus.FAILED, JobStatus.CANCELED}:
+                self._send_app_error(
+                    HTTPStatus.CONFLICT,
+                    ErrorCode.VALIDATION_ERROR,
+                    "재시도는 FAILED 또는 CANCELED 상태에서만 가능합니다",
+                )
+                return
+            project = self.server.project_service.get_project(prior_job.project_id)
+            if project is None:
+                self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "프로젝트를 찾을 수 없습니다")
+                return
+            inputs, params = self.server.job_service.get_payloads(job_id)
+            self._validate_job_payload(prior_job.type, inputs)
+            self._validate_job_params(prior_job.type, params)
+            self._enforce_job_policy(prior_job.type, inputs, params, project.settings)
+            retried = self.server.job_service.submit(
+                prior_job.project_id,
+                prior_job.type,
+                inputs,
+                params,
+                priority=100,
+            )
+            self._send_json(HTTPStatus.CREATED, {"job": dump_json(retried), "retried_from": job_id})
             return
 
         if len(segments) == 3 and segments[2] == "events":

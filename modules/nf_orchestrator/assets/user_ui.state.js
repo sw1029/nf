@@ -28,12 +28,18 @@ let state = {
   savedSelectionRange: null,
   targetNodeToRemove: null,
   memos: [],
+  inlineTags: [],
+  inlineTagDirty: false,
+  currentDocSnapshotId: null,
   editorText: "",
   pageSlices: [],
+  pageCharBudget: 1800,
+  usePaginationWorker: true,
   selectionOffset: null,
   pageRenderVersion: 0,
   pageGuideRenderScheduled: false,
   currentPageCount: 1,
+  segmentRules: null,
   consistencyOptions: {
     filters: {
       entity_id: "",
@@ -54,31 +60,104 @@ let state = {
   },
 };
 
-const SENTENCE_END_CHARS = new Set([
-  ".",
-  "!",
-  "?",
-  "\n",
-  "。",
-  "！",
-  "？",
-  "…",
-  "．",
-]);
-const SENTENCE_TAIL_CHARS = new Set([
-  ".",
-  "…",
-  "'",
-  '"',
-  ")",
-  "]",
-  "}",
-  "’",
-  "”",
-  "」",
-  "』",
-  "》",
-]);
+const DEFAULT_SEGMENT_RULES = {
+  end_chars: [".", "!", "?", "\n", "。", "！", "？", "…", "．"],
+  tail_chars: [".", "…", "'", '"', ")", "]", "}", "’", "”", "」", "』", "》"],
+  abbreviation_tokens: [
+    "a.m.",
+    "cf.",
+    "co.",
+    "dr.",
+    "e.g.",
+    "etc.",
+    "fig.",
+    "i.e.",
+    "inc.",
+    "jr.",
+    "ltd.",
+    "mr.",
+    "mrs.",
+    "ms.",
+    "no.",
+    "p.m.",
+    "prof.",
+    "sr.",
+    "st.",
+    "u.k.",
+    "u.s.",
+    "vs.",
+  ],
+  decimal_guard: true,
+  ordinal_guard: true,
+  max_tail_scan: 24,
+};
+
+state.segmentRules = { ...DEFAULT_SEGMENT_RULES };
+
+function _normalizeSegmentRules(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const endChars = Array.isArray(src.end_chars)
+    ? src.end_chars.map((item) => String(item || "")).filter((item) => item.length > 0)
+    : DEFAULT_SEGMENT_RULES.end_chars;
+  const tailChars = Array.isArray(src.tail_chars)
+    ? src.tail_chars.map((item) => String(item || "")).filter((item) => item.length > 0)
+    : DEFAULT_SEGMENT_RULES.tail_chars;
+  const abbreviationTokens = Array.isArray(src.abbreviation_tokens)
+    ? src.abbreviation_tokens.map((item) => String(item || "").toLowerCase()).filter((item) => item.length > 0)
+    : DEFAULT_SEGMENT_RULES.abbreviation_tokens;
+  const maxTailScan = Number.parseInt(String(src.max_tail_scan ?? ""), 10);
+  return {
+    end_chars: endChars.length > 0 ? endChars : DEFAULT_SEGMENT_RULES.end_chars,
+    tail_chars: tailChars.length > 0 ? tailChars : DEFAULT_SEGMENT_RULES.tail_chars,
+    abbreviation_tokens: abbreviationTokens.length > 0 ? abbreviationTokens : DEFAULT_SEGMENT_RULES.abbreviation_tokens,
+    decimal_guard: src.decimal_guard !== false,
+    ordinal_guard: src.ordinal_guard !== false,
+    max_tail_scan: Number.isInteger(maxTailScan) && maxTailScan > 0 ? maxTailScan : DEFAULT_SEGMENT_RULES.max_tail_scan,
+  };
+}
+
+function _segmentDecimalBoundary(src, idx, decimalGuard) {
+  if (!decimalGuard) return false;
+  if (idx <= 0 || idx >= src.length - 1) return false;
+  return /\d/.test(src[idx - 1] || "") && /\d/.test(src[idx + 1] || "");
+}
+
+function _segmentAbbreviationBoundary(src, idx, abbreviationTokens, ordinalGuard) {
+  if (src[idx] !== ".") return false;
+  let start = idx - 1;
+  while (
+    start >= 0 &&
+    /[A-Za-z0-9_.]/.test(src[start] || "")
+  ) {
+    start -= 1;
+  }
+  const token = src.slice(start + 1, idx + 1).trim().toLowerCase();
+  if (!token) return false;
+  if (abbreviationTokens.has(token)) return true;
+  if (ordinalGuard && /^\d+(st|nd|rd|th)\.$/i.test(token)) return true;
+  if (/^[a-z]\.$/i.test(token)) {
+    const nextChar = src[idx + 1] || "";
+    if (/[A-Z]/.test(nextChar)) return true;
+  }
+  return false;
+}
+
+async function loadSegmentRulesFromServer() {
+  if (typeof api !== "function") {
+    state.segmentRules = _normalizeSegmentRules(state.segmentRules);
+    return state.segmentRules;
+  }
+  try {
+    const res = await api("/query/segment-rules");
+    state.segmentRules = _normalizeSegmentRules(res?.rules);
+  } catch (error) {
+    console.warn("segment rules load failed, using defaults", error);
+    state.segmentRules = _normalizeSegmentRules(state.segmentRules);
+  }
+  return state.segmentRules;
+}
+
+window.loadSegmentRulesFromServer = loadSegmentRulesFromServer;
 
 function _hashSegmentText(text) {
   let hash = 2166136261;
@@ -103,6 +182,10 @@ function _segmentTextForConsistency(text) {
   const src = String(text || "");
   const segments = [];
   const textLen = src.length;
+  const rules = _normalizeSegmentRules(state.segmentRules);
+  const endChars = new Set(rules.end_chars);
+  const tailChars = new Set(rules.tail_chars);
+  const abbreviationTokens = new Set(rules.abbreviation_tokens || []);
   let cursor = 0;
   let idx = 0;
 
@@ -120,25 +203,29 @@ function _segmentTextForConsistency(text) {
 
   while (idx < textLen) {
     const ch = src[idx];
-    if (!SENTENCE_END_CHARS.has(ch)) {
+    if (!endChars.has(ch)) {
       idx += 1;
       continue;
     }
-    if (
-      ch === "." &&
-      idx > 0 &&
-      idx < textLen - 1 &&
-      /\d/.test(src[idx - 1] || "") &&
-      /\d/.test(src[idx + 1] || "")
-    ) {
+    if (ch === "." && _segmentDecimalBoundary(src, idx, rules.decimal_guard)) {
+      idx += 1;
+      continue;
+    }
+    if (ch === "." && _segmentAbbreviationBoundary(src, idx, abbreviationTokens, rules.ordinal_guard)) {
       idx += 1;
       continue;
     }
     let segEnd = idx;
     if (ch !== "\n") {
       segEnd = idx + 1;
-      while (segEnd < textLen && SENTENCE_TAIL_CHARS.has(src[segEnd])) {
+      let tailScan = 0;
+      while (
+        segEnd < textLen &&
+        tailChars.has(src[segEnd]) &&
+        tailScan < rules.max_tail_scan
+      ) {
         segEnd += 1;
+        tailScan += 1;
       }
     }
     appendSegment(cursor, segEnd, true);
