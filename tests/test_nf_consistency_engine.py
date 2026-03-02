@@ -71,6 +71,7 @@ def _seed_schema_fact(
     schema_ver: str,
     tag_path: str,
     value: object,
+    entity_id: str | None = None,
 ) -> None:
     ev = evidence_repo.new_evidence(
         project_id=project_id,
@@ -92,7 +93,7 @@ def _seed_schema_fact(
         project_id=project_id,
         schema_ver=schema_ver,
         layer=SchemaLayer.EXPLICIT,
-        entity_id=None,
+        entity_id=entity_id,
         tag_path=tag_path,
         value=value,
         evidence_eid=ev.eid,
@@ -211,6 +212,69 @@ def test_consistency_engine_violate_when_fact_mismatches(tmp_path: Path) -> None
 
     assert len(verdicts) == 1
     assert verdicts[0].verdict is Verdict.VIOLATE
+
+
+@pytest.mark.unit
+def test_consistency_engine_entity_unresolved_when_only_entity_bound_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    schema_ver = "v1"
+    text = "그의 직업은 마법사다."
+
+    with db.connect(db_path) as conn:
+        _seed_document(conn, tmp_path=tmp_path, project_id=project_id, doc_id=doc_id, snapshot_id=snapshot_id, text=text)
+        schema_repo.create_schema_version(
+            conn,
+            project_id=project_id,
+            source_snapshot_id=snapshot_id,
+            schema_ver=schema_ver,
+        )
+        _seed_schema_fact(
+            conn,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            schema_ver=schema_ver,
+            tag_path="설정/인물/직업",
+            value="마법사",
+            entity_id="entity-siro",
+        )
+
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine._extract_claims",
+        lambda *_args, **_kwargs: [
+            {
+                "segment_start": 0,
+                "segment_end": len(text),
+                "segment_text": text,
+                "claim_start": 0,
+                "claim_end": len(text),
+                "claim_text": text,
+                "slots": {"job": "마법사"},
+                "slot_key": "job",
+                "slot_confidence": 1.0,
+            }
+        ],
+    )
+
+    engine = ConsistencyEngineImpl(db_path=db_path)
+    verdicts = engine.run(
+        {
+            "project_id": project_id,
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "schema_ver": schema_ver,
+        }
+    )
+
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict is Verdict.UNKNOWN
+    assert "ENTITY_UNRESOLVED" in verdicts[0].unknown_reasons
 
 
 @pytest.mark.unit
@@ -366,7 +430,28 @@ def test_resolve_evidence_link_options_invalid_values_fallback_to_defaults() -> 
 def test_resolve_self_evidence_options_defaults() -> None:
     exclude, scope = consistency_engine._resolve_self_evidence_options({})
     assert exclude is True
-    assert scope == "range"
+    assert scope == "claim"
+
+
+@pytest.mark.unit
+def test_filter_self_evidence_results_claim_scope_uses_claim_span_not_range() -> None:
+    results = [
+        {
+            "score": 0.1,
+            "evidence": {"doc_id": "doc-1", "span_start": 30, "span_end": 35, "chunk_id": "c1"},
+        }
+    ]
+    kept, removed = consistency_engine._filter_self_evidence_results(
+        results,
+        input_doc_id="doc-1",
+        scope="claim",
+        claim_abs_start=10,
+        claim_abs_end=20,
+        range_start=0,
+        range_end=100,
+    )
+    assert removed == 0
+    assert len(kept) == 1
 
 
 @pytest.mark.unit

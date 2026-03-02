@@ -226,6 +226,44 @@ def test_judge_with_fact_index_excludes_self_fact_evidence_ids() -> None:
     assert meta["conflicting"] is False
     assert links == [("ev-setting", consistency_engine.EvidenceRole.CONTRADICT)]
 
+def test_judge_with_fact_index_marks_entity_unresolved_without_global_facts() -> None:
+    fact_index = {
+        ("job", consistency_engine._FACT_ALL_KEY): [
+            _FakeFact(evidence_eid="ev-entity-a", value="마법사", entity_id="entity-a"),
+        ]
+    }
+    verdict, links, meta = consistency_engine._judge_with_fact_index(
+        {"job": "마법사"},
+        fact_index,
+        target_entity_id=None,
+    )
+    assert verdict is None
+    assert links == []
+    assert meta["entity_unresolved"] is True
+
+def test_judge_with_fact_index_compares_global_facts_when_entity_unresolved() -> None:
+    fact_index = {
+        ("job", consistency_engine._FACT_ALL_KEY): [
+            _FakeFact(evidence_eid="ev-global", value="마법사", entity_id=None),
+            _FakeFact(evidence_eid="ev-entity-a", value="기사", entity_id="entity-a"),
+        ],
+        ("job", None): [
+            _FakeFact(evidence_eid="ev-global", value="마법사", entity_id=None),
+        ],
+    }
+    verdict, links, meta = consistency_engine._judge_with_fact_index(
+        {"job": "마법사"},
+        fact_index,
+        target_entity_id=None,
+    )
+    assert verdict is Verdict.OK
+    assert meta["entity_unresolved"] is False
+    assert links == [("ev-global", consistency_engine.EvidenceRole.SUPPORT)]
+
+def test_compare_slot_does_not_allow_contains_ok_for_job() -> None:
+    judged = consistency_engine._compare_slot("job", "흑마법사", "마법사")
+    assert judged is not Verdict.OK
+
 def test_compute_reliability_keeps_unknown_nonzero_when_evidence_exists() -> None:
     breakdown = ReliabilityBreakdown(
         fts_strength=0.12,
@@ -238,6 +276,7 @@ def test_compute_reliability_keeps_unknown_nonzero_when_evidence_exists() -> Non
         breakdown=breakdown,
     )
     assert reliability > 0.0
+    assert reliability <= 0.45
     assert evidence_conf > 0.0
     assert decision_conf > 0.0
 

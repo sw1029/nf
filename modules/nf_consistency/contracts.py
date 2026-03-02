@@ -12,7 +12,7 @@ class ConsistencyPreflight(TypedDict, total=False):
 
 
 ConsistencyEvidenceLinkPolicy = Literal["full", "cap", "contradict_only"]
-ConsistencySelfEvidenceScope = Literal["range", "doc"]
+ConsistencySelfEvidenceScope = Literal["claim", "range", "doc"]
 
 
 class ConsistencyVerifierOptions(TypedDict, total=False):

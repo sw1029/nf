@@ -51,7 +51,7 @@ from modules.nf_shared.protocol.dtos import (
 _FACT_ALL_KEY = "__all__"
 _ALLOWED_EVIDENCE_LINK_POLICIES = {"full", "cap", "contradict_only"}
 _DEFAULT_EVIDENCE_LINK_CAP = 20
-_DEFAULT_SELF_EVIDENCE_SCOPE = "range"
+_DEFAULT_SELF_EVIDENCE_SCOPE = "claim"
 _DEFAULT_GRAPH_DOC_CAP = 200
 _DEFAULT_LAYER3_MIN_FTS_FOR_PROMOTION = 0.25
 _DEFAULT_LAYER3_MAX_CLAIM_CHARS = 260
@@ -78,6 +78,7 @@ _LAYER3_NLI_TOP_K = 3
 _RETRIEVAL_CACHE_SIZE = 256
 _UNKNOWN_REASON_NO_EVIDENCE = "NO_EVIDENCE"
 _UNKNOWN_REASON_AMBIGUOUS_ENTITY = "AMBIGUOUS_ENTITY"
+_UNKNOWN_REASON_ENTITY_UNRESOLVED = "ENTITY_UNRESOLVED"
 _UNKNOWN_REASON_SLOT_UNCOMPARABLE = "SLOT_UNCOMPARABLE"
 _UNKNOWN_REASON_CONFLICTING_EVIDENCE = "CONFLICTING_EVIDENCE"
 _HASHED_EMBEDDING_DIM = 96
@@ -507,7 +508,9 @@ def _compare_slot(slot_key: str, claimed_value: object, fact_value: object) -> V
         expected = _normalize_slot_text(fact_value, slot_key=slot_key)
         if not claimed or not expected:
             return None
-        if claimed == expected or claimed in expected or expected in claimed:
+        if claimed == expected:
+            return Verdict.OK
+        if slot_key in {"time", "place"} and (claimed in expected or expected in claimed):
             return Verdict.OK
 
         claimed_tokens = _tokenize_slot_text(claimed_value, slot_key=slot_key)
@@ -705,6 +708,124 @@ def _has_metadata_scope_filters(filters: dict[str, object]) -> bool:
     return any(key in filters for key in ("entity_id", "time_key", "timeline_idx"))
 
 
+def _user_defined_doc_scope(filters: dict[str, object]) -> bool:
+    if isinstance(filters.get("doc_id"), str):
+        return True
+    raw_doc_ids = filters.get("doc_ids")
+    if not isinstance(raw_doc_ids, list):
+        return False
+    return any(isinstance(item, str) and item.strip() for item in raw_doc_ids)
+
+
+def _list_project_doc_ids(project_docs: list[Any]) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for doc in project_docs:
+        doc_id = getattr(doc, "doc_id", None)
+        if not isinstance(doc_id, str) or not doc_id or doc_id in seen:
+            continue
+        seen.add(doc_id)
+        ordered.append(doc_id)
+    return ordered
+
+
+def _load_claim_metadata_spans(
+    conn,
+    *,
+    project_id: str,
+    input_doc_id: str,
+    input_snapshot_id: str,
+) -> tuple[list[tuple[int, int, str]], list[tuple[int, int, str | None, int | None]]]:
+    entity_rows = conn.execute(
+        """
+        SELECT span_start, span_end, entity_id
+        FROM entity_mention_span
+        WHERE project_id = ? AND doc_id = ? AND snapshot_id = ? AND status != ?
+        ORDER BY span_start ASC
+        """,
+        (project_id, input_doc_id, input_snapshot_id, FactStatus.REJECTED.value),
+    ).fetchall()
+    entity_spans: list[tuple[int, int, str]] = []
+    for row in entity_rows:
+        entity_id = row["entity_id"]
+        if not isinstance(entity_id, str) or not entity_id:
+            continue
+        try:
+            span_start = int(row["span_start"])
+            span_end = int(row["span_end"])
+        except (TypeError, ValueError):
+            continue
+        if span_end <= span_start:
+            continue
+        entity_spans.append((span_start, span_end, entity_id))
+
+    time_rows = conn.execute(
+        """
+        SELECT span_start, span_end, time_key, timeline_idx
+        FROM time_anchor
+        WHERE project_id = ? AND doc_id = ? AND snapshot_id = ? AND status != ?
+        ORDER BY span_start ASC
+        """,
+        (project_id, input_doc_id, input_snapshot_id, FactStatus.REJECTED.value),
+    ).fetchall()
+    time_spans: list[tuple[int, int, str | None, int | None]] = []
+    for row in time_rows:
+        try:
+            span_start = int(row["span_start"])
+            span_end = int(row["span_end"])
+        except (TypeError, ValueError):
+            continue
+        if span_end <= span_start:
+            continue
+        time_key_raw = row["time_key"]
+        time_key = time_key_raw if isinstance(time_key_raw, str) and time_key_raw else None
+        timeline_raw = row["timeline_idx"]
+        timeline_idx: int | None
+        if timeline_raw is None:
+            timeline_idx = None
+        else:
+            try:
+                timeline_idx = int(timeline_raw)
+            except (TypeError, ValueError):
+                timeline_idx = None
+        time_spans.append((span_start, span_end, time_key, timeline_idx))
+    return entity_spans, time_spans
+
+
+def _resolve_auto_metadata_filters(
+    *,
+    claim_abs_start: int,
+    claim_abs_end: int,
+    entity_spans: list[tuple[int, int, str]],
+    time_spans: list[tuple[int, int, str | None, int | None]],
+) -> tuple[dict[str, object], bool]:
+    auto_filters: dict[str, object] = {}
+    overlapping_entities: set[str] = set()
+    for span_start, span_end, entity_id in entity_spans:
+        if _spans_overlap(claim_abs_start, claim_abs_end, span_start, span_end):
+            overlapping_entities.add(entity_id)
+
+    entity_ambiguous = len(overlapping_entities) > 1
+    if len(overlapping_entities) == 1:
+        auto_filters["entity_id"] = next(iter(overlapping_entities))
+
+    overlapping_time_keys: set[str] = set()
+    overlapping_timeline_idx: set[int] = set()
+    for span_start, span_end, time_key, timeline_idx in time_spans:
+        if not _spans_overlap(claim_abs_start, claim_abs_end, span_start, span_end):
+            continue
+        if isinstance(time_key, str) and time_key:
+            overlapping_time_keys.add(time_key)
+        if isinstance(timeline_idx, int):
+            overlapping_timeline_idx.add(timeline_idx)
+
+    if len(overlapping_time_keys) == 1:
+        auto_filters["time_key"] = next(iter(overlapping_time_keys))
+    if len(overlapping_timeline_idx) == 1:
+        auto_filters["timeline_idx"] = next(iter(overlapping_timeline_idx))
+    return auto_filters, entity_ambiguous
+
+
 def _load_facts_for_scope(
     conn,
     *,
@@ -828,6 +949,7 @@ def _judge_with_fact_index(
         "saw_violate": False,
         "saw_uncomparable": False,
         "conflicting": False,
+        "entity_unresolved": False,
     }
     if not slots:
         return None, [], meta
@@ -836,7 +958,18 @@ def _judge_with_fact_index(
     link_set: set[tuple[str, EvidenceRole]] = set()
     for slot_key, claimed_value in slots.items():
         if target_entity_id is None:
-            candidates = fact_index.get((slot_key, _FACT_ALL_KEY), [])
+            all_candidates = list(fact_index.get((slot_key, _FACT_ALL_KEY), []))
+            candidates = list(fact_index.get((slot_key, None), []))
+            if not candidates and all_candidates:
+                derived_global: list[Any] = []
+                for fact in all_candidates:
+                    entity_id = getattr(fact, "entity_id", None)
+                    if not isinstance(entity_id, str) or not entity_id:
+                        derived_global.append(fact)
+                candidates = derived_global
+            if not candidates and all_candidates:
+                meta["entity_unresolved"] = True
+                continue
         else:
             candidates = [
                 *fact_index.get((slot_key, target_entity_id), []),
@@ -911,7 +1044,7 @@ def _resolve_self_evidence_options(req: ConsistencyRequest) -> tuple[bool, str]:
     exclude = True if raw_exclude is None else bool(raw_exclude)
     raw_scope = req.get("self_evidence_scope")
     scope = str(raw_scope).strip().lower() if isinstance(raw_scope, str) else _DEFAULT_SELF_EVIDENCE_SCOPE
-    if scope not in {"range", "doc"}:
+    if scope not in {"claim", "range", "doc"}:
         scope = _DEFAULT_SELF_EVIDENCE_SCOPE
     return exclude, scope
 
@@ -946,7 +1079,7 @@ def _has_graph_seed_signal(*, filters: dict[str, object], slots: dict[str, objec
     if any(filters.get(key) is not None for key in ("entity_id", "time_key", "timeline_idx")):
         return True
     for slot_key in slots:
-        if slot_key in {"time", "place", "relation"}:
+        if slot_key in {"time", "relation"}:
             return True
     return False
 
@@ -1619,12 +1752,14 @@ def _compute_reliability(
         + (0.10 * model_component)
     )
     if verdict is Verdict.UNKNOWN:
-        decision_confidence = 0.05 if evidence_count == 0 else _clamp01(0.20 + (0.45 * evidence_confidence))
+        decision_confidence = 0.03 if evidence_count == 0 else _clamp01(0.10 + (0.30 * evidence_confidence))
     elif verdict is Verdict.VIOLATE:
         decision_confidence = _clamp01(0.55 + (0.45 * evidence_confidence))
     else:
         decision_confidence = _clamp01(0.50 + (0.45 * evidence_confidence))
     reliability = _clamp01((0.65 * evidence_confidence) + (0.35 * decision_confidence))
+    if verdict is Verdict.UNKNOWN:
+        reliability = min(reliability, 0.45)
     return reliability, evidence_confidence, decision_confidence
 
 
@@ -1679,8 +1814,8 @@ class ConsistencyEngineImpl:
             else layer3_contradict_threshold
         )
         verifier_claim_char_limit = verifier_max_claim_chars if verifier_mode == "conservative_nli" else layer3_max_claim_chars
-        retrieval_filters = _normalize_consistency_filters(req.get("filters"))
-        metadata_filter_requested = _has_metadata_scope_filters(retrieval_filters)
+        base_retrieval_filters = _normalize_consistency_filters(req.get("filters"))
+        user_defined_doc_scope = _user_defined_doc_scope(base_retrieval_filters)
         stats_raw = req.get("stats")
         req_stats = stats_raw if isinstance(stats_raw, dict) else None
         if req_stats is not None:
@@ -1738,15 +1873,27 @@ class ConsistencyEngineImpl:
                 aliases.extend(schema_repo.list_entity_aliases(conn, project_id, entity.entity_id))
             alias_index = build_alias_index(entities, aliases)
             project_docs = document_repo.list_documents(conn, project_id)
-            retrieval_filters = _inject_default_doc_scope(
-                retrieval_filters,
+            base_retrieval_filters = _inject_default_doc_scope(
+                base_retrieval_filters,
                 project_docs=project_docs,
                 input_doc_id=doc_id,
             )
             if req_stats is not None:
-                doc_scope = retrieval_filters.get("doc_ids")
+                doc_scope = base_retrieval_filters.get("doc_ids")
                 if isinstance(doc_scope, list):
                     req_stats["default_doc_scope_count"] = len(doc_scope)
+            expanded_doc_scope = _build_default_doc_scope(
+                project_docs,
+                input_doc_id=doc_id,
+                episode_window=30,
+            )
+            project_doc_scope = _list_project_doc_ids(project_docs)
+            claim_entity_spans, claim_time_spans = _load_claim_metadata_spans(
+                conn,
+                project_id=project_id,
+                input_doc_id=doc_id,
+                input_snapshot_id=snapshot_id,
+            )
 
             text = docstore.read_text(snapshot.path)
             offset = 0
@@ -1876,8 +2023,18 @@ class ConsistencyEngineImpl:
                 }
                 claim_abs_start = claim_start + offset
                 claim_abs_end = claim_end + offset
+                auto_filters, auto_entity_ambiguous = _resolve_auto_metadata_filters(
+                    claim_abs_start=claim_abs_start,
+                    claim_abs_end=claim_abs_end,
+                    entity_spans=claim_entity_spans,
+                    time_spans=claim_time_spans,
+                )
+                claim_filters = dict(base_retrieval_filters)
+                for key, value in auto_filters.items():
+                    claim_filters.setdefault(key, value)
+                claim_metadata_filter_requested = _has_metadata_scope_filters(claim_filters)
                 retrieval_query = segment_text or claim_text
-                cache_filters = dict(retrieval_filters)
+                cache_filters = dict(claim_filters)
                 if graph_mode == "auto":
                     slot_key_hint = claim.get("slot_key")
                     if isinstance(slot_key_hint, str) and slot_key_hint:
@@ -1893,7 +2050,7 @@ class ConsistencyEngineImpl:
                     retrieval_req: dict[str, Any] = {
                         "project_id": project_id,
                         "query": retrieval_query,
-                        "filters": dict(retrieval_filters),
+                        "filters": dict(claim_filters),
                         "k": _CANDIDATE_K,
                         "stats": retrieval_stats,
                     }
@@ -1901,12 +2058,12 @@ class ConsistencyEngineImpl:
                     if (
                         len(candidate_results) < _VECTOR_REFILL_MIN
                         and settings.vector_index_mode.upper() != "DISABLED"
-                        and not metadata_filter_requested
+                        and not claim_metadata_filter_requested
                     ):
                         vector_req: dict[str, Any] = {
                             "project_id": project_id,
                             "query": retrieval_query,
-                            "filters": dict(retrieval_filters),
+                            "filters": dict(claim_filters),
                             "k": _CANDIDATE_K,
                             "stats": retrieval_stats,
                         }
@@ -1920,7 +2077,7 @@ class ConsistencyEngineImpl:
                     if graph_mode == "manual":
                         graph_expand_for_claim = True
                     elif graph_mode == "auto":
-                        seed_signal = _has_graph_seed_signal(filters=retrieval_filters, slots=slots)
+                        seed_signal = _has_graph_seed_signal(filters=claim_filters, slots=slots)
                         ambiguity_signal = _has_graph_ambiguity_signal(candidate_results)
                         graph_expand_for_claim = seed_signal and ambiguity_signal
                         if req_stats is not None:
@@ -1931,7 +2088,7 @@ class ConsistencyEngineImpl:
                             conn,
                             project_id=project_id,
                             query=retrieval_query,
-                            filters=dict(retrieval_filters),
+                            filters=dict(claim_filters),
                             max_hops=graph_max_hops,
                             doc_cap=graph_doc_cap,
                         )
@@ -1949,7 +2106,7 @@ class ConsistencyEngineImpl:
                                     req_stats.get("graph_expand_applied_count", 0)
                                 ) + 1
                             if candidate_doc_ids:
-                                graph_filters = dict(retrieval_filters)
+                                graph_filters = dict(claim_filters)
                                 graph_filters["doc_ids"] = candidate_doc_ids
                                 graph_req: dict[str, Any] = {
                                     "project_id": project_id,
@@ -2002,7 +2159,7 @@ class ConsistencyEngineImpl:
                 reranked_results, rerank_meta = _rerank_results_for_consistency(
                     results=candidate_results,
                     claim_text=claim_text,
-                    filters=retrieval_filters,
+                    filters=claim_filters,
                     graph_doc_distances=graph_doc_distances,
                     gateway=gateway,
                     enable_model=bool(settings.enable_layer3_model),
@@ -2010,10 +2167,31 @@ class ConsistencyEngineImpl:
                 )
                 results = reranked_results[:_FINAL_K]
                 candidates = find_entity_candidates(segment_text, alias_index)
-                ambiguous = len(candidates) > 1
                 target_entity_id: str | None = None
-                if len(candidates) == 1:
-                    target_entity_id = next(iter(candidates))
+                explicit_entity_id_raw = claim_filters.get("entity_id")
+                explicit_entity_id = (
+                    explicit_entity_id_raw.strip()
+                    if isinstance(explicit_entity_id_raw, str) and explicit_entity_id_raw.strip()
+                    else None
+                )
+                ambiguous = False
+                if explicit_entity_id is not None:
+                    target_entity_id = explicit_entity_id
+                else:
+                    auto_entity_id_raw = auto_filters.get("entity_id")
+                    auto_entity_id = (
+                        auto_entity_id_raw.strip()
+                        if isinstance(auto_entity_id_raw, str) and auto_entity_id_raw.strip()
+                        else None
+                    )
+                    if auto_entity_ambiguous:
+                        ambiguous = True
+                    elif auto_entity_id is not None:
+                        target_entity_id = auto_entity_id
+                    elif len(candidates) == 1:
+                        target_entity_id = next(iter(candidates))
+                    elif len(candidates) > 1:
+                        ambiguous = True
 
                 def _accumulate_metrics(local_retrieval_stats: dict[str, Any], local_rerank_meta: dict[str, Any]) -> None:
                     if req_stats is None:
@@ -2048,6 +2226,7 @@ class ConsistencyEngineImpl:
                         "saw_violate": False,
                         "saw_uncomparable": False,
                         "conflicting": False,
+                        "entity_unresolved": False,
                     }
                     if fact_index:
                         judged, fact_links, judge_meta = _judge_with_fact_index(
@@ -2065,6 +2244,8 @@ class ConsistencyEngineImpl:
                             unknown_reasons.add(_UNKNOWN_REASON_SLOT_UNCOMPARABLE)
                         if judge_meta.get("conflicting"):
                             unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
+                        if judge_meta.get("entity_unresolved"):
+                            unknown_reasons.add(_UNKNOWN_REASON_ENTITY_UNRESOLVED)
                     if ambiguous:
                         verdict = Verdict.UNKNOWN
                         unknown_reasons.add(_UNKNOWN_REASON_AMBIGUOUS_ENTITY)
@@ -2108,7 +2289,9 @@ class ConsistencyEngineImpl:
                         ambiguous
                         or judge_meta.get("saw_uncomparable")
                         or judge_meta.get("conflicting")
+                        or judge_meta.get("entity_unresolved")
                         or (_UNKNOWN_REASON_AMBIGUOUS_ENTITY in unknown_reasons)
+                        or (_UNKNOWN_REASON_ENTITY_UNRESOLVED in unknown_reasons)
                         or (_UNKNOWN_REASON_SLOT_UNCOMPARABLE in unknown_reasons)
                         or (_UNKNOWN_REASON_CONFLICTING_EVIDENCE in unknown_reasons)
                     )
@@ -2177,6 +2360,16 @@ class ConsistencyEngineImpl:
                             break
                         previous_candidate_count = len(candidate_results)
                         loop_query = claim_text if round_idx == 0 else f"{claim_text} {segment_text}".strip()
+                        loop_filters = dict(claim_filters)
+                        if (
+                            not user_defined_doc_scope
+                            and _UNKNOWN_REASON_NO_EVIDENCE in evaluation["unknown_reasons"]
+                        ):
+                            if round_idx == 0 and expanded_doc_scope:
+                                loop_filters["doc_ids"] = list(expanded_doc_scope)
+                            elif round_idx >= 1 and project_doc_scope:
+                                loop_filters["doc_ids"] = list(project_doc_scope)
+                        loop_metadata_filter_requested = _has_metadata_scope_filters(loop_filters)
                         loop_retrieval_stats: dict[str, Any] = {
                             "chunks_processed": 0,
                             "rows_scanned": 0,
@@ -2185,7 +2378,7 @@ class ConsistencyEngineImpl:
                         loop_req: dict[str, Any] = {
                             "project_id": project_id,
                             "query": loop_query,
-                            "filters": dict(retrieval_filters),
+                            "filters": dict(loop_filters),
                             "k": _CANDIDATE_K + (round_idx + 1) * 2,
                             "stats": loop_retrieval_stats,
                         }
@@ -2202,12 +2395,12 @@ class ConsistencyEngineImpl:
                         if (
                             len(loop_results) < _VECTOR_REFILL_MIN
                             and settings.vector_index_mode.upper() != "DISABLED"
-                            and not metadata_filter_requested
+                            and not loop_metadata_filter_requested
                         ):
                             loop_vector_req: dict[str, Any] = {
                                 "project_id": project_id,
                                 "query": loop_query,
-                                "filters": dict(retrieval_filters),
+                                "filters": dict(loop_filters),
                                 "k": _CANDIDATE_K,
                                 "stats": loop_retrieval_stats,
                             }
@@ -2257,7 +2450,7 @@ class ConsistencyEngineImpl:
                         reranked_results, rerank_meta = _rerank_results_for_consistency(
                             results=candidate_results,
                             claim_text=claim_text,
-                            filters=retrieval_filters,
+                            filters=loop_filters,
                             graph_doc_distances=graph_doc_distances,
                             gateway=gateway,
                             enable_model=bool(settings.enable_layer3_model),

@@ -23,6 +23,11 @@ def test_vector_backend_factory_defaults_to_token_overlap() -> None:
 
 
 @pytest.mark.unit
+def test_settings_default_vector_backend_is_hashed_embedding() -> None:
+    assert Settings().vector_search_backend == "hashed_embedding"
+
+
+@pytest.mark.unit
 def test_hashed_embedding_backend_scores_similar_text_higher() -> None:
     backend = HashedEmbeddingBackend()
     close_score = backend.score(

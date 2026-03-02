@@ -17,7 +17,7 @@ def test_validate_job_params_accepts_valid_consistency_options() -> None:
                 "evidence_link_policy": "cap",
                 "evidence_link_cap": 10,
                 "exclude_self_evidence": True,
-                "self_evidence_scope": "range",
+                "self_evidence_scope": "claim",
                 "graph_expand_enabled": False,
                 "graph_mode": "auto",
                 "graph_max_hops": 1,

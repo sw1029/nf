@@ -1520,7 +1520,7 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                     )
                 self_scope_raw = consistency_raw.get("self_evidence_scope")
                 if self_scope_raw is not None:
-                    if not isinstance(self_scope_raw, str) or self_scope_raw not in {"range", "doc"}:
+                    if not isinstance(self_scope_raw, str) or self_scope_raw not in {"claim", "range", "doc"}:
                         raise AppError(
                             ErrorCode.VALIDATION_ERROR,
                             "params.consistency.self_evidence_scope is invalid",
