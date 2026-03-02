@@ -1582,6 +1582,14 @@ def _handle_consistency(ctx: WorkerContext) -> None:
                 "graph_auto_skip_count": int(req_stats.get("graph_auto_skip_count", 0)),
                 "layer3_rerank_applied_count": int(req_stats.get("layer3_rerank_applied_count", 0)),
                 "layer3_model_fallback_count": int(req_stats.get("layer3_model_fallback_count", 0)),
+                "verification_loop_trigger_count": int(req_stats.get("verification_loop_trigger_count", 0)),
+                "verification_loop_rounds_total": int(req_stats.get("verification_loop_rounds_total", 0)),
+                "verification_loop_timeout_count": int(req_stats.get("verification_loop_timeout_count", 0)),
+                "verification_loop_stagnation_break_count": int(
+                    req_stats.get("verification_loop_stagnation_break_count", 0)
+                ),
+                "self_evidence_filtered_count": int(req_stats.get("self_evidence_filtered_count", 0)),
+                "layer3_promoted_ok_count": int(req_stats.get("layer3_promoted_ok_count", 0)),
                 **_standard_metrics_payload(
                     start_perf=start_perf,
                     claims_processed=int(req_stats.get("claims_processed", total)),

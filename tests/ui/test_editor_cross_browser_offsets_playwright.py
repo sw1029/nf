@@ -47,7 +47,8 @@ def test_editor_cross_browser_offsets_roundtrip_and_highlight() -> None:
 
             for width, height in ((1200, 840), (980, 820), (1360, 920), (860, 780)):
                 page.set_viewport_size({"width": width, "height": height})
-                page.evaluate("() => window.__repaginate()")
+                budget = max(500, round(width * 0.85))
+                page.evaluate("(b) => window.__repaginateWithBudget(b)", budget)
                 roundtrip = page.evaluate("() => window.__getSelectionOffsets()")
                 assert roundtrip == {"start": 220, "end": 280}
 
@@ -66,5 +67,4 @@ def test_editor_cross_browser_offsets_roundtrip_and_highlight() -> None:
             browser.close()
 
     assert set(page_counts.keys()) == {"chromium", "firefox", "webkit"}
-    assert max(page_counts.values()) - min(page_counts.values()) <= 2
-
+    assert max(page_counts.values()) - min(page_counts.values()) <= 2, f"cross-browser page count drift: {page_counts}"

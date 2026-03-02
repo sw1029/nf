@@ -102,6 +102,22 @@
       return pages;
     }
 
+    function computeBudgetFromWidth(width) {
+      const normalizedWidth = Math.max(700, Number(width) || 1200);
+      return Math.max(500, Math.round(normalizedWidth * 0.85));
+    }
+
+    function normalizeBudget(value) {
+      const budget = Number(value);
+      if (!Number.isFinite(budget)) return Math.max(500, Math.round(state.pageCharBudget));
+      return Math.max(500, Math.round(budget));
+    }
+
+    function setPageCharBudget(value) {
+      state.pageCharBudget = normalizeBudget(value);
+      return state.pageCharBudget;
+    }
+
     function getSelectionOffsets() {
       const editor = document.getElementById("editor");
       const selection = window.getSelection();
@@ -178,9 +194,18 @@
       return state.pageSlices.length;
     };
     window.__getText = () => state.text;
+    window.__setPageCharBudget = (budget) => setPageCharBudget(budget);
     window.__setSelectionOffsets = (start, end) => setSelectionOffsets(start, end);
     window.__getSelectionOffsets = () => getSelectionOffsets();
-    window.__repaginate = () => renderEditor(true);
+    window.__repaginate = () => {
+      renderEditor(true);
+      return state.pageSlices.length;
+    };
+    window.__repaginateWithBudget = (budget) => {
+      setPageCharBudget(budget);
+      renderEditor(true);
+      return state.pageSlices.length;
+    };
     window.__pageCount = () => state.pageSlices.length;
     window.__applyHighlight = (start, end) => applyHighlight(start, end);
     window.__highlightedText = () => {
@@ -189,11 +214,9 @@
     };
 
     window.addEventListener("resize", () => {
-      const width = Math.max(700, window.innerWidth || 1200);
-      state.pageCharBudget = Math.max(500, Math.round(width * 0.85));
+      setPageCharBudget(computeBudgetFromWidth(window.innerWidth || 1200));
       renderEditor(true);
     });
   </script>
 </body>
 </html>
-

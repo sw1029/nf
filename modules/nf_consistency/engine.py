@@ -787,18 +787,29 @@ def _resolve_excluded_self_fact_eids(
         return set()
     unique_eids = sorted(set(candidate_eids))
     excluded: set[str] = set()
-    chunk_size = 200
-    for start in range(0, len(unique_eids), chunk_size):
-        chunk = unique_eids[start : start + chunk_size]
-        placeholders = ",".join(["?"] * len(chunk))
+    temp_table_name = "tmp_consistency_self_eids"
+    conn.execute(f"DROP TABLE IF EXISTS {temp_table_name}")
+    try:
+        conn.execute(f"CREATE TEMP TABLE {temp_table_name}(eid TEXT PRIMARY KEY)")
+        conn.executemany(
+            f"INSERT OR IGNORE INTO {temp_table_name}(eid) VALUES (?)",
+            [(eid,) for eid in unique_eids],
+        )
         rows = conn.execute(
-            f"SELECT eid FROM evidence WHERE doc_id = ? AND eid IN ({placeholders})",
-            [input_doc_id, *chunk],
+            f"""
+            SELECT e.eid
+            FROM evidence AS e
+            JOIN {temp_table_name} AS t ON t.eid = e.eid
+            WHERE e.doc_id = ?
+            """,
+            (input_doc_id,),
         ).fetchall()
         for row in rows:
             eid = row["eid"]
             if isinstance(eid, str) and eid:
                 excluded.add(eid)
+    finally:
+        conn.execute(f"DROP TABLE IF EXISTS {temp_table_name}")
     return excluded
 
 
@@ -1700,6 +1711,7 @@ class ConsistencyEngineImpl:
             req_stats.setdefault("verification_loop_trigger_count", 0)
             req_stats.setdefault("verification_loop_rounds_total", 0)
             req_stats.setdefault("verification_loop_timeout_count", 0)
+            req_stats.setdefault("verification_loop_stagnation_break_count", 0)
             req_stats["verifier_mode"] = verifier_mode
             req_stats["triage_mode"] = triage_mode
             req_stats["graph_mode"] = graph_mode
@@ -2163,6 +2175,7 @@ class ConsistencyEngineImpl:
                                     req_stats.get("verification_loop_timeout_count", 0)
                                 ) + 1
                             break
+                        previous_candidate_count = len(candidate_results)
                         loop_query = claim_text if round_idx == 0 else f"{claim_text} {segment_text}".strip()
                         loop_retrieval_stats: dict[str, Any] = {
                             "chunks_processed": 0,
@@ -2177,6 +2190,15 @@ class ConsistencyEngineImpl:
                             "stats": loop_retrieval_stats,
                         }
                         loop_results = fts_search(conn, loop_req)
+                        if (
+                            not loop_results
+                            and _UNKNOWN_REASON_NO_EVIDENCE in evaluation["unknown_reasons"]
+                        ):
+                            if req_stats is not None:
+                                req_stats["verification_loop_stagnation_break_count"] = int(
+                                    req_stats.get("verification_loop_stagnation_break_count", 0)
+                                ) + 1
+                            break
                         if (
                             len(loop_results) < _VECTOR_REFILL_MIN
                             and settings.vector_index_mode.upper() != "DISABLED"
@@ -2195,7 +2217,22 @@ class ConsistencyEngineImpl:
                                 loop_vector_results,
                                 limit=_CANDIDATE_K * 3,
                             )
+                        if (
+                            not loop_results
+                            and _UNKNOWN_REASON_NO_EVIDENCE in evaluation["unknown_reasons"]
+                        ):
+                            if req_stats is not None:
+                                req_stats["verification_loop_stagnation_break_count"] = int(
+                                    req_stats.get("verification_loop_stagnation_break_count", 0)
+                                ) + 1
+                            break
                         candidate_results = _merge_result_lists(candidate_results, loop_results, limit=_CANDIDATE_K * 4)
+                        if len(candidate_results) <= previous_candidate_count:
+                            if req_stats is not None:
+                                req_stats["verification_loop_stagnation_break_count"] = int(
+                                    req_stats.get("verification_loop_stagnation_break_count", 0)
+                                ) + 1
+                            break
                         if exclude_self_evidence:
                             candidate_results, filtered_count = _filter_self_evidence_results(
                                 candidate_results,

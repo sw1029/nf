@@ -135,3 +135,7 @@
 3. 판정은 코드+테스트 근거 우선.
 4. 정량 성능 수치는 정적 분석 한계가 있어 `부분 타당`으로 처리.
 5. 코드 수정 없이 분석/문서화 범위로 제한.
+
+## 7) 운영 검증 분리 문서
+- UI 운영 검증 분리: `plan/question_claim_ui_operational_verification_2026-02-28.md`
+- 파이프라인 운영 검증 분리: `plan/question_claim_pipeline_operational_verification_2026-02-28.md`

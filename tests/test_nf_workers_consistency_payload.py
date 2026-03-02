@@ -147,6 +147,12 @@ def test_consistency_complete_payload_includes_unknown_reason_counts(
     assert "graph_auto_skip_count" in payload
     assert "layer3_rerank_applied_count" in payload
     assert "layer3_model_fallback_count" in payload
+    assert "verification_loop_trigger_count" in payload
+    assert "verification_loop_rounds_total" in payload
+    assert "verification_loop_timeout_count" in payload
+    assert "verification_loop_stagnation_break_count" in payload
+    assert "self_evidence_filtered_count" in payload
+    assert "layer3_promoted_ok_count" in payload
 
 
 @pytest.mark.unit

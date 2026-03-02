@@ -299,3 +299,66 @@
 - DS-200은 두 지표 모두 개선.
 - DS-400은 최신 벤치 데이터 부재로 비교 불가.
 - DS-800은 두 지표 모두 직전 대비 20% 초과 악화로 hard fail 규칙에 해당.
+
+## 15) 2026-02-28 운영 검증 phase 배치 통합
+
+- 통합 대상:
+  - UI 운영 검증(`Q2-C12`): Playwright preflight + 3브라우저 회귀
+  - 파이프라인 운영 검증(`Q1-C17`): DS-200/400/800 벤치 + latest summary gate
+- 실행 경로:
+  - `tools\bench\run_user_delegated.cmd` 기본 실행
+  - `tools\bench\run_user_delegated.ps1` 배치 루프 내 고정 phase
+- 실패 정책:
+  - Playwright import/실행 실패 시 즉시 실패
+  - `latest_metrics_summary.json`의 `overall_status=FAIL` 시 즉시 실패
+  - `overall_status=WARN`은 경고 로그 후 진행
+- 제외 모드:
+  - `RunGraphProbeOnly`는 기존 단일 목적 모드 유지(운영 검증 phase 미실행)
+
+관련 분리 문서:
+- `plan/question_claim_ui_operational_verification_2026-02-28.md`
+- `plan/question_claim_pipeline_operational_verification_2026-02-28.md`
+
+## 16) 2026-03-02 UI 회귀 안정화 + step24 재개 실행 결과
+
+### 16.1 UI 회귀 플래키 원인/조치
+- 원인:
+  - `tests/ui/test_editor_cross_browser_offsets_playwright.py`가 viewport resize 이후 `window.__repaginate()`에 의존하고 있어, 브라우저별 resize 타이밍 차이로 `page_count` 편차가 간헐 확대됨.
+  - 재현 실패값 예: `chromium=17`, `firefox=26`, `webkit=26` (`diff=9`).
+- 조치:
+  - 테스트 하니스에 결정론 API 추가:
+    - `window.__setPageCharBudget(budget)`
+    - `window.__repaginateWithBudget(budget)`
+  - 테스트는 width 기반 고정 budget(`max(500, round(width*0.85))`)을 계산해 `__repaginateWithBudget`을 호출하도록 변경.
+- 수정 파일:
+  - `tests/ui/fixtures/editor_harness.html`
+  - `tests/ui/test_editor_cross_browser_offsets_playwright.py`
+
+### 16.2 UI 안정성 검증 결과
+- 단일 실행:
+  - `python -m pytest -q tests/ui/test_editor_cross_browser_offsets_playwright.py -m browser` -> `1 passed`
+- 반복 실행(플래키 방지):
+  - 동일 테스트 20회 반복 -> `20/20 passed`
+
+### 16.3 운영 배치 재개(step24) 결과
+- 재개 조건:
+  - 상태 경로 재사용: `verify/bench_state/20260228T150911Z`
+  - `-StartStep 24`, `-AdaptiveHardFailAction warn`
+- 결과:
+  - step 24(UI 3브라우저 회귀) 통과
+  - JUnit: `verify/benchmarks/ui_browser_regression_junit.xml`
+    - `tests=1`, `failures=0`, `errors=0`, `skipped=0`
+  - 배치 종료 로그 기준 `All user-delegated tasks completed`
+
+### 16.4 운영 게이트 최신 상태
+- strict hard-fail gate:
+  - `verify/benchmarks/consistency_strict_gate_20260301T183806Z_iter1.json`
+  - `passed=true` (status/strict-level/runtime-key/perf-ratio/loop-timeout/inject-signal 모두 통과)
+- latest summary gate:
+  - `verify/benchmarks/latest_metrics_summary.json`
+  - `overall_status=PASS`
+
+### 16.5 주의사항(분석 신뢰도)
+- `tools/bench/summarize_latest_metrics.py`는 dataset key를 우선 `doc_count`로 추론함.
+- strict 200문서(`DS-CONTROL-D`, `DS-INJECT-C`)가 `DS-200`으로 집계될 수 있어, summary의 `DS-200 latest_file`가 strict artifact로 덮일 수 있음.
+- 최종 성능 해석은 dataset 경로(`dataset_path`) 기준으로 별도 교차검증이 필요.

@@ -200,6 +200,157 @@ def _pick_retrieval_queries(records: list[dict[str, Any]], *, limit: int, seed: 
     return picked
 
 
+def _build_consistency_params(
+    *,
+    consistency_level: str,
+    evidence_link_policy: str,
+    evidence_link_cap: int,
+) -> tuple[dict[str, Any], str]:
+    level = str(consistency_level or "quick").strip().lower()
+    if level not in {"quick", "deep", "strict"}:
+        level = "quick"
+
+    consistency_params: dict[str, Any] = {
+        "evidence_link_policy": evidence_link_policy,
+        "evidence_link_cap": evidence_link_cap,
+        "graph_mode": "off",
+        "graph_expand_enabled": False,
+        "layer3_verdict_promotion": False,
+        "verifier": {
+            "mode": "off",
+            "promote_ok_threshold": 0.95,
+            "contradict_alert_threshold": 0.70,
+            "max_claim_chars": 220,
+        },
+        "triage": {
+            "mode": "off",
+            "anomaly_threshold": 0.65,
+            "max_segments_per_run": 8,
+        },
+        "verification_loop": {
+            "enabled": False,
+            "max_rounds": 2,
+            "round_timeout_ms": 250,
+        },
+    }
+    if level in {"deep", "strict"}:
+        consistency_params["graph_mode"] = "auto"
+        consistency_params["graph_expand_enabled"] = True
+        consistency_params["layer3_verdict_promotion"] = True
+        consistency_params["triage"] = {
+            "mode": "embedding_anomaly",
+            "anomaly_threshold": 0.65,
+            "max_segments_per_run": 8,
+        }
+    if level == "strict":
+        consistency_params["verifier"] = {
+            "mode": "conservative_nli",
+            "promote_ok_threshold": 0.95,
+            "contradict_alert_threshold": 0.70,
+            "max_claim_chars": 220,
+        }
+        consistency_params["verification_loop"] = {
+            "enabled": True,
+            "max_rounds": 2,
+            "round_timeout_ms": 250,
+        }
+    return {"consistency": consistency_params}, level
+
+
+def _accumulate_unknown_reason_counts(target: dict[str, int], raw: Any) -> None:
+    if not isinstance(raw, dict):
+        return
+    for key, value in raw.items():
+        if not isinstance(key, str) or not key:
+            continue
+        target[key] = int(target.get(key, 0)) + _as_int(value, 0)
+
+
+def _new_consistency_runtime(*, graph_mode: str) -> dict[str, Any]:
+    return {
+        "graph_mode": graph_mode,
+        "jobs_sampled": 0,
+        "graph_expand_applied_count": 0,
+        "graph_auto_trigger_count": 0,
+        "graph_auto_skip_count": 0,
+        "layer3_rerank_applied_count": 0,
+        "layer3_model_fallback_count": 0,
+        "verification_loop_trigger_count": 0,
+        "verification_loop_rounds_total": 0,
+        "verification_loop_timeout_count": 0,
+        "verification_loop_stagnation_break_count": 0,
+        "self_evidence_filtered_count": 0,
+        "layer3_promoted_ok_count": 0,
+        "vid_count_total": 0,
+        "violate_count_total": 0,
+        "unknown_count_total": 0,
+        "unknown_reason_counts": {},
+    }
+
+
+def _accumulate_consistency_runtime(runtime: dict[str, Any], payload: dict[str, Any]) -> None:
+    runtime["jobs_sampled"] = _as_int(runtime.get("jobs_sampled"), 0) + 1
+    runtime["graph_expand_applied_count"] = _as_int(runtime.get("graph_expand_applied_count"), 0) + _as_int(
+        payload.get("graph_expand_applied_count")
+    )
+    runtime["graph_auto_trigger_count"] = _as_int(runtime.get("graph_auto_trigger_count"), 0) + _as_int(
+        payload.get("graph_auto_trigger_count")
+    )
+    runtime["graph_auto_skip_count"] = _as_int(runtime.get("graph_auto_skip_count"), 0) + _as_int(
+        payload.get("graph_auto_skip_count")
+    )
+    runtime["layer3_rerank_applied_count"] = _as_int(runtime.get("layer3_rerank_applied_count"), 0) + _as_int(
+        payload.get("layer3_rerank_applied_count")
+    )
+    runtime["layer3_model_fallback_count"] = _as_int(runtime.get("layer3_model_fallback_count"), 0) + _as_int(
+        payload.get("layer3_model_fallback_count")
+    )
+    runtime["verification_loop_trigger_count"] = _as_int(runtime.get("verification_loop_trigger_count"), 0) + _as_int(
+        payload.get("verification_loop_trigger_count")
+    )
+    runtime["verification_loop_rounds_total"] = _as_int(runtime.get("verification_loop_rounds_total"), 0) + _as_int(
+        payload.get("verification_loop_rounds_total")
+    )
+    runtime["verification_loop_timeout_count"] = _as_int(runtime.get("verification_loop_timeout_count"), 0) + _as_int(
+        payload.get("verification_loop_timeout_count")
+    )
+    runtime["verification_loop_stagnation_break_count"] = _as_int(
+        runtime.get("verification_loop_stagnation_break_count"),
+        0,
+    ) + _as_int(payload.get("verification_loop_stagnation_break_count"))
+    runtime["self_evidence_filtered_count"] = _as_int(runtime.get("self_evidence_filtered_count"), 0) + _as_int(
+        payload.get("self_evidence_filtered_count")
+    )
+    runtime["layer3_promoted_ok_count"] = _as_int(runtime.get("layer3_promoted_ok_count"), 0) + _as_int(
+        payload.get("layer3_promoted_ok_count")
+    )
+    runtime["vid_count_total"] = _as_int(runtime.get("vid_count_total"), 0) + _as_int(payload.get("vid_count"))
+    runtime["violate_count_total"] = _as_int(runtime.get("violate_count_total"), 0) + _as_int(payload.get("violate_count"))
+    runtime["unknown_count_total"] = _as_int(runtime.get("unknown_count_total"), 0) + _as_int(payload.get("unknown_count"))
+    reason_counts = runtime.get("unknown_reason_counts")
+    if not isinstance(reason_counts, dict):
+        reason_counts = {}
+        runtime["unknown_reason_counts"] = reason_counts
+    _accumulate_unknown_reason_counts(reason_counts, payload.get("unknown_reason_counts"))
+    mode = payload.get("graph_mode")
+    if isinstance(mode, str) and mode:
+        runtime["graph_mode"] = mode
+
+
+def _finalize_consistency_runtime(runtime: dict[str, Any]) -> dict[str, Any]:
+    runtime_out = dict(runtime)
+    vid_total = max(0, _as_int(runtime_out.get("vid_count_total"), 0))
+    violate_total = max(0, _as_int(runtime_out.get("violate_count_total"), 0))
+    unknown_total = max(0, _as_int(runtime_out.get("unknown_count_total"), 0))
+    if vid_total > 0:
+        runtime_out["violate_rate"] = float(violate_total) / float(vid_total)
+        runtime_out["unknown_rate"] = float(unknown_total) / float(vid_total)
+    else:
+        runtime_out["violate_rate"] = 0.0
+        runtime_out["unknown_rate"] = 0.0
+    return runtime_out
+
+
 def run_pipeline_once(
     *,
     base_url: str,
@@ -209,6 +360,7 @@ def run_pipeline_once(
     consistency_samples: int,
     ingest_parallelism: int,
     consistency_parallelism: int,
+    consistency_level: str,
     consistency_graph_mode: str,
     graph_enabled: bool,
     graph_max_hops: int,
@@ -277,15 +429,11 @@ def run_pipeline_once(
     )
 
     sample_doc_ids = _pick_consistency_targets(doc_ids, sample_count=consistency_samples, seed=seed)
-    consistency_params = {
-        "consistency": {
-            "evidence_link_policy": consistency_evidence_link_policy,
-            "evidence_link_cap": consistency_evidence_link_cap,
-            "graph_mode": consistency_graph_mode,
-        }
-    }
-    if consistency_graph_mode == "manual":
-        consistency_params["consistency"]["graph_expand_enabled"] = True
+    consistency_params, resolved_consistency_level = _build_consistency_params(
+        consistency_level=consistency_level,
+        evidence_link_policy=consistency_evidence_link_policy,
+        evidence_link_cap=consistency_evidence_link_cap,
+    )
     consistency_tasks = [
         {
             "base_url": base_url,
@@ -308,15 +456,8 @@ def run_pipeline_once(
         for doc_id in sample_doc_ids
     ]
     consistency_runs = run_parallel_jobs(consistency_tasks, parallelism=consistency_parallelism)
-    consistency_graph_mode_observed = consistency_graph_mode
-    consistency_runtime = {
-        "jobs_sampled": 0,
-        "graph_expand_applied_count": 0,
-        "graph_auto_trigger_count": 0,
-        "graph_auto_skip_count": 0,
-        "layer3_rerank_applied_count": 0,
-        "layer3_model_fallback_count": 0,
-    }
+    consistency_graph_mode_observed = str((consistency_params.get("consistency") or {}).get("graph_mode") or "off")
+    consistency_runtime = _new_consistency_runtime(graph_mode=consistency_graph_mode_observed)
     for run in consistency_runs:
         if run.status != "SUCCEEDED":
             continue
@@ -327,16 +468,10 @@ def run_pipeline_once(
             payload = event.get("payload")
             if not isinstance(payload, dict):
                 continue
-            consistency_runtime["jobs_sampled"] += 1
-            consistency_runtime["graph_expand_applied_count"] += _as_int(payload.get("graph_expand_applied_count"))
-            consistency_runtime["graph_auto_trigger_count"] += _as_int(payload.get("graph_auto_trigger_count"))
-            consistency_runtime["graph_auto_skip_count"] += _as_int(payload.get("graph_auto_skip_count"))
-            consistency_runtime["layer3_rerank_applied_count"] += _as_int(payload.get("layer3_rerank_applied_count"))
-            consistency_runtime["layer3_model_fallback_count"] += _as_int(payload.get("layer3_model_fallback_count"))
-            mode = payload.get("graph_mode")
-            if isinstance(mode, str) and mode:
-                consistency_graph_mode_observed = mode
+            _accumulate_consistency_runtime(consistency_runtime, payload)
+            consistency_graph_mode_observed = str(consistency_runtime.get("graph_mode") or consistency_graph_mode_observed)
             break
+    consistency_runtime = _finalize_consistency_runtime(consistency_runtime)
 
     retrieval_ms: list[float] = []
     retrieval_vec_ms: list[float] = []
@@ -415,6 +550,7 @@ def run_pipeline_once(
             "graph_mode": consistency_graph_mode_observed,
             **consistency_runtime,
         },
+        "consistency_level": resolved_consistency_level,
         "guards": {
             "index_jobs_succeeded": status["index_fts"] == "SUCCEEDED" and status["index_vec"] == "SUCCEEDED",
             "ingest_failures_zero": status["ingest_failures"] == 0,
@@ -486,6 +622,7 @@ def main() -> int:
     parser.add_argument("--output-dir", default="verify/benchmarks")
     parser.add_argument("--ingest-parallelism", type=int, default=1)
     parser.add_argument("--consistency-parallelism", type=int, default=1)
+    parser.add_argument("--consistency-level", choices=("quick", "deep", "strict"), default="quick")
     parser.add_argument("--consistency-graph-mode", choices=("off", "manual", "auto"), default="off")
     parser.add_argument("--profile", choices=("throughput", "repro", "dual"), default="dual")
     parser.add_argument("--seed", type=int, default=20260207)
@@ -513,6 +650,8 @@ def main() -> int:
         raise SystemExit("--ingest-parallelism must be >= 1")
     if args.consistency_parallelism < 1:
         raise SystemExit("--consistency-parallelism must be >= 1")
+    if args.consistency_level not in {"quick", "deep", "strict"}:
+        raise SystemExit("--consistency-level must be quick, deep, or strict")
     if args.repro_runs < 1:
         raise SystemExit("--repro-runs must be >= 1")
     if args.graph_max_hops not in {1, 2}:
@@ -535,6 +674,7 @@ def main() -> int:
             consistency_samples=args.consistency_samples,
             ingest_parallelism=args.ingest_parallelism,
             consistency_parallelism=args.consistency_parallelism,
+            consistency_level=args.consistency_level,
             consistency_graph_mode=args.consistency_graph_mode,
             graph_enabled=args.graph_enabled,
             graph_max_hops=args.graph_max_hops,
@@ -557,6 +697,7 @@ def main() -> int:
                     consistency_samples=min(args.consistency_samples, args.repro_limit_docs),
                     ingest_parallelism=args.ingest_parallelism,
                     consistency_parallelism=args.consistency_parallelism,
+                    consistency_level=args.consistency_level,
                     consistency_graph_mode=args.consistency_graph_mode,
                     graph_enabled=args.graph_enabled,
                     graph_max_hops=args.graph_max_hops,
@@ -598,6 +739,7 @@ def main() -> int:
             "worker_procs": args.worker_procs,
             "ingest_parallelism": args.ingest_parallelism,
             "consistency_parallelism": args.consistency_parallelism,
+            "consistency_level": args.consistency_level,
             "consistency_graph_mode": args.consistency_graph_mode,
             "profile": args.profile,
             "graph_enabled": args.graph_enabled,
@@ -630,6 +772,7 @@ def main() -> int:
             "max_heavy_jobs": args.max_heavy_jobs,
             "ingest_parallelism": args.ingest_parallelism,
             "consistency_parallelism": args.consistency_parallelism,
+            "consistency_level": args.consistency_level,
             "consistency_graph_mode": args.consistency_graph_mode,
             "consistency_evidence_link_policy": args.consistency_evidence_link_policy,
             "consistency_evidence_link_cap": args.consistency_evidence_link_cap,
@@ -670,6 +813,7 @@ def main() -> int:
         f"- profile: `{args.profile}`",
         f"- ingest_parallelism: `{args.ingest_parallelism}`",
         f"- consistency_parallelism: `{args.consistency_parallelism}`",
+        f"- consistency_level: `{args.consistency_level}`",
         f"- consistency_graph_mode: `{args.consistency_graph_mode}`",
         f"- consistency_evidence_link_policy: `{args.consistency_evidence_link_policy}`",
         f"- consistency_evidence_link_cap: `{args.consistency_evidence_link_cap}`",

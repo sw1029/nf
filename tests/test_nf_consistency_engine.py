@@ -3,6 +3,7 @@
 import hashlib
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +13,7 @@ from modules.nf_orchestrator.storage import db, docstore
 from modules.nf_orchestrator.storage.repos import document_repo, evidence_repo, ignore_repo, schema_repo
 from modules.nf_retrieval.fts.fts_index import index_chunks
 from modules.nf_schema.chunking import build_chunks
+from modules.nf_shared.config import Settings
 from modules.nf_shared.protocol.dtos import (
     DocumentType,
     EvidenceMatchType,
@@ -421,3 +423,115 @@ def test_filter_self_evidence_results_doc_scope_filters_same_doc() -> None:
     assert removed == 1
     assert len(kept) == 1
     assert kept[0]["evidence"]["doc_id"] == "doc-2"
+
+
+@pytest.mark.unit
+def test_resolve_excluded_self_fact_eids_bulk_join_returns_exact_matches(tmp_path: Path) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    expected: set[str] = set()
+
+    with db.connect(db_path) as conn:
+        facts: list[SimpleNamespace] = []
+        for idx in range(320):
+            eid_doc_id = "doc-self" if idx % 2 == 0 else "doc-other"
+            ev = evidence_repo.new_evidence(
+                project_id="project-1",
+                doc_id=eid_doc_id,
+                snapshot_id="snap-1",
+                chunk_id=None,
+                section_path="seed",
+                tag_path="설정/인물/주인공/나이",
+                snippet_text=f"seed-{idx}",
+                span_start=0,
+                span_end=1,
+                fts_score=0.0,
+                match_type=EvidenceMatchType.EXACT,
+                confirmed=True,
+            )
+            evidence_repo.create_evidence(conn, ev, commit=False)
+            source = FactSource.AUTO if idx < 300 else FactSource.USER
+            status = FactStatus.PROPOSED if idx % 5 != 0 else FactStatus.APPROVED
+            facts.append(
+                SimpleNamespace(
+                    evidence_eid=ev.eid,
+                    source=source,
+                    status=status,
+                )
+            )
+            if eid_doc_id == "doc-self" and source is FactSource.AUTO and status is FactStatus.PROPOSED:
+                expected.add(ev.eid)
+        conn.commit()
+        excluded = consistency_engine._resolve_excluded_self_fact_eids(
+            conn,
+            facts=facts,
+            input_doc_id="doc-self",
+        )
+
+    assert excluded == expected
+
+
+@pytest.mark.unit
+def test_verification_loop_breaks_on_stagnation_and_counts_stat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "시로는 오늘 북부 성채로 이동했다."
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine._extract_claims",
+        lambda *_args, **_kwargs: [
+            {
+                "segment_start": 0,
+                "segment_end": len(text),
+                "segment_text": text,
+                "claim_start": 0,
+                "claim_end": len(text),
+                "claim_text": text,
+                "slots": {"place": "북부 성채"},
+                "slot_key": "place",
+                "slot_confidence": 1.0,
+            }
+        ],
+    )
+    monkeypatch.setattr("modules.nf_consistency.engine.fts_search", lambda _conn, _req: [])
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.load_config",
+        lambda: Settings(enable_layer3_model=False, vector_index_mode="DISABLED"),
+    )
+
+    stats: dict[str, object] = {}
+    engine = ConsistencyEngineImpl(db_path=db_path)
+    verdicts = engine.run(
+        {
+            "project_id": project_id,
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "schema_ver": "",
+            "stats": stats,
+            "verification_loop": {
+                "enabled": True,
+                "max_rounds": 2,
+                "round_timeout_ms": 250,
+            },
+        }
+    )
+
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict is Verdict.UNKNOWN
+    assert int(stats.get("verification_loop_trigger_count", 0)) == 1
+    assert int(stats.get("verification_loop_stagnation_break_count", 0)) >= 1

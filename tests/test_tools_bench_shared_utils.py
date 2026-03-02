@@ -14,6 +14,7 @@ def test_bench_scripts_import_with_shared_utils() -> None:
     try:
         importlib.import_module("run_pipeline_bench")
         importlib.import_module("check_graphrag_applied")
+        importlib.import_module("check_consistency_strict_gate")
         importlib.import_module("run_soak")
     finally:
         if str(bench_dir) in sys.path:
