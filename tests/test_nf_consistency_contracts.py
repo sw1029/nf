@@ -25,6 +25,7 @@ def test_consistency_request_typed_dict_fields() -> None:
         "graph_mode",
         "graph_max_hops",
         "graph_doc_cap",
+        "metadata_grouping_enabled",
         "layer3_verdict_promotion",
         "layer3_min_fts_for_promotion",
         "layer3_max_claim_chars",

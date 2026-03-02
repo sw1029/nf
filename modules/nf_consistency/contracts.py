@@ -53,6 +53,7 @@ class ConsistencyRequest(TypedDict, total=False):
     graph_mode: Literal["off", "manual", "auto"]
     graph_max_hops: int
     graph_doc_cap: int
+    metadata_grouping_enabled: bool
     layer3_verdict_promotion: bool
     layer3_min_fts_for_promotion: float
     layer3_max_claim_chars: int

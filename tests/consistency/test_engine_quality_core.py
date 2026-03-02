@@ -241,7 +241,7 @@ def test_judge_with_fact_index_marks_entity_unresolved_without_global_facts() ->
     assert links == []
     assert meta["entity_unresolved"] is True
 
-def test_judge_with_fact_index_compares_global_facts_when_entity_unresolved() -> None:
+def test_judge_with_fact_index_skips_entity_bound_slot_when_entity_unresolved() -> None:
     fact_index = {
         ("job", consistency_engine._FACT_ALL_KEY): [
             _FakeFact(evidence_eid="ev-global", value="마법사", entity_id=None),
@@ -256,13 +256,135 @@ def test_judge_with_fact_index_compares_global_facts_when_entity_unresolved() ->
         fact_index,
         target_entity_id=None,
     )
+    assert verdict is None
+    assert meta["entity_unresolved"] is True
+    assert links == []
+
+def test_judge_with_fact_index_keeps_global_compare_for_time_when_entity_unresolved() -> None:
+    fact_index = {
+        ("time", consistency_engine._FACT_ALL_KEY): [
+            _FakeFact(evidence_eid="ev-global", value="2026년 3월 2일", entity_id=None),
+        ],
+        ("time", None): [
+            _FakeFact(evidence_eid="ev-global", value="2026년 3월 2일", entity_id=None),
+        ],
+    }
+    verdict, links, meta = consistency_engine._judge_with_fact_index(
+        {"time": "2026년 3월 2일"},
+        fact_index,
+        target_entity_id=None,
+    )
     assert verdict is Verdict.OK
     assert meta["entity_unresolved"] is False
     assert links == [("ev-global", consistency_engine.EvidenceRole.SUPPORT)]
 
+def test_judge_with_fact_index_marks_numeric_conflict_as_uncomparable() -> None:
+    fact_index = {
+        ("job", "entity-a"): [
+            _FakeFact(evidence_eid="ev-entity-a", value="13기 마법사", entity_id="entity-a"),
+        ],
+    }
+    verdict, links, meta = consistency_engine._judge_with_fact_index(
+        {"job": "12기 마법사"},
+        fact_index,
+        target_entity_id="entity-a",
+    )
+    assert verdict is None
+    assert links == []
+    assert meta["saw_uncomparable"] is True
+    assert meta["numeric_conflict"] is True
+
 def test_compare_slot_does_not_allow_contains_ok_for_job() -> None:
     judged = consistency_engine._compare_slot("job", "흑마법사", "마법사")
     assert judged is not Verdict.OK
+
+def test_overlaps_any_span_rejects_tiny_overlap_under_ratio_threshold() -> None:
+    has_overlap = consistency_engine._overlaps_any_span(
+        0,
+        20,
+        [(19, 25)],
+        min_overlap_chars=3,
+        min_overlap_ratio=0.20,
+    )
+    assert has_overlap is False
+
+def test_overlaps_any_span_accepts_sufficient_overlap() -> None:
+    has_overlap = consistency_engine._overlaps_any_span(
+        0,
+        20,
+        [(2, 12)],
+        min_overlap_chars=3,
+        min_overlap_ratio=0.20,
+    )
+    assert has_overlap is True
+
+def test_promote_confirmed_evidence_rejects_tiny_overlap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        consistency_engine,
+        "_load_user_tag_spans",
+        lambda *_args, **_kwargs: [(19, 25)],
+    )
+    monkeypatch.setattr(
+        consistency_engine,
+        "_load_approved_evidence_spans",
+        lambda *_args, **_kwargs: [],
+    )
+    results = [
+        {
+            "evidence": {
+                "doc_id": "doc-1",
+                "snapshot_id": "snap-1",
+                "span_start": 0,
+                "span_end": 20,
+                "confirmed": False,
+            }
+        }
+    ]
+    rejected_count = consistency_engine._promote_confirmed_evidence(
+        None,
+        project_id="project-1",
+        results=results,
+        user_tag_span_cache={},
+        approved_evidence_span_cache={},
+    )
+    assert rejected_count == 1
+    assert bool(results[0]["evidence"]["confirmed"]) is False
+
+def test_promote_confirmed_evidence_accepts_sufficient_overlap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        consistency_engine,
+        "_load_user_tag_spans",
+        lambda *_args, **_kwargs: [(2, 12)],
+    )
+    monkeypatch.setattr(
+        consistency_engine,
+        "_load_approved_evidence_spans",
+        lambda *_args, **_kwargs: [],
+    )
+    results = [
+        {
+            "evidence": {
+                "doc_id": "doc-1",
+                "snapshot_id": "snap-1",
+                "span_start": 0,
+                "span_end": 20,
+                "confirmed": False,
+            }
+        }
+    ]
+    rejected_count = consistency_engine._promote_confirmed_evidence(
+        None,
+        project_id="project-1",
+        results=results,
+        user_tag_span_cache={},
+        approved_evidence_span_cache={},
+    )
+    assert rejected_count == 0
+    assert bool(results[0]["evidence"]["confirmed"]) is True
 
 def test_compute_reliability_keeps_unknown_nonzero_when_evidence_exists() -> None:
     breakdown = ReliabilityBreakdown(

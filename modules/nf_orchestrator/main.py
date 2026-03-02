@@ -1557,6 +1557,12 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                             ErrorCode.VALIDATION_ERROR,
                             "params.consistency.graph_doc_cap must be >= 1",
                         )
+                metadata_grouping_enabled_raw = consistency_raw.get("metadata_grouping_enabled")
+                if metadata_grouping_enabled_raw is not None and not isinstance(metadata_grouping_enabled_raw, bool):
+                    raise AppError(
+                        ErrorCode.VALIDATION_ERROR,
+                        "params.consistency.metadata_grouping_enabled must be boolean",
+                    )
                 layer3_promotion_raw = consistency_raw.get("layer3_verdict_promotion")
                 if layer3_promotion_raw is not None and not isinstance(layer3_promotion_raw, bool):
                     raise AppError(

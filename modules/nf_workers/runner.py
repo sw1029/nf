@@ -40,7 +40,12 @@ from modules.nf_retrieval.vector.shard_store import build_shard
 from modules.nf_schema.chunking import build_chunks
 from modules.nf_schema.conflict import resolve_conflicts
 from modules.nf_schema.extraction import extract_explicit_candidates
-from modules.nf_schema.identity import build_alias_index, resolve_entity_id
+from modules.nf_schema.identity import (
+    alias_matches_text,
+    build_alias_index,
+    normalize_alias_text,
+    resolve_entity_id,
+)
 from modules.nf_schema.registry import default_tag_defs
 from modules.nf_schema.units import normalize_value
 from modules.nf_schema.policy import enforce_fact_status_policy
@@ -512,9 +517,10 @@ def _extract_entity_mentions(
 ) -> list[tuple[str, int, int]]:
     mentions: list[tuple[str, int, int]] = []
     for span_start, span_end, segment in spans:
+        normalized_segment = normalize_alias_text(segment)
         matched: set[str] = set()
         for alias_text, entity_ids in alias_index.items():
-            if not alias_text or alias_text not in segment:
+            if not alias_matches_text(normalized_segment, alias_text, normalize_input=False):
                 continue
             if len(entity_ids) == 1:
                 matched.update(entity_ids)
@@ -1275,6 +1281,7 @@ def _run_consistency_preflight(
     snapshot_id: str,
     preflight: dict[str, Any],
     graph_mode: str = "off",
+    metadata_grouping_enabled: bool = False,
 ) -> None:
     ensure_ingest = bool(preflight.get("ensure_ingest"))
     ensure_index_fts = bool(preflight.get("ensure_index_fts"))
@@ -1389,12 +1396,14 @@ def _run_consistency_preflight(
         )
         for target_doc_id in index_targets:
             index_params = dict(ctx.params) if isinstance(ctx.params, dict) else {}
-            if graph_mode in {"manual", "auto"}:
-                grouping_raw = index_params.get("grouping")
-                grouping = dict(grouping_raw) if isinstance(grouping_raw, dict) else {}
+            grouping_raw = index_params.get("grouping")
+            grouping = dict(grouping_raw) if isinstance(grouping_raw, dict) else {}
+            if metadata_grouping_enabled:
                 grouping["entity_mentions"] = True
                 grouping["time_anchors"] = True
+            if graph_mode in {"manual", "auto"}:
                 grouping["graph_extract"] = True
+            if grouping:
                 index_params["grouping"] = grouping
             _handle_index_fts(
                 WorkerContext(
@@ -1418,6 +1427,10 @@ def _handle_consistency(ctx: WorkerContext) -> None:
     graph_mode_for_preflight = str(consistency_params_for_preflight.get("graph_mode", "off")).strip().lower()
     if graph_mode_for_preflight not in {"off", "manual", "auto"}:
         graph_mode_for_preflight = "off"
+    metadata_grouping_enabled_for_preflight = False
+    metadata_grouping_enabled_raw = consistency_params_for_preflight.get("metadata_grouping_enabled")
+    if isinstance(metadata_grouping_enabled_raw, bool):
+        metadata_grouping_enabled_for_preflight = metadata_grouping_enabled_raw
     preflight = _parse_consistency_preflight(req)
 
     # Resolve 'latest' snapshot.
@@ -1457,6 +1470,7 @@ def _handle_consistency(ctx: WorkerContext) -> None:
         snapshot_id=snapshot_id,
         preflight=preflight,
         graph_mode=graph_mode_for_preflight,
+        metadata_grouping_enabled=metadata_grouping_enabled_for_preflight,
     )
 
     req["preflight"] = preflight
@@ -1548,6 +1562,10 @@ def _handle_consistency(ctx: WorkerContext) -> None:
                 verification_loop_req["round_timeout_ms"] = verification_round_timeout_ms
             if verification_loop_req:
                 req["verification_loop"] = verification_loop_req
+        metadata_grouping_enabled = consistency_params.get("metadata_grouping_enabled")
+        if isinstance(metadata_grouping_enabled, bool):
+            req["metadata_grouping_enabled"] = metadata_grouping_enabled
+    req.setdefault("metadata_grouping_enabled", metadata_grouping_enabled_for_preflight)
     req_stats: dict[str, Any] = {}
     req["stats"] = req_stats
     verdicts = engine.run(req)
@@ -1580,6 +1598,10 @@ def _handle_consistency(ctx: WorkerContext) -> None:
                 "graph_expand_applied_count": int(req_stats.get("graph_expand_applied_count", 0)),
                 "graph_auto_trigger_count": int(req_stats.get("graph_auto_trigger_count", 0)),
                 "graph_auto_skip_count": int(req_stats.get("graph_auto_skip_count", 0)),
+                "metadata_grouping_enabled": bool(req_stats.get("metadata_grouping_enabled", False)),
+                "entity_unresolved_skip_count": int(req_stats.get("entity_unresolved_skip_count", 0)),
+                "numeric_conflict_unknown_count": int(req_stats.get("numeric_conflict_unknown_count", 0)),
+                "confirmed_overlap_rejected_count": int(req_stats.get("confirmed_overlap_rejected_count", 0)),
                 "layer3_rerank_applied_count": int(req_stats.get("layer3_rerank_applied_count", 0)),
                 "layer3_model_fallback_count": int(req_stats.get("layer3_model_fallback_count", 0)),
                 "verification_loop_trigger_count": int(req_stats.get("verification_loop_trigger_count", 0)),

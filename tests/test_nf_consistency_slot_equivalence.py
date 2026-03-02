@@ -31,6 +31,12 @@ def test_compare_slot_mid_similarity_stays_unknown() -> None:
 
 
 @pytest.mark.unit
+def test_compare_slot_time_contains_with_numeric_conflict_stays_unknown() -> None:
+    verdict = consistency_engine._compare_slot("time", "3일 후", "3일 후 4시간")
+    assert verdict is None
+
+
+@pytest.mark.unit
 def test_compare_slot_low_similarity_single_vs_multi_is_violate() -> None:
     verdict = consistency_engine._compare_slot("talent", "genius", "no talent")
     assert verdict is Verdict.VIOLATE

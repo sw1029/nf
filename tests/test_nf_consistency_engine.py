@@ -278,6 +278,71 @@ def test_consistency_engine_entity_unresolved_when_only_entity_bound_facts(
 
 
 @pytest.mark.unit
+def test_consistency_engine_adds_numeric_conflict_unknown_reason_for_string_slots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    schema_ver = "v1"
+    text = "그의 직업은 12기 마법사다."
+
+    with db.connect(db_path) as conn:
+        _seed_document(conn, tmp_path=tmp_path, project_id=project_id, doc_id=doc_id, snapshot_id=snapshot_id, text=text)
+        schema_repo.create_schema_version(
+            conn,
+            project_id=project_id,
+            source_snapshot_id=snapshot_id,
+            schema_ver=schema_ver,
+        )
+        _seed_schema_fact(
+            conn,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            schema_ver=schema_ver,
+            tag_path="설정/인물/직업",
+            value="13기 마법사",
+            entity_id="entity-siro",
+        )
+
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine._extract_claims",
+        lambda *_args, **_kwargs: [
+            {
+                "segment_start": 0,
+                "segment_end": len(text),
+                "segment_text": text,
+                "claim_start": 0,
+                "claim_end": len(text),
+                "claim_text": text,
+                "slots": {"job": "12기 마법사"},
+                "slot_key": "job",
+                "slot_confidence": 1.0,
+            }
+        ],
+    )
+
+    engine = ConsistencyEngineImpl(db_path=db_path)
+    verdicts = engine.run(
+        {
+            "project_id": project_id,
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "schema_ver": schema_ver,
+            "filters": {"entity_id": "entity-siro"},
+        }
+    )
+
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict is Verdict.UNKNOWN
+    assert "NUMERIC_CONFLICT" in verdicts[0].unknown_reasons
+
+
+@pytest.mark.unit
 def test_consistency_engine_skips_ignored_claims(tmp_path: Path) -> None:
     db_path = tmp_path / "orchestrator.db"
     project_id = "project-1"

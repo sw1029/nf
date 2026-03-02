@@ -81,9 +81,11 @@ _UNKNOWN_REASON_AMBIGUOUS_ENTITY = "AMBIGUOUS_ENTITY"
 _UNKNOWN_REASON_ENTITY_UNRESOLVED = "ENTITY_UNRESOLVED"
 _UNKNOWN_REASON_SLOT_UNCOMPARABLE = "SLOT_UNCOMPARABLE"
 _UNKNOWN_REASON_CONFLICTING_EVIDENCE = "CONFLICTING_EVIDENCE"
+_UNKNOWN_REASON_NUMERIC_CONFLICT = "NUMERIC_CONFLICT"
 _HASHED_EMBEDDING_DIM = 96
 
 _STRING_SLOT_KEYS = {"time", "place", "relation", "affiliation", "job", "talent"}
+_ENTITY_BOUND_SLOT_KEYS = {"age", "death", "relation", "affiliation", "job", "talent"}
 _SLOT_KEYWORDS: dict[str, tuple[str, ...]] = {
     "age": ("\ub098\uc774", "\uc5f0\ub839", "age"),
     "time": ("\uc2dc\uac04", "\uc2dc\uc810", "\ub0a0\uc9dc", "\uc77c\uc2dc", "time", "date"),
@@ -155,6 +157,8 @@ _KO_PLACE_SUFFIXES = (
 )
 _SLOT_OK_SIMILARITY_THRESHOLD = 0.85
 _SLOT_VIOLATE_SIMILARITY_THRESHOLD = 0.25
+_CONFIRMED_EVIDENCE_MIN_OVERLAP_CHARS = 3
+_CONFIRMED_EVIDENCE_MIN_OVERLAP_RATIO = 0.20
 
 
 def _fingerprint(text: str) -> str:
@@ -488,6 +492,27 @@ def _coerce_bool(value: object) -> bool | None:
     return None
 
 
+def _extract_numeric_tokens(value: object) -> set[int]:
+    text = _norm_text(value)
+    if not text:
+        return set()
+    tokens: set[int] = set()
+    for raw in re.findall(r"-?\d+", text):
+        try:
+            tokens.add(int(raw))
+        except ValueError:
+            continue
+    return tokens
+
+
+def _has_string_slot_numeric_conflict(slot_key: str, claimed_value: object, fact_value: object) -> bool:
+    if slot_key not in _STRING_SLOT_KEYS:
+        return False
+    claimed_nums = _extract_numeric_tokens(claimed_value)
+    expected_nums = _extract_numeric_tokens(fact_value)
+    return bool(claimed_nums) and bool(expected_nums) and claimed_nums != expected_nums
+
+
 def _compare_slot(slot_key: str, claimed_value: object, fact_value: object) -> Verdict | None:
     if slot_key == "age":
         claimed = _coerce_int(claimed_value)
@@ -510,6 +535,9 @@ def _compare_slot(slot_key: str, claimed_value: object, fact_value: object) -> V
             return None
         if claimed == expected:
             return Verdict.OK
+        numeric_conflict = _has_string_slot_numeric_conflict(slot_key, claimed_value, fact_value)
+        if numeric_conflict:
+            return None
         if slot_key in {"time", "place"} and (claimed in expected or expected in claimed):
             return Verdict.OK
 
@@ -518,13 +546,6 @@ def _compare_slot(slot_key: str, claimed_value: object, fact_value: object) -> V
         similarity = _token_overlap_similarity(claimed_tokens, expected_tokens)
         if similarity >= _SLOT_OK_SIMILARITY_THRESHOLD:
             return Verdict.OK
-
-        claimed_num = _coerce_int(claimed_value)
-        expected_num = _coerce_int(fact_value)
-        numeric_mismatch = claimed_num is not None and expected_num is not None and claimed_num != expected_num
-
-        if numeric_mismatch and similarity <= _SLOT_VIOLATE_SIMILARITY_THRESHOLD:
-            return Verdict.VIOLATE
         if (
             similarity <= _SLOT_VIOLATE_SIMILARITY_THRESHOLD
             and len(claimed_tokens) == 1
@@ -950,6 +971,7 @@ def _judge_with_fact_index(
         "saw_uncomparable": False,
         "conflicting": False,
         "entity_unresolved": False,
+        "numeric_conflict": False,
     }
     if not slots:
         return None, [], meta
@@ -957,6 +979,15 @@ def _judge_with_fact_index(
     cap = max(1, int(evidence_link_cap))
     link_set: set[tuple[str, EvidenceRole]] = set()
     for slot_key, claimed_value in slots.items():
+        if target_entity_id is None and slot_key in _ENTITY_BOUND_SLOT_KEYS:
+            all_candidates = list(fact_index.get((slot_key, _FACT_ALL_KEY), []))
+            has_entity_scoped_fact = any(
+                isinstance(getattr(fact, "entity_id", None), str) and bool(getattr(fact, "entity_id", "").strip())
+                for fact in all_candidates
+            )
+            if has_entity_scoped_fact:
+                meta["entity_unresolved"] = True
+                continue
         if target_entity_id is None:
             all_candidates = list(fact_index.get((slot_key, _FACT_ALL_KEY), []))
             candidates = list(fact_index.get((slot_key, None), []))
@@ -982,6 +1013,7 @@ def _judge_with_fact_index(
             if excluded_fact_eids and isinstance(evidence_eid, str) and evidence_eid in excluded_fact_eids:
                 continue
             judged: Verdict | None
+            numeric_conflict = _has_string_slot_numeric_conflict(slot_key, claimed_value, fact.value)
             cache_key = (slot_key, repr(claimed_value), repr(fact.value))
             if comparison_cache is None:
                 judged = _compare_slot(slot_key, claimed_value, fact.value)
@@ -991,6 +1023,8 @@ def _judge_with_fact_index(
                 judged = comparison_cache[cache_key]
             if judged is None:
                 meta["saw_uncomparable"] = True
+                if numeric_conflict:
+                    meta["numeric_conflict"] = True
                 continue
             if judged is Verdict.VIOLATE:
                 meta["saw_violate"] = True
@@ -1557,10 +1591,33 @@ def _filter_self_evidence_results(
     return filtered, removed
 
 
-def _overlaps_any_span(span_start: int, span_end: int, spans: list[tuple[int, int]]) -> bool:
+def _has_any_overlap(span_start: int, span_end: int, spans: list[tuple[int, int]]) -> bool:
     for other_start, other_end in spans:
         if span_start < other_end and other_start < span_end:
             return True
+    return False
+
+
+def _overlaps_any_span(
+    span_start: int,
+    span_end: int,
+    spans: list[tuple[int, int]],
+    *,
+    min_overlap_chars: int = 1,
+    min_overlap_ratio: float = 0.0,
+) -> bool:
+    evidence_len = max(1, span_end - span_start)
+    min_chars = max(1, int(min_overlap_chars))
+    ratio_threshold = max(0.0, min(1.0, float(min_overlap_ratio)))
+    for other_start, other_end in spans:
+        overlap = min(span_end, other_end) - max(span_start, other_start)
+        if overlap <= 0:
+            continue
+        if overlap < min_chars:
+            continue
+        if ratio_threshold > 0.0 and (float(overlap) / float(evidence_len)) < ratio_threshold:
+            continue
+        return True
     return False
 
 
@@ -1640,7 +1697,10 @@ def _promote_confirmed_evidence(
     results: list[dict[str, Any]],
     user_tag_span_cache: dict[tuple[str, str], list[tuple[int, int]]],
     approved_evidence_span_cache: dict[tuple[str, str], list[tuple[int, int]]],
-) -> None:
+    min_overlap_chars: int = _CONFIRMED_EVIDENCE_MIN_OVERLAP_CHARS,
+    min_overlap_ratio: float = _CONFIRMED_EVIDENCE_MIN_OVERLAP_RATIO,
+) -> int:
+    rejected_count = 0
     for row in results:
         evidence = row.get("evidence")
         if not isinstance(evidence, dict):
@@ -1676,8 +1736,27 @@ def _promote_confirmed_evidence(
             snapshot_id=snapshot_id_raw,
             cache=approved_evidence_span_cache,
         )
-        if _overlaps_any_span(span_start, span_end, user_spans) or _overlaps_any_span(span_start, span_end, approved_spans):
+        user_has_overlap = _has_any_overlap(span_start, span_end, user_spans)
+        approved_has_overlap = _has_any_overlap(span_start, span_end, approved_spans)
+        user_has_sufficient_overlap = _overlaps_any_span(
+            span_start,
+            span_end,
+            user_spans,
+            min_overlap_chars=min_overlap_chars,
+            min_overlap_ratio=min_overlap_ratio,
+        )
+        approved_has_sufficient_overlap = _overlaps_any_span(
+            span_start,
+            span_end,
+            approved_spans,
+            min_overlap_chars=min_overlap_chars,
+            min_overlap_ratio=min_overlap_ratio,
+        )
+        if user_has_sufficient_overlap or approved_has_sufficient_overlap:
             evidence["confirmed"] = True
+        elif user_has_overlap or approved_has_overlap:
+            rejected_count += 1
+    return rejected_count
 
 
 def _build_verdict_links(
@@ -1847,9 +1926,13 @@ class ConsistencyEngineImpl:
             req_stats.setdefault("verification_loop_rounds_total", 0)
             req_stats.setdefault("verification_loop_timeout_count", 0)
             req_stats.setdefault("verification_loop_stagnation_break_count", 0)
+            req_stats.setdefault("entity_unresolved_skip_count", 0)
+            req_stats.setdefault("numeric_conflict_unknown_count", 0)
+            req_stats.setdefault("confirmed_overlap_rejected_count", 0)
             req_stats["verifier_mode"] = verifier_mode
             req_stats["triage_mode"] = triage_mode
             req_stats["graph_mode"] = graph_mode
+            req_stats["metadata_grouping_enabled"] = bool(req.get("metadata_grouping_enabled", False))
 
         if not isinstance(project_id, str) or not isinstance(doc_id, str) or not isinstance(snapshot_id, str):
             raise RuntimeError("invalid consistency request")
@@ -2149,13 +2232,17 @@ class ConsistencyEngineImpl:
                         req_stats["self_evidence_filtered_count"] = int(
                             req_stats.get("self_evidence_filtered_count", 0)
                         ) + filtered_count
-                _promote_confirmed_evidence(
+                rejected_overlap_count = _promote_confirmed_evidence(
                     conn,
                     project_id=project_id,
                     results=candidate_results,
                     user_tag_span_cache=user_tag_span_cache,
                     approved_evidence_span_cache=approved_evidence_span_cache,
                 )
+                if req_stats is not None and rejected_overlap_count > 0:
+                    req_stats["confirmed_overlap_rejected_count"] = int(
+                        req_stats.get("confirmed_overlap_rejected_count", 0)
+                    ) + rejected_overlap_count
                 reranked_results, rerank_meta = _rerank_results_for_consistency(
                     results=candidate_results,
                     claim_text=claim_text,
@@ -2227,6 +2314,7 @@ class ConsistencyEngineImpl:
                         "saw_uncomparable": False,
                         "conflicting": False,
                         "entity_unresolved": False,
+                        "numeric_conflict": False,
                     }
                     if fact_index:
                         judged, fact_links, judge_meta = _judge_with_fact_index(
@@ -2246,6 +2334,10 @@ class ConsistencyEngineImpl:
                             unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
                         if judge_meta.get("entity_unresolved"):
                             unknown_reasons.add(_UNKNOWN_REASON_ENTITY_UNRESOLVED)
+                        if judge_meta.get("numeric_conflict"):
+                            unknown_reasons.add(_UNKNOWN_REASON_NUMERIC_CONFLICT)
+                        if judge_meta.get("entity_unresolved") or judge_meta.get("numeric_conflict"):
+                            verdict = Verdict.UNKNOWN
                     if ambiguous:
                         verdict = Verdict.UNKNOWN
                         unknown_reasons.add(_UNKNOWN_REASON_AMBIGUOUS_ENTITY)
@@ -2290,8 +2382,10 @@ class ConsistencyEngineImpl:
                         or judge_meta.get("saw_uncomparable")
                         or judge_meta.get("conflicting")
                         or judge_meta.get("entity_unresolved")
+                        or judge_meta.get("numeric_conflict")
                         or (_UNKNOWN_REASON_AMBIGUOUS_ENTITY in unknown_reasons)
                         or (_UNKNOWN_REASON_ENTITY_UNRESOLVED in unknown_reasons)
+                        or (_UNKNOWN_REASON_NUMERIC_CONFLICT in unknown_reasons)
                         or (_UNKNOWN_REASON_SLOT_UNCOMPARABLE in unknown_reasons)
                         or (_UNKNOWN_REASON_CONFLICTING_EVIDENCE in unknown_reasons)
                     )
@@ -2440,13 +2534,17 @@ class ConsistencyEngineImpl:
                                 req_stats["self_evidence_filtered_count"] = int(
                                     req_stats.get("self_evidence_filtered_count", 0)
                                 ) + filtered_count
-                        _promote_confirmed_evidence(
+                        rejected_overlap_count = _promote_confirmed_evidence(
                             conn,
                             project_id=project_id,
                             results=candidate_results,
                             user_tag_span_cache=user_tag_span_cache,
                             approved_evidence_span_cache=approved_evidence_span_cache,
                         )
+                        if req_stats is not None and rejected_overlap_count > 0:
+                            req_stats["confirmed_overlap_rejected_count"] = int(
+                                req_stats.get("confirmed_overlap_rejected_count", 0)
+                            ) + rejected_overlap_count
                         reranked_results, rerank_meta = _rerank_results_for_consistency(
                             results=candidate_results,
                             claim_text=claim_text,
@@ -2479,6 +2577,14 @@ class ConsistencyEngineImpl:
                 confirmed_evidence_count = int(evaluation["confirmed_evidence_count"])
                 if bool(evaluation["promoted"]) and req_stats is not None:
                     req_stats["layer3_promoted_ok_count"] = int(req_stats.get("layer3_promoted_ok_count", 0)) + 1
+                if req_stats is not None and _UNKNOWN_REASON_ENTITY_UNRESOLVED in unknown_reasons:
+                    req_stats["entity_unresolved_skip_count"] = int(
+                        req_stats.get("entity_unresolved_skip_count", 0)
+                    ) + 1
+                if req_stats is not None and _UNKNOWN_REASON_NUMERIC_CONFLICT in unknown_reasons:
+                    req_stats["numeric_conflict_unknown_count"] = int(
+                        req_stats.get("numeric_conflict_unknown_count", 0)
+                    ) + 1
                 _add_unknown_reasons(req_stats, unknown_reasons)
 
                 evidences = []

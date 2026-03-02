@@ -22,6 +22,7 @@ def test_validate_job_params_accepts_valid_consistency_options() -> None:
                 "graph_mode": "auto",
                 "graph_max_hops": 1,
                 "graph_doc_cap": 200,
+                "metadata_grouping_enabled": True,
                 "layer3_verdict_promotion": True,
                 "layer3_min_fts_for_promotion": 0.25,
                 "layer3_max_claim_chars": 260,
@@ -196,6 +197,17 @@ def test_validate_job_params_rejects_invalid_graph_expand_options() -> None:
             {
                 "consistency": {
                     "graph_mode": "sometimes",
+                }
+            },
+        )
+    assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
+
+    with pytest.raises(AppError) as exc_info:
+        handler._validate_job_params(
+            JobType.CONSISTENCY,
+            {
+                "consistency": {
+                    "metadata_grouping_enabled": "true",
                 }
             },
         )

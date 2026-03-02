@@ -145,6 +145,10 @@ def test_consistency_complete_payload_includes_unknown_reason_counts(
     assert "graph_expand_applied_count" in payload
     assert "graph_auto_trigger_count" in payload
     assert "graph_auto_skip_count" in payload
+    assert "metadata_grouping_enabled" in payload
+    assert "entity_unresolved_skip_count" in payload
+    assert "numeric_conflict_unknown_count" in payload
+    assert "confirmed_overlap_rejected_count" in payload
     assert "layer3_rerank_applied_count" in payload
     assert "layer3_model_fallback_count" in payload
     assert "verification_loop_trigger_count" in payload
@@ -221,6 +225,7 @@ def test_consistency_worker_forwards_layer3_promotion_options(
                     "max_rounds": 2,
                     "round_timeout_ms": 250,
                 },
+                "metadata_grouping_enabled": True,
             }
         },
         db_path=db_path,
@@ -249,3 +254,116 @@ def test_consistency_worker_forwards_layer3_promotion_options(
     assert verification_loop_req.get("enabled") is True
     assert int(verification_loop_req.get("max_rounds", 0)) == 2
     assert int(verification_loop_req.get("round_timeout_ms", 0)) == 250
+    assert captured_req.get("metadata_grouping_enabled") is True
+
+
+@pytest.mark.unit
+def test_consistency_preflight_graph_mode_does_not_force_metadata_grouping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "sample"
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    captured_params: list[dict[str, object]] = []
+
+    monkeypatch.setattr("modules.nf_workers.runner.ConsistencyEngineImpl.run", lambda _self, _req: [])
+
+    def capture_index_fts(ctx):  # noqa: ANN001
+        captured_params.append(dict(ctx.params) if isinstance(ctx.params, dict) else {})
+
+    monkeypatch.setattr("modules.nf_workers.runner._handle_index_fts", capture_index_fts)
+
+    ctx = runner.WorkerContext(
+        job_id="job-consistency-preflight-1",
+        project_id=project_id,
+        payload={
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "preflight": {
+                "ensure_ingest": False,
+                "ensure_index_fts": True,
+                "schema_scope": "latest_approved",
+            },
+        },
+        params={"consistency": {"graph_mode": "auto"}},
+        db_path=db_path,
+    )
+    runner._handle_consistency(ctx)
+
+    assert captured_params
+    grouping = captured_params[0].get("grouping")
+    assert isinstance(grouping, dict)
+    assert grouping.get("graph_extract") is True
+    assert grouping.get("entity_mentions") is not True
+    assert grouping.get("time_anchors") is not True
+
+
+@pytest.mark.unit
+def test_consistency_preflight_enables_metadata_grouping_when_requested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "sample"
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    captured_params: list[dict[str, object]] = []
+
+    monkeypatch.setattr("modules.nf_workers.runner.ConsistencyEngineImpl.run", lambda _self, _req: [])
+
+    def capture_index_fts(ctx):  # noqa: ANN001
+        captured_params.append(dict(ctx.params) if isinstance(ctx.params, dict) else {})
+
+    monkeypatch.setattr("modules.nf_workers.runner._handle_index_fts", capture_index_fts)
+
+    ctx = runner.WorkerContext(
+        job_id="job-consistency-preflight-2",
+        project_id=project_id,
+        payload={
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "preflight": {
+                "ensure_ingest": False,
+                "ensure_index_fts": True,
+                "schema_scope": "latest_approved",
+            },
+        },
+        params={"consistency": {"graph_mode": "auto", "metadata_grouping_enabled": True}},
+        db_path=db_path,
+    )
+    runner._handle_consistency(ctx)
+
+    assert captured_params
+    grouping = captured_params[0].get("grouping")
+    assert isinstance(grouping, dict)
+    assert grouping.get("graph_extract") is True
+    assert grouping.get("entity_mentions") is True
+    assert grouping.get("time_anchors") is True
