@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
@@ -9,7 +9,7 @@ from typing import Any
 
 from common import now_ts
 
-TARGET_DATASETS = ("DS-200", "DS-400", "DS-800")
+DEFAULT_DATASETS = ("DS-200", "DS-400", "DS-800")
 TARGET_METRICS = ("consistency_p95", "retrieval_fts_p95")
 
 
@@ -26,28 +26,35 @@ def _as_float(value: Any) -> float | None:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    if parsed != parsed:  # NaN
+    if parsed != parsed:
         return None
     return parsed
 
 
 def _infer_dataset_key(payload: dict[str, Any]) -> str | None:
-    doc_count_raw = payload.get("doc_count")
-    doc_count = None
+    dataset_path = str(payload.get("dataset_path") or "")
+    if dataset_path:
+        diverse_match = re.search(r"(?:DS[-_]?DIVERSE[-_]?)(\d+)", dataset_path, re.IGNORECASE)
+        if diverse_match:
+            count = int(diverse_match.group(1))
+            if count in (200, 400, 800):
+                return f"DS-DIVERSE-{count}"
+            return None
+
+        growth_match = re.search(r"(?:DS[-_]?GROWTH[-_]?)(\d+)", dataset_path, re.IGNORECASE)
+        if growth_match:
+            count = int(growth_match.group(1))
+            if count in (200, 400, 800):
+                return f"DS-{count}"
+            return None
+        return None
+
     try:
-        doc_count = int(doc_count_raw)
+        doc_count = int(payload.get("doc_count"))
     except (TypeError, ValueError):
-        doc_count = None
+        return None
     if doc_count in (200, 400, 800):
         return f"DS-{doc_count}"
-
-    dataset_path = str(payload.get("dataset_path") or "")
-    match = re.search(r"(?:DS[-_]?GROWTH[-_]?)(\d+)", dataset_path, re.IGNORECASE)
-    if not match:
-        return None
-    count = int(match.group(1))
-    if count in (200, 400, 800):
-        return f"DS-{count}"
     return None
 
 
@@ -120,7 +127,7 @@ def _dataset_summary(dataset_key: str, rows: list[dict[str, Any]]) -> dict[str, 
             delta = ((current - baseline) / baseline) * 100.0
         delta_pct[metric] = delta
         metric_status[metric] = _metric_status(delta)
-        if delta is None or delta <= 0.0:
+        if delta is not None and delta <= 0.0:
             improved_or_same += 1
 
     status = "PASS"
@@ -145,10 +152,10 @@ def _dataset_summary(dataset_key: str, rows: list[dict[str, Any]]) -> dict[str, 
     }
 
 
-def summarize_benchmarks(bench_dir: Path, *, datasets: tuple[str, ...] = TARGET_DATASETS) -> dict[str, Any]:
+def summarize_benchmarks(bench_dir: Path, *, datasets: tuple[str, ...] = DEFAULT_DATASETS) -> dict[str, Any]:
     rows_by_dataset: dict[str, list[dict[str, Any]]] = {dataset: [] for dataset in datasets}
     for path in sorted(bench_dir.glob("*.json")):
-        if path.name.startswith(("soak_", "graphrag_probe_", "latest_metrics_summary")):
+        if path.name.startswith(("soak_", "graphrag_probe_", "latest_metrics_summary", "consistency_strict_gate")):
             continue
         payload = _read_json(path)
         if payload is None:
@@ -179,10 +186,11 @@ def summarize_benchmarks(bench_dir: Path, *, datasets: tuple[str, ...] = TARGET_
 
     hard_fail = any(summary["status"] == "FAIL" for summary in dataset_summaries.values())
     soft_warning = any(summary["status"] == "WARN" for summary in dataset_summaries.values())
+    no_baseline = any(summary["status"] == "NO_BASELINE" for summary in dataset_summaries.values())
 
     all_have_improve_or_same = True
     for summary in dataset_summaries.values():
-        if summary["status"] == "MISSING":
+        if summary["status"] in {"MISSING", "NO_BASELINE"}:
             all_have_improve_or_same = False
             continue
         if int(summary.get("improved_or_same_metric_count", 0)) <= 0:
@@ -191,16 +199,18 @@ def summarize_benchmarks(bench_dir: Path, *, datasets: tuple[str, ...] = TARGET_
     overall_status = "PASS"
     if hard_fail:
         overall_status = "FAIL"
-    elif soft_warning or not all_have_improve_or_same:
+    elif soft_warning or no_baseline or not all_have_improve_or_same:
         overall_status = "WARN"
 
     return {
         "generated_at_utc": now_ts(),
         "bench_dir": str(bench_dir),
+        "dataset_order": list(datasets),
         "datasets": dataset_summaries,
         "rule_evaluation": {
             "hard_fail": hard_fail,
             "soft_warning": soft_warning,
+            "no_baseline": no_baseline,
             "all_datasets_have_improved_or_same_metric": all_have_improve_or_same,
         },
         "overall_status": overall_status,
@@ -219,6 +229,17 @@ def _format_delta(value: float | None) -> str:
     return f"{value:+.2f}%"
 
 
+def _parse_dataset_arg(text: str | None) -> tuple[str, ...]:
+    if text is None or not text.strip():
+        return DEFAULT_DATASETS
+    out: list[str] = []
+    for token in text.split(","):
+        key = token.strip()
+        if key and key not in out:
+            out.append(key)
+    return tuple(out) if out else DEFAULT_DATASETS
+
+
 def render_markdown(summary: dict[str, Any]) -> str:
     lines: list[str] = [
         "# Latest Metrics Summary",
@@ -230,7 +251,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
         "|---|---|---:|---:|---:|---:|---|",
     ]
     datasets = summary.get("datasets") or {}
-    for dataset_key in TARGET_DATASETS:
+    dataset_order = summary.get("dataset_order") or list(DEFAULT_DATASETS)
+    for dataset_key in dataset_order:
         row = datasets.get(dataset_key) or {}
         latest_metrics = row.get("latest_metrics") or {}
         delta_pct = row.get("delta_pct") or {}
@@ -253,9 +275,10 @@ def main() -> int:
     parser.add_argument("--bench-dir", type=Path, default=Path("verify/benchmarks"))
     parser.add_argument("--output-json", type=Path, default=Path("verify/benchmarks/latest_metrics_summary.json"))
     parser.add_argument("--output-md", type=Path, default=Path("verify/benchmarks/latest_metrics_summary.md"))
+    parser.add_argument("--datasets", type=str, default="")
     args = parser.parse_args()
 
-    summary = summarize_benchmarks(args.bench_dir)
+    summary = summarize_benchmarks(args.bench_dir, datasets=_parse_dataset_arg(args.datasets))
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_md.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -266,4 +289,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

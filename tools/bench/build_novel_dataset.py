@@ -1,11 +1,14 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import random
 import re
+from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 PRIMARY_EP_RE = re.compile(r"^\[(\d{1,5})\]\s*(.*)$")
@@ -44,7 +47,6 @@ def split_episodes(text: str, *, source_file: str) -> list[Episode]:
         offset += len(line)
 
     if len(boundaries) < 2:
-        # Fallback: fixed-size pseudo episodes.
         chunk = 12000
         episodes: list[Episode] = []
         start = 0
@@ -75,9 +77,9 @@ def split_episodes(text: str, *, source_file: str) -> list[Episode]:
 
 def write_jsonl(path: Path, items: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
+    with path.open("w", encoding="utf-8") as file_handle:
         for item in items:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+            file_handle.write(json.dumps(item, ensure_ascii=False) + "\n")
 
 
 def uniform_sample(items: list[Episode], count: int) -> list[Episode]:
@@ -87,9 +89,43 @@ def uniform_sample(items: list[Episode], count: int) -> list[Episode]:
         return list(items)
     step = len(items) / count
     sampled: list[Episode] = []
-    for i in range(count):
-        idx = min(len(items) - 1, int(math.floor(i * step)))
-        sampled.append(items[idx])
+    for idx in range(count):
+        picked = min(len(items) - 1, int(math.floor(idx * step)))
+        sampled.append(items[picked])
+    return sampled
+
+
+def round_robin_sample(items: list[Episode], count: int, *, seed: int) -> list[Episode]:
+    if not items:
+        return []
+    if len(items) <= count:
+        return list(items)
+
+    grouped: dict[str, list[Episode]] = {}
+    for episode in items:
+        grouped.setdefault(episode.source_file, []).append(episode)
+
+    source_order = sorted(grouped.keys())
+    if source_order:
+        offset = seed % len(source_order)
+        source_order = source_order[offset:] + source_order[:offset]
+
+    positions = {source: 0 for source in source_order}
+    sampled: list[Episode] = []
+    while len(sampled) < count:
+        progressed = False
+        for source in source_order:
+            position = positions[source]
+            pool = grouped[source]
+            if position >= len(pool):
+                continue
+            sampled.append(pool[position])
+            positions[source] = position + 1
+            progressed = True
+            if len(sampled) >= count:
+                break
+        if not progressed:
+            break
     return sampled
 
 
@@ -119,12 +155,39 @@ def to_record(dataset: str, episode: Episode, *, content: str, injected_kind: st
     }
 
 
+def snapshot_hash(input_files: list[dict]) -> str:
+    payload = json.dumps(input_files, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def dataset_stats(path: Path, records: list[dict]) -> dict:
+    source_counter = Counter(str(record.get("source_file") or "") for record in records)
+    top_distribution = [
+        {"source_file": source_file, "count": count}
+        for source_file, count in source_counter.most_common(10)
+    ]
+    return {
+        "path": str(path),
+        "count": len(records),
+        "unique_source_files": len(source_counter),
+        "top_source_distribution": top_distribution,
+    }
+
+
+def add_dataset(summary: dict[str, object], dataset_name: str, out_path: Path, records: list[dict]) -> None:
+    write_jsonl(out_path, records)
+    datasets = summary["datasets"]
+    assert isinstance(datasets, dict)
+    datasets[dataset_name] = dataset_stats(out_path, records)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build benchmark datasets from long novel text files.")
     parser.add_argument("--input-dir", default="test_files", help="Directory containing source txt files")
     parser.add_argument("--output-dir", default="verify/datasets", help="Output directory")
     parser.add_argument("--inject-sample-size", type=int, default=200)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--diversity-profile", choices=("basic", "max"), default="max")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -134,63 +197,104 @@ def main() -> int:
     if len(files) < 1:
         raise SystemExit(f"no txt files in {input_dir}")
 
+    file_snapshot: list[dict] = []
+    for src in files:
+        stat = src.stat()
+        file_snapshot.append(
+            {
+                "file": src.name,
+                "size_bytes": int(stat.st_size),
+                "mtime_utc": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+        )
+
+    diversity_cuts = [200] if args.diversity_profile == "basic" else [200, 400, 800]
     summary: dict[str, object] = {
         "input_files": [],
+        "source_snapshot_hash": snapshot_hash(file_snapshot),
+        "build_options": {
+            "seed": args.seed,
+            "inject_sample_size": args.inject_sample_size,
+            "diversity_profile": args.diversity_profile,
+        },
         "datasets": {},
         "growth_cuts": [50, 100, 200, 400, 800],
+        "diversity_cuts": diversity_cuts,
     }
 
     all_base_episodes: list[Episode] = []
-    base_outputs: list[tuple[str, Path, list[dict]]] = []
     for src in files:
         text, enc = read_text_auto(src)
         episodes = split_episodes(text, source_file=src.name)
         all_base_episodes.extend(episodes)
-        dataset_name = src.stem
-        records = [to_record(dataset_name, ep, content=ep.content) for ep in episodes]
-        out_path = output_dir / f"{dataset_name}.jsonl"
-        base_outputs.append((dataset_name, out_path, records))
-        summary["input_files"].append({"file": src.name, "encoding": enc, "episodes": len(episodes)})
 
-    for dataset_name, out_path, records in base_outputs:
-        write_jsonl(out_path, records)
-        summary["datasets"][dataset_name] = {"path": str(out_path), "count": len(records)}
+        records = [to_record(src.stem, ep, content=ep.content) for ep in episodes]
+        add_dataset(summary, src.stem, output_dir / f"{src.stem}.jsonl", records)
+
+        stat = src.stat()
+        summary["input_files"].append(
+            {
+                "file": src.name,
+                "encoding": enc,
+                "size_bytes": int(stat.st_size),
+                "mtime_utc": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "episodes": len(episodes),
+            }
+        )
+
+    if not all_base_episodes:
+        raise SystemExit(f"no episodes extracted from files in {input_dir}")
 
     sampled = uniform_sample(all_base_episodes, args.inject_sample_size)
     inject_kinds = ["age", "job", "talent", "time", "affiliation", "relation", "death", "place"]
     inject_records: list[dict] = []
     control_records: list[dict] = []
-    for idx, ep in enumerate(sampled):
+    for idx, episode in enumerate(sampled):
         kind = inject_kinds[idx % len(inject_kinds)]
         inject_records.append(
             to_record(
                 "DS-INJECT-C",
-                ep,
-                content=inject_conflict_text(ep.content, kind),
+                episode,
+                content=inject_conflict_text(episode.content, kind),
                 injected_kind=kind,
             )
         )
-        control_records.append(
-            to_record(
-                "DS-CONTROL-D",
-                ep,
-                content=ep.content,
-                injected_kind=None,
-            )
-        )
-
-    inject_path = output_dir / "DS-INJECT-C.jsonl"
-    control_path = output_dir / "DS-CONTROL-D.jsonl"
-    write_jsonl(inject_path, inject_records)
-    write_jsonl(control_path, control_records)
-    summary["datasets"]["DS-INJECT-C"] = {"path": str(inject_path), "count": len(inject_records)}
-    summary["datasets"]["DS-CONTROL-D"] = {"path": str(control_path), "count": len(control_records)}
+        control_records.append(to_record("DS-CONTROL-D", episode, content=episode.content, injected_kind=None))
+    add_dataset(summary, "DS-INJECT-C", output_dir / "DS-INJECT-C.jsonl", inject_records)
+    add_dataset(summary, "DS-CONTROL-D", output_dir / "DS-CONTROL-D.jsonl", control_records)
 
     for cut in (50, 100, 200, 400, 800):
         cut_records = [to_record(f"DS-GROWTH-{cut}", ep, content=ep.content) for ep in all_base_episodes[:cut]]
-        cut_path = output_dir / f"DS-GROWTH-{cut}.jsonl"
-        write_jsonl(cut_path, cut_records)
-        summary["datasets"][f"DS-GROWTH-{cut}"] = {"path": str(cut_path), "count": len(cut_records)}
+        add_dataset(summary, f"DS-GROWTH-{cut}", output_dir / f"DS-GROWTH-{cut}.jsonl", cut_records)
+
+    for cut in diversity_cuts:
+        diverse_sample = round_robin_sample(all_base_episodes, cut, seed=args.seed)
+        diverse_records = [to_record(f"DS-DIVERSE-{cut}", ep, content=ep.content) for ep in diverse_sample]
+        add_dataset(summary, f"DS-DIVERSE-{cut}", output_dir / f"DS-DIVERSE-{cut}.jsonl", diverse_records)
+
+    diverse_strict_sample = round_robin_sample(all_base_episodes, args.inject_sample_size, seed=args.seed)
+    diverse_inject_records: list[dict] = []
+    diverse_control_records: list[dict] = []
+    for idx, episode in enumerate(diverse_strict_sample):
+        kind = inject_kinds[idx % len(inject_kinds)]
+        diverse_inject_records.append(
+            to_record(
+                "DS-DIVERSE-INJECT-C",
+                episode,
+                content=inject_conflict_text(episode.content, kind),
+                injected_kind=kind,
+            )
+        )
+        diverse_control_records.append(
+            to_record(
+                "DS-DIVERSE-CONTROL-D",
+                episode,
+                content=episode.content,
+                injected_kind=None,
+            )
+        )
+    add_dataset(summary, "DS-DIVERSE-INJECT-C", output_dir / "DS-DIVERSE-INJECT-C.jsonl", diverse_inject_records)
+    add_dataset(summary, "DS-DIVERSE-CONTROL-D", output_dir / "DS-DIVERSE-CONTROL-D.jsonl", diverse_control_records)
 
     summary_path = output_dir / "dataset_manifest.json"
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
