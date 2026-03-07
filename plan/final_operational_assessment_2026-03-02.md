@@ -1,5 +1,7 @@
 ﻿> 기준 요구: `plan/user_request.md`
 > 기준 실행: `tools/bench/run_user_delegated.ps1` (resume)
+> 주의: 본 문서는 실행 이력/평가 기록으로 유지한다.
+> 미해결 TODO와 후속 로직 보완 계획은 `plan/consistency_benchmark_followup_2026-03-07.md`로 통합되었다.
 
 # Final Operational Assessment (2026-03-02)
 
