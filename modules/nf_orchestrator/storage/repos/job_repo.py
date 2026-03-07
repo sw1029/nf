@@ -141,7 +141,16 @@ def update_job_status(conn, job_id: str, status: JobStatus) -> Job | None:
             "UPDATE jobs SET status = ?, started_at = ? WHERE job_id = ?",
             (status.value, ts, job_id),
         )
-    elif status in {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELED}:
+    elif status in {JobStatus.SUCCEEDED, JobStatus.CANCELED}:
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status = ?, finished_at = ?, lease_owner = NULL, lease_expires_at = NULL, error_code = NULL, error_message = NULL
+            WHERE job_id = ?
+            """,
+            (status.value, ts, job_id),
+        )
+    elif status is JobStatus.FAILED:
         conn.execute(
             """
             UPDATE jobs

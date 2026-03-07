@@ -30,16 +30,31 @@
 - strict payload의 layer3 capability diagnostics 추가
 - graph normal path의 “0이 아닌 applied_count” 확인
 - 0.5h soak `failed_ratio < 1%` 달성
+- WS0 1차 조치 완료
+  - `modules/nf_workers/runner.py`의 SQLite lock retry 판별기 중복 정의 제거
+  - `database/schema/table is locked` 3종 메시지를 transient retry 대상으로 복구
+  - 회귀 테스트 통과
+- WS1 1차 조치 완료
+  - `tools/bench/summarize_latest_metrics.py`에 `--label-mode operational` preset 추가
+  - `tools/bench/run_user_delegated.ps1`가 고정 운영 preset을 사용하도록 정렬
+  - canonical `verify/benchmarks/latest_metrics_summary.{json,md}`를 운영 라벨 기준으로 재생성
+- WS1 2차 조치 완료
+  - `tools/bench/summarize_latest_metrics.py`가 실패 artifact를 summary 후보에서 제외
+  - `modules/nf_workers/runner.py`에 long-running job lease heartbeat 추가
+  - `modules/nf_orchestrator/storage/repos/job_repo.py`가 성공 상태 전환 시 stale `error_code/error_message`를 정리
+  - 관련 회귀 테스트 통과
 
 위 항목은 재오픈 대상이 아니다. 이후 다시 다루는 경우는 회귀가 발견될 때만이다.
 
 ### 2.2 현재 남아 있는 핵심 결손
-1. `sqlite lock` 재시도 분류기가 런타임에서 축소 override되어 `database schema/table is locked`를 재시도하지 못한다.
-2. DS-400 성능 개선 artifact는 존재하지만, 운영 라벨(`operational-main`) 기준선으로 승격되지 않아 운영 summary/gate에는 아직 반영되지 않았다.
-3. strict PASS는 현재 `strict core` PASS이지 `layer3 correctness` PASS가 아니다.
-4. graph normal path는 살아났지만 `graph_runtime.applied_count = 3 / 30` 수준으로 아직 낮다.
-5. quick 계열 `unknown_rate`가 여전히 높아 결과의 actionability가 낮다.
-6. 0.5h soak는 통과했지만 `database is locked` tail 1건이 남아 있다.
+1. 운영 라벨 기준 canonical summary는 정렬됐고 DS-200/400은 운영 PASS까지 회복됐지만, DS-800은 기존 실패 artifact 2건이 summary에서 배제된 뒤에도 baseline 복구가 안 됐고, post-fix rerun은 `RemoteDisconnected`로 중단돼 아직 운영 재확인 완료가 아니다.
+2. lease heartbeat는 추가됐지만, `lease_owner` 검증과 terminal state monotonicity(`FAILED -> SUCCEEDED` 같은 상태 역전 방지)는 아직 제도화되지 않았다.
+3. bench/orchestrator front-door에서 `RemoteDisconnected`가 반복되는데, 현재 bench client는 single-shot 요청만 사용하고 structured failure artifact를 남기지 않아 원인 추적 효율이 낮다.
+4. 운영 summary는 실패 artifact를 제외하도록 보강됐지만, 그 결과 dataset별 “최신 성공 실행(latest successful)”만 보이고 “최신 시도(latest attempt)”가 가려질 수 있다.
+5. strict PASS는 현재 `strict core` PASS이지 `layer3 correctness` PASS가 아니다.
+6. graph normal path는 살아났지만 `graph_runtime.applied_count = 3 / 30` 수준으로 아직 낮다.
+7. quick 계열 `unknown_rate`가 여전히 높아 결과의 actionability가 낮다.
+8. 0.5h soak는 통과했지만 `database is locked` tail 1건이 남아 있다.
 
 ### 2.3 현 시점 판정
 - 코드 구조/진단 가능성: `B+`
@@ -66,15 +81,36 @@
   - `failed_ratio = 0.000142...`
   - `database is locked` tail 1건
 - `verify/benchmarks/latest_metrics_summary.json`
-  - 기존 표준 산출물
+  - canonical 운영 summary
+  - `overall_status = WARN`
+  - `absolute_goal_status = FAIL`
+  - DS-200 `status = PASS`, `absolute_status = PASS`
+  - DS-400 `status = PASS`
+  - DS-400 `absolute_status = PASS`
+- `verify/benchmarks/20260307T064648Z.json`
+  - DS-200 operational rerun
+  - `consistency_p95 = 1615.80ms`
+  - `retrieval_fts_p95 = 27.93ms`
+- `verify/benchmarks/20260307T061120Z.json`
+  - DS-400 operational rerun
+  - `consistency_p95 = 2067.48ms`
+  - `retrieval_fts_p95 = 28.26ms`
+- `verify/benchmarks/20260307T071917Z.json`
+  - DS-800 operational rerun 시도 1
+  - `index_fts = FAILED`
+- `verify/benchmarks/20260307T073717Z.json`
+  - DS-800 operational rerun 시도 2
+  - `index_fts = FAILED`
 - 운영 라벨 재계산 기준:
-  - `python tools/bench/summarize_latest_metrics.py --bench-dir verify/benchmarks --label-prefixes "operational-main:,operational-diversity-main:" --strict-label-filter`
-  - 이 관점에서는 DS-400 운영 기준이 아직 절대 목표 FAIL이다.
+  - `python tools/bench/summarize_latest_metrics.py --bench-dir verify/benchmarks --datasets "DS-200,DS-400,DS-800,DS-DIVERSE-200,DS-DIVERSE-400,DS-DIVERSE-800" --label-mode operational`
+  - 이 관점에서는 DS-200/400은 운영 기준 PASS로 복구됐고, DS-800 실패 artifact 2건은 summary에서 제외된다.
 
 ### 3.2 현재 운영 해석
 - final/summary/strict/soak의 “모든 의미”가 완전히 정렬된 상태는 아니다.
 - strict gate는 현재 `verification loop + triage + conservative unknown` 검증에 가깝다.
 - 운영 mainline absolute performance는 ad hoc artifact와 운영 라벨 artifact가 어긋나 있다.
+- 운영 summary는 현재 “latest successful artifact” 중심 해석이고, “latest attempt failed”를 dataset 표에서 직접 보여주지 않는다.
+- job 상태 일관성은 heartbeat 추가로 개선됐지만, 소유권 검증 없는 terminal 상태 전환은 여전히 별도 보강 대상이다.
 - graph는 “경로 존재”까지는 확인됐지만 “운영적으로 의미 있는 적용률”은 미달이다.
 
 ## 4) 활성 작업 원칙
@@ -89,6 +125,9 @@
 ### WS0. 즉시 수정 — SQLite lock retry 정확성 복구
 목적:
 - 현재 남아 있는 가장 명확한 코드 버그를 먼저 제거한다.
+
+상태:
+- `완료 (2026-03-07)`
 
 현재 근거:
 - `modules/nf_workers/runner.py`에 `_is_transient_sqlite_lock_error`가 중복 정의되어 있다.
@@ -113,12 +152,29 @@
 - 기존 `database is locked` retry 테스트와 함께 schema/table lock 테스트도 통과한다.
 - 코드 리뷰 기준 “중복 정의에 의한 런타임 의미 축소”가 사라진다.
 
+실행 메모:
+- 코드 수정:
+  - `modules/nf_workers/runner.py`
+    - 중복 `_is_transient_sqlite_lock_error` 정의 제거
+- 테스트 보강:
+  - `tests/test_nf_workers_consistency_payload.py`
+    - consistency retry 테스트를 3종 lock 메시지로 확장
+  - `tests/test_nf_workers_runner_memory_pressure_events.py`
+    - leasing retry 테스트를 3종 lock 메시지로 확장
+    - non-lock 예외가 retry 대상이 아님을 고정
+- 검증:
+  - `pytest -q tests/test_nf_workers_runner_memory_pressure_events.py tests/test_nf_workers_consistency_payload.py`
+  - 결과: `13 passed`
+
 우선순위:
 - `P0`
 
 ### WS1. 운영 기준선 정렬 — ad hoc 성능 개선을 operational gate로 승격
 목적:
 - DS-400 성능 개선이 실제 운영 summary/gate 경로에도 반영되도록 기준선을 정렬한다.
+
+상태:
+- `진행중 (1차 조치 완료, 운영 rerun 대기)`
 
 현재 근거:
 - `verify/benchmarks/20260307T022223Z.json`은 DS-400 `consistency_p95 <= 2500ms`를 달성했다.
@@ -142,17 +198,109 @@
 4. 기준선 승격 규칙 명문화
    - ad hoc 검증 artifact는 “보조 증거”
    - 운영 완료 판정은 운영 라벨 artifact 재생성 후에만 허용
+5. summary 의미 보강
+   - dataset별 `latest_successful_run`과 `latest_attempt_run`을 분리해 보이거나 동등한 정보를 제공한다.
+   - 실패 artifact를 baseline에서 제외하더라도, 마지막 시도 실패 자체는 숨기지 않는다.
+6. job 상태 불변성 보강
+   - success/failure/cancel 전환 시 `lease_owner` 또는 현재 상태를 함께 검증하는 compare-and-set 경로를 검토한다.
+   - terminal 상태 이후 역전이 가능한지 테스트로 고정한다.
+7. bench transport/front-door 안정화
+   - `RemoteDisconnected`를 재시도/관찰 가능한 오류 유형으로 분리한다.
+   - 최소한 실패 시 `attempt_stage`, `request_path`, `error_class`, `base_url`을 남기는 structured failure artifact를 추가한다.
 
 검증:
 1. 운영 라벨 summary에서 DS-400 `absolute_status` 재확인
 2. 운영 라벨 summary에서 `status_semantics`와 `absolute_goal_status`가 모두 존재하는지 확인
 3. strict/final gate 판독 순서와 해석이 문서와 일치하는지 확인
+4. 실패한 operational rerun이 summary에서 baseline 후보로 배제되면서도, “latest attempt failed” 사실은 별도 필드/문서에서 확인 가능한지 검증
+5. 장시간 job에서 lease 만료 후 상태 역전이 재발하지 않는지 검증
+6. `RemoteDisconnected` 재현 시 bench 쪽에 구조화된 실패 근거가 남는지 검증
 
 완료 기준:
 - 운영 라벨 기준 `latest_metrics_summary.json`이 stale artifact 없이 재생성된다.
 - DS-400 운영 artifact가 2500ms 이하이면 `absolute_goal_status`가 그에 맞게 갱신된다.
 - DS-400이 여전히 실패면, 실패 상태가 운영 산출물에 그대로 반영되고 계획 문서도 그 상태를 유지한다.
 - “운영 완료”와 “phase-only 완료”가 더 이상 혼동되지 않는다.
+- 실패 artifact 제외 정책이 “실패 숨김”으로 이어지지 않는다.
+- terminal 상태 역전 가능성이 테스트와 코드 양쪽에서 차단된다.
+- front-door transport 실패가 재현되면 최소한 bench artifact만으로 시도 단계와 오류 유형이 드러난다.
+
+실행 메모:
+- 도구 보강:
+  - `tools/bench/summarize_latest_metrics.py`
+    - `--label-mode operational` 추가
+    - label filter metadata에 `mode` / `note` 포함
+  - `tools/bench/run_user_delegated.ps1`
+    - summary generation이 hard-coded prefix 대신 operational preset을 사용하도록 정렬
+- 테스트:
+  - `tests/test_tools_bench_metrics_summary.py`
+    - operational label mode preset 동작 고정
+  - 결과: `5 passed`
+- 산출물 갱신:
+  - `verify/benchmarks/latest_metrics_summary.json`
+  - `verify/benchmarks/latest_metrics_summary.md`
+  - 현재 결과:
+    - `label_filter.mode = operational`
+    - 초기 재생성 시 모든 dataset이 `NO_BASELINE`
+- operational rerun:
+  - `verify/benchmarks/20260307T064648Z.json`
+  - DS-200:
+    - `consistency_p95 = 1615.80ms`
+    - `retrieval_fts_p95 = 27.93ms`
+    - summary 반영 후 `status = PASS`
+    - summary 반영 후 `absolute_status = PASS`
+    - previous operational baseline:
+      - `verify/benchmarks/20260306T153830Z.json`
+  - `verify/benchmarks/20260307T061120Z.json`
+  - DS-400:
+    - `consistency_p95 = 2067.48ms`
+    - `retrieval_fts_p95 = 28.26ms`
+    - summary 반영 후 `status = PASS`
+    - summary 반영 후 `absolute_status = PASS`
+    - previous operational baseline:
+      - `verify/benchmarks/20260306T153831Z.json`
+  - `verify/benchmarks/20260307T071917Z.json`
+  - `verify/benchmarks/20260307T073717Z.json`
+  - DS-800:
+    - 두 번 모두 `index_fts = FAILED`
+    - summary 후보에서 제외됨
+- DS-800 원인 분해:
+  - root DB 관찰:
+    - 실패 job의 최종 DB 상태는 `SUCCEEDED`인데 stale `error_code = INTERNAL_ERROR`, `error_message = database is locked`가 남아 있었음
+    - 동일 job에서 `failed` 뒤에 `fts indexed` / `done` 이벤트가 관찰되어 lease expiry 기반 중복 처리 가능성이 확인됨
+  - 대응 구현:
+    - `modules/nf_workers/runner.py`
+      - `WorkerContext.heartbeat()` 추가
+      - `INDEX_FTS` / `INDEX_VEC` long-running loop에서 lease 연장
+    - `modules/nf_orchestrator/storage/repos/job_repo.py`
+      - `SUCCEEDED`/`CANCELED` 전환 시 stale error 필드 제거
+    - `tools/bench/summarize_latest_metrics.py`
+      - 실패 artifact 제외
+  - 회귀 검증:
+    - `pytest -q tests/test_nf_workers_runner_memory_pressure_events.py tests/test_nf_orchestrator_storage.py tests/test_tools_bench_metrics_summary.py`
+    - 결과: `19 passed`
+- post-fix rerun:
+  - `8085` stack:
+    - `INDEX_VEC` 제출 시 `RemoteDisconnected`
+  - `8080` stack:
+    - project 생성 POST 단계에서 `RemoteDisconnected`
+  - 해석:
+    - lease expiry/stale error 경로는 보강됐으나, 현재 남은 DS-800 blocker는 API transport/orchestrator front-door 안정성 쪽이다.
+- rerun 후 canonical summary:
+  - `overall_status = WARN`
+  - `absolute_goal_status = FAIL`
+  - `label_filter.mode = operational`
+  - `label_filter.excluded_unsuccessful_status = 2`
+  - DS-200/400는 baseline 비교 가능 상태로 복구
+  - DS-800은 실패 artifact 배제 후 `NO_BASELINE`
+  - diversity 계열은 여전히 `NO_BASELINE`
+- 남은 작업:
+  - DS-800 `RemoteDisconnected` 원인 분해 및 operational baseline 복구
+  - `lease_owner` 검증 및 terminal state monotonicity 보강 여부 결정
+  - summary에 `latest_successful` / `latest_attempt` 분리 반영
+  - bench transport 실패 시 structured failure artifact 추가
+  - diversity operational baseline 복구 여부 결정 및 rerun
+  - strict/final gate도 같은 기준선으로 재생성
 
 우선순위:
 - `P0`
@@ -360,19 +508,17 @@
 - `P2`
 
 ## 6) 통합 실행 순서
-1. WS0
-   - 즉시 수정 가능한 코드 정확성 버그부터 닫는다.
-2. WS1
+1. WS1
    - 운영 기준선과 summary/gate 라인을 현재 코드 상태에 맞게 재정렬한다.
-3. WS2
+2. WS2
    - strict 의미를 core/layer3로 분리해 문서/게이트 해석을 고정한다.
-4. WS3
+3. WS3
    - graph의 “존재 확인”을 “적용률 관리”로 끌어올린다.
-5. WS4
+4. WS4
    - unknown/actionability를 계측 후 개선한다.
-6. WS5
+5. WS5
    - soak tail lock을 장기 안정성 기준으로 재검증한다.
-7. WS6
+6. WS6
    - runbook과 문서 용어를 정리해 운영 인수인계 가능한 상태로 마무리한다.
 
 ## 7) 실행 시 고정 규칙

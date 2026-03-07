@@ -72,9 +72,18 @@ def test_run_worker_emits_memory_pressure_pause_reason_with_cooldown(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("error_message",),
+    (
+        ("database is locked",),
+        ("database schema is locked: main",),
+        ("database table is locked",),
+    ),
+)
 def test_run_worker_retries_transient_sqlite_lock_during_leasing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    error_message: str,
 ) -> None:
     db_path = tmp_path / "orchestrator.db"
     with db.connect(db_path) as conn:
@@ -87,7 +96,7 @@ def test_run_worker_retries_transient_sqlite_lock_during_leasing(
     def flaky_connect(path=None):
         attempts["count"] += 1
         if attempts["count"] == 1:
-            raise sqlite3.OperationalError("database is locked")
+            raise sqlite3.OperationalError(error_message)
         return real_connect(path)
 
     monkeypatch.setattr(runner, "_memory_pressure", lambda _max_ram_mb: False)
@@ -102,3 +111,38 @@ def test_run_worker_retries_transient_sqlite_lock_during_leasing(
     assert loaded is not None
     assert loaded.status.name == "SUCCEEDED"
     assert attempts["count"] >= 2
+
+
+@pytest.mark.unit
+def test_transient_sqlite_lock_helper_rejects_non_lock_error() -> None:
+    assert runner._is_transient_sqlite_lock_error(sqlite3.OperationalError("disk I/O error")) is False
+
+
+@pytest.mark.unit
+def test_worker_context_heartbeat_extends_job_lease(tmp_path: Path) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    with db.connect(db_path) as conn:
+        project = project_repo.create_project(conn, "p", {})
+        job = job_repo.create_job(conn, project.project_id, JobType.INDEX_FTS, {"scope": "global"}, {})
+        job_repo.update_job_status(conn, job.job_id, runner.JobStatus.RUNNING)
+        job_repo.extend_lease(conn, job.job_id, lease_seconds=5)
+        before = conn.execute("select lease_expires_at from jobs where job_id = ?", (job.job_id,)).fetchone()["lease_expires_at"]
+
+    ctx = runner.WorkerContext(
+        job_id=job.job_id,
+        project_id=project.project_id,
+        payload={"scope": "global"},
+        params={},
+        db_path=db_path,
+        lease_seconds=30,
+    )
+
+    renewed = ctx.heartbeat(force=True)
+
+    with db.connect(db_path) as conn:
+        after = conn.execute("select lease_expires_at from jobs where job_id = ?", (job.job_id,)).fetchone()["lease_expires_at"]
+
+    assert renewed is True
+    assert isinstance(before, str)
+    assert isinstance(after, str)
+    assert after > before

@@ -12,6 +12,16 @@ from common import now_ts
 DEFAULT_DATASETS = ("DS-200", "DS-400", "DS-800")
 TARGET_METRICS = ("consistency_p95", "retrieval_fts_p95")
 _ABSOLUTE_CONSISTENCY_TARGET_MS = 2500.0
+_LABEL_MODE_OPERATIONAL = "operational"
+_LABEL_MODE_CUSTOM = "custom"
+_LABEL_MODE_ALL = "all_artifacts"
+_LABEL_FILTER_PRESETS: dict[str, dict[str, Any]] = {
+    _LABEL_MODE_OPERATIONAL: {
+        "prefixes": ("operational-main:", "operational-diversity-main:"),
+        "strict_label_filter": True,
+        "description": "Only operational mainline/diversity-main artifacts are eligible for trend baselines.",
+    }
+}
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -144,6 +154,55 @@ def _label_matches(bench_label: str, label_prefixes: tuple[str, ...]) -> bool:
     return False
 
 
+def _artifact_execution_failed(payload: dict[str, Any]) -> bool:
+    status = payload.get("status")
+    if not isinstance(status, dict):
+        return False
+    index_fts = str(status.get("index_fts") or "").strip().upper()
+    if index_fts and index_fts != "SUCCEEDED":
+        return True
+    index_vec = str(status.get("index_vec") or "").strip().upper()
+    if index_vec and index_vec != "SUCCEEDED":
+        return True
+    for key in ("ingest_failures", "consistency_failures", "retrieve_vec_failures"):
+        if key not in status:
+            continue
+        try:
+            if int(status.get(key) or 0) != 0:
+                return True
+        except (TypeError, ValueError):
+            return True
+    return False
+
+
+def _resolve_label_filter(
+    *,
+    label_mode: str | None,
+    label_prefixes: tuple[str, ...],
+    strict_label_filter: bool,
+) -> dict[str, Any]:
+    normalized_mode = str(label_mode or "").strip().lower()
+    preset = _LABEL_FILTER_PRESETS.get(normalized_mode)
+    resolved_prefixes = label_prefixes
+    resolved_strict = bool(strict_label_filter)
+    mode = _LABEL_MODE_CUSTOM if (resolved_prefixes or resolved_strict) else _LABEL_MODE_ALL
+    note = "Includes all benchmark artifacts matching the dataset selection."
+    if preset is not None:
+        if not resolved_prefixes:
+            resolved_prefixes = tuple(str(item) for item in preset.get("prefixes") or ())
+        resolved_strict = bool(resolved_strict or preset.get("strict_label_filter", False))
+        mode = normalized_mode
+        note = str(preset.get("description") or note)
+    elif mode == _LABEL_MODE_CUSTOM:
+        note = "Uses caller-specified label prefixes and/or strict unlabeled exclusion."
+    return {
+        "mode": mode,
+        "note": note,
+        "prefixes": resolved_prefixes,
+        "strict_label_filter": resolved_strict,
+    }
+
+
 def _dataset_summary(dataset_key: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     ordered = sorted(rows, key=lambda item: item["event_time"], reverse=True)
     latest = ordered[0] if ordered else None
@@ -224,14 +283,23 @@ def summarize_benchmarks(
     bench_dir: Path,
     *,
     datasets: tuple[str, ...] = DEFAULT_DATASETS,
+    label_mode: str | None = None,
     label_prefixes: tuple[str, ...] = (),
     strict_label_filter: bool = False,
 ) -> dict[str, Any]:
+    resolved_label_filter = _resolve_label_filter(
+        label_mode=label_mode,
+        label_prefixes=label_prefixes,
+        strict_label_filter=strict_label_filter,
+    )
+    resolved_prefixes = tuple(str(item) for item in resolved_label_filter["prefixes"])
+    resolved_strict = bool(resolved_label_filter["strict_label_filter"])
     rows_by_dataset: dict[str, list[dict[str, Any]]] = {dataset: [] for dataset in datasets}
     scanned_count = 0
     considered_count = 0
     excluded_unlabeled = 0
     excluded_prefix_mismatch = 0
+    excluded_unsuccessful_status = 0
     for path in sorted(bench_dir.glob("*.json")):
         if path.name.startswith(("soak_", "graphrag_probe_", "latest_metrics_summary", "consistency_strict_gate")):
             continue
@@ -242,11 +310,14 @@ def summarize_benchmarks(
         if not isinstance(payload.get("timings_ms"), dict):
             continue
         bench_label = str(payload.get("bench_label") or "").strip()
-        if strict_label_filter and not bench_label:
+        if resolved_strict and not bench_label:
             excluded_unlabeled += 1
             continue
-        if not _label_matches(bench_label, label_prefixes):
+        if not _label_matches(bench_label, resolved_prefixes):
             excluded_prefix_mismatch += 1
+            continue
+        if _artifact_execution_failed(payload):
+            excluded_unsuccessful_status += 1
             continue
         considered_count += 1
         dataset_key = _infer_dataset_key(payload)
@@ -312,12 +383,15 @@ def summarize_benchmarks(
             "absolute_goal_status_note": "Informational absolute goal view only. Release gating still comes from final gate report artifacts.",
         },
         "label_filter": {
-            "prefixes": list(label_prefixes),
-            "strict_label_filter": bool(strict_label_filter),
+            "mode": str(resolved_label_filter["mode"]),
+            "note": str(resolved_label_filter["note"]),
+            "prefixes": list(resolved_prefixes),
+            "strict_label_filter": bool(resolved_strict),
             "scanned_artifacts": scanned_count,
             "considered_artifacts": considered_count,
             "excluded_unlabeled": excluded_unlabeled,
             "excluded_prefix_mismatch": excluded_prefix_mismatch,
+            "excluded_unsuccessful_status": excluded_unsuccessful_status,
         },
         "rule_evaluation": {
             "hard_fail": hard_fail,
@@ -393,6 +467,7 @@ def main() -> int:
     parser.add_argument("--output-json", type=Path, default=Path("verify/benchmarks/latest_metrics_summary.json"))
     parser.add_argument("--output-md", type=Path, default=Path("verify/benchmarks/latest_metrics_summary.md"))
     parser.add_argument("--datasets", type=str, default="")
+    parser.add_argument("--label-mode", type=str, default="")
     parser.add_argument("--label-prefixes", type=str, default="")
     parser.add_argument("--strict-label-filter", action="store_true")
     args = parser.parse_args()
@@ -400,6 +475,7 @@ def main() -> int:
     summary = summarize_benchmarks(
         args.bench_dir,
         datasets=_parse_dataset_arg(args.datasets),
+        label_mode=args.label_mode,
         label_prefixes=_parse_label_prefixes(args.label_prefixes),
         strict_label_filter=bool(args.strict_label_filter),
     )

@@ -352,9 +352,18 @@ def test_consistency_payload_reports_layer3_capability_flags(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("error_message",),
+    (
+        ("database is locked",),
+        ("database schema is locked: main",),
+        ("database table is locked",),
+    ),
+)
 def test_consistency_worker_retries_transient_sqlite_lock(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    error_message: str,
 ) -> None:
     db_path = tmp_path / "orchestrator.db"
     project_id = "project-1"
@@ -377,7 +386,7 @@ def test_consistency_worker_retries_transient_sqlite_lock(
     def flaky_run(self, req):  # noqa: ANN001
         call_state["count"] += 1
         if call_state["count"] == 1:
-            raise sqlite3.OperationalError("database is locked")
+            raise sqlite3.OperationalError(error_message)
         stats = req.get("stats")
         assert isinstance(stats, dict)
         return []

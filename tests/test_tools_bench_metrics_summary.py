@@ -17,12 +17,14 @@ def _write_bench(
     retrieval_fts_p95: float,
     dataset_path: str | None = None,
     bench_label: str | None = None,
+    status: dict[str, object] | None = None,
 ) -> None:
     payload = {
         "doc_count": doc_count,
         "finished_at": finished_at,
         "dataset_path": dataset_path or f"verify/datasets/DS-GROWTH-{doc_count}.jsonl",
         "bench_label": bench_label or "",
+        "status": status or {},
         "timings_ms": {
             "consistency_p95": consistency_p95,
             "retrieval_fts_p95": retrieval_fts_p95,
@@ -206,6 +208,122 @@ def test_bench_latest_metrics_summary_label_filter_avoids_matrix_operational_mix
     assert filtered["datasets"]["DS-200"]["previous_file"] == "20260301T100000Z.json"
     assert filtered["datasets"]["DS-200"]["status"] == "PASS"
     assert filtered["overall_status"] == "PASS"
+
+
+@pytest.mark.unit
+def test_bench_latest_metrics_summary_operational_label_mode_applies_preset(tmp_path: Path) -> None:
+    bench_dir = tmp_path / "benchmarks"
+    bench_dir.mkdir(parents=True, exist_ok=True)
+
+    _write_bench(
+        bench_dir / "20260301T100000Z.json",
+        doc_count=400,
+        finished_at="2026-03-01T10:00:00Z",
+        consistency_p95=2400.0,
+        retrieval_fts_p95=80.0,
+        dataset_path="verify/datasets/DS-GROWTH-400.jsonl",
+        bench_label="operational-main:DS-400",
+    )
+    _write_bench(
+        bench_dir / "20260301T101000Z.json",
+        doc_count=400,
+        finished_at="2026-03-01T10:10:00Z",
+        consistency_p95=1900.0,
+        retrieval_fts_p95=70.0,
+        dataset_path="verify/datasets/DS-GROWTH-400.jsonl",
+        bench_label="matrix-DS400-run1-off",
+    )
+    _write_bench(
+        bench_dir / "20260301T102000Z.json",
+        doc_count=400,
+        finished_at="2026-03-01T10:20:00Z",
+        consistency_p95=2450.0,
+        retrieval_fts_p95=82.0,
+        dataset_path="verify/datasets/DS-GROWTH-400.jsonl",
+        bench_label="operational-main:DS-400",
+    )
+
+    bench_tools_dir = Path("tools/bench").resolve()
+    sys.path.insert(0, str(bench_tools_dir))
+    try:
+        summary_mod = importlib.import_module("summarize_latest_metrics")
+    finally:
+        if str(bench_tools_dir) in sys.path:
+            sys.path.remove(str(bench_tools_dir))
+
+    summary = summary_mod.summarize_benchmarks(
+        bench_dir,
+        datasets=("DS-400",),
+        label_mode="operational",
+    )
+    ds400 = summary["datasets"]["DS-400"]
+
+    assert ds400["latest_file"] == "20260301T102000Z.json"
+    assert ds400["previous_file"] == "20260301T100000Z.json"
+    assert ds400["status"] == "PASS"
+    assert ds400["absolute_status"] == "PASS"
+    assert summary["label_filter"]["mode"] == "operational"
+    assert summary["label_filter"]["strict_label_filter"] is True
+    assert summary["label_filter"]["prefixes"] == ["operational-main:", "operational-diversity-main:"]
+    assert summary["overall_status"] == "WARN"
+
+
+@pytest.mark.unit
+def test_bench_latest_metrics_summary_excludes_unsuccessful_pipeline_artifacts(tmp_path: Path) -> None:
+    bench_dir = tmp_path / "benchmarks"
+    bench_dir.mkdir(parents=True, exist_ok=True)
+
+    _write_bench(
+        bench_dir / "20260301T100000Z.json",
+        doc_count=800,
+        finished_at="2026-03-01T10:00:00Z",
+        consistency_p95=2200.0,
+        retrieval_fts_p95=60.0,
+        dataset_path="verify/datasets/DS-GROWTH-800.jsonl",
+        bench_label="operational-main:DS-800",
+        status={
+            "index_fts": "SUCCEEDED",
+            "index_vec": "SUCCEEDED",
+            "ingest_failures": 0,
+            "consistency_failures": 0,
+            "retrieve_vec_failures": 0,
+        },
+    )
+    _write_bench(
+        bench_dir / "20260301T101000Z.json",
+        doc_count=800,
+        finished_at="2026-03-01T10:10:00Z",
+        consistency_p95=1900.0,
+        retrieval_fts_p95=55.0,
+        dataset_path="verify/datasets/DS-GROWTH-800.jsonl",
+        bench_label="operational-main:DS-800",
+        status={
+            "index_fts": "FAILED",
+            "index_vec": "SUCCEEDED",
+            "ingest_failures": 0,
+            "consistency_failures": 0,
+            "retrieve_vec_failures": 0,
+        },
+    )
+
+    bench_tools_dir = Path("tools/bench").resolve()
+    sys.path.insert(0, str(bench_tools_dir))
+    try:
+        summary_mod = importlib.import_module("summarize_latest_metrics")
+    finally:
+        if str(bench_tools_dir) in sys.path:
+            sys.path.remove(str(bench_tools_dir))
+
+    summary = summary_mod.summarize_benchmarks(
+        bench_dir,
+        datasets=("DS-800",),
+        label_mode="operational",
+    )
+    ds800 = summary["datasets"]["DS-800"]
+
+    assert ds800["latest_file"] == "20260301T100000Z.json"
+    assert ds800["status"] == "NO_BASELINE"
+    assert summary["label_filter"]["excluded_unsuccessful_status"] == 1
 
 
 @pytest.mark.unit

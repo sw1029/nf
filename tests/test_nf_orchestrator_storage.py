@@ -72,6 +72,22 @@ def test_job_service_payload_roundtrip_and_retry_eligible_states(tmp_path: Path)
 
 
 @pytest.mark.unit
+def test_job_success_status_clears_stale_error_fields(tmp_path: Path) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    service = JobServiceImpl(db_path)
+    job = service.submit("project-1", JobType.INDEX_FTS, {"scope": "global"}, {})
+
+    with storage_db.connect(db_path) as conn:
+        job_repo.set_job_error(conn, job.job_id, error_code="INTERNAL_ERROR", error_message="database is locked")
+        updated = job_repo.update_job_status(conn, job.job_id, JobStatus.SUCCEEDED)
+
+    assert updated is not None
+    assert updated.status is JobStatus.SUCCEEDED
+    assert updated.error_code is None
+    assert updated.error_message is None
+
+
+@pytest.mark.unit
 def test_db_initializer_drops_redundant_verdict_evidence_index(tmp_path: Path) -> None:
     db_path = tmp_path / "orchestrator.db"
     with sqlite3.connect(db_path) as conn:

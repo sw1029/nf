@@ -78,6 +78,7 @@ from modules.nf_shared.protocol.dtos import (
 _MEMORY_PRESSURE_REASON_CODE = "PAUSED_DUE_TO_MEMORY_PRESSURE"
 _MEMORY_PRESSURE_EVENT_COOLDOWN_SEC = 15.0
 _MEMORY_PRESSURE_EVENT_SAMPLE_LIMIT = 12
+_LEASE_HEARTBEAT_INTERVAL_SEC = 10.0
 _CONSISTENCY_LOCK_RETRY_MAX_ATTEMPTS = 3
 _CONSISTENCY_LOCK_RETRY_BASE_SEC = 0.5
 _SQLITE_LOCK_RETRY_ATTEMPTS = 8
@@ -142,6 +143,7 @@ class WorkerContext:
         self._poll_interval = poll_interval
         self._lease_seconds = lease_seconds
         self._last_payload: dict[str, Any] | None = None
+        self._last_lease_heartbeat_mono = time.monotonic()
 
     def emit(self, event: JobEvent) -> None:
         if isinstance(event.payload, dict):
@@ -163,6 +165,7 @@ class WorkerContext:
             _action,
             poll_interval=self._poll_interval,
         )
+        self._last_lease_heartbeat_mono = time.monotonic()
 
     def check_cancelled(self) -> bool:
         return _run_db_action_with_retry(
@@ -170,6 +173,18 @@ class WorkerContext:
             lambda conn: job_repo.is_cancel_requested(conn, self.job_id),
             poll_interval=self._poll_interval,
         )
+
+    def heartbeat(self, *, force: bool = False) -> bool:
+        now_mono = time.monotonic()
+        if not force and (now_mono - self._last_lease_heartbeat_mono) < _LEASE_HEARTBEAT_INTERVAL_SEC:
+            return False
+        _run_db_action_with_retry(
+            self._db_path,
+            lambda conn: job_repo.extend_lease(conn, self.job_id, lease_seconds=self._lease_seconds),
+            poll_interval=self._poll_interval,
+        )
+        self._last_lease_heartbeat_mono = time.monotonic()
+        return True
 
     def result_payload(self) -> dict[str, Any] | None:
         return dict(self._last_payload) if isinstance(self._last_payload, dict) else None
@@ -346,11 +361,6 @@ def _estimate_index_mb(text: str, chunk_count: int) -> float:
 
 def _elapsed_ms(start_perf: float) -> int:
     return max(0, int((time.perf_counter() - start_perf) * 1000))
-
-
-def _is_transient_sqlite_lock_error(exc: Exception) -> bool:
-    return isinstance(exc, sqlite3.OperationalError) and "database is locked" in str(exc).lower()
-
 
 def _standard_metrics_payload(
     *,
@@ -1190,6 +1200,7 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
         for doc in docs:
             if doc is None:
                 continue
+            ctx.heartbeat()
             if snapshot_id:
                 snapshot = document_repo.get_snapshot(conn, snapshot_id)
             else:
@@ -1291,6 +1302,7 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                         anchors_created += 1
             conn.commit()
         if graph_extract:
+            ctx.heartbeat(force=True)
             try:
                 graph_doc = materialize_project_graph(conn, ctx.project_id)
                 graph_index_meta = {
@@ -2190,6 +2202,7 @@ def _handle_index_vec(ctx: WorkerContext) -> None:
         for doc in docs:
             if doc is None:
                 continue
+            ctx.heartbeat()
             snapshot = document_repo.get_snapshot(conn, doc.head_snapshot_id)
             if snapshot is None:
                 continue
