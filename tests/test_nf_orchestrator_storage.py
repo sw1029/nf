@@ -92,3 +92,42 @@ def test_db_initializer_drops_redundant_verdict_evidence_index(tmp_path: Path) -
         rows = conn.execute("PRAGMA index_list('verdict_evidence_link')").fetchall()
         indexes = {str(row["name"]) for row in rows}
     assert "idx_verdict_evidence_vid" not in indexes
+
+
+@pytest.mark.unit
+def test_db_initializer_sets_user_version_and_backfills_missing_columns(tmp_path: Path) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE jobs (
+                job_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                queued_at TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                inputs_json TEXT,
+                params_json TEXT,
+                cancel_requested INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.commit()
+
+    with storage_db.connect(db_path) as conn:
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        job_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+
+    assert version >= 1
+    assert {"priority", "lease_owner", "lease_expires_at", "attempts", "max_attempts", "error_code"} <= job_columns
+
+
+@pytest.mark.unit
+def test_db_connect_applies_extended_busy_timeout(tmp_path: Path) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    with storage_db.connect(db_path) as conn:
+        busy_timeout = int(conn.execute("PRAGMA busy_timeout").fetchone()[0])
+    assert busy_timeout == 30000

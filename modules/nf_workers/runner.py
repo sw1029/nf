@@ -8,7 +8,7 @@ import sys
 import time
 import uuid
 from dataclasses import asdict, replace
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 try:
     import resource  # type: ignore
@@ -78,10 +78,48 @@ from modules.nf_shared.protocol.dtos import (
 _MEMORY_PRESSURE_REASON_CODE = "PAUSED_DUE_TO_MEMORY_PRESSURE"
 _MEMORY_PRESSURE_EVENT_COOLDOWN_SEC = 15.0
 _MEMORY_PRESSURE_EVENT_SAMPLE_LIMIT = 12
+_CONSISTENCY_LOCK_RETRY_MAX_ATTEMPTS = 3
+_CONSISTENCY_LOCK_RETRY_BASE_SEC = 0.5
+_SQLITE_LOCK_RETRY_ATTEMPTS = 8
+_SQLITE_LOCK_ERROR_TOKENS = (
+    "database is locked",
+    "database schema is locked",
+    "database table is locked",
+)
+_T = TypeVar("_T")
 
 
 class CancelledError(RuntimeError):
     pass
+
+
+def _is_transient_sqlite_lock_error(exc: sqlite3.OperationalError) -> bool:
+    message = str(exc).strip().lower()
+    return any(token in message for token in _SQLITE_LOCK_ERROR_TOKENS)
+
+
+def _sqlite_retry_delay(poll_interval: float, attempt: int) -> float:
+    base = max(0.05, float(poll_interval))
+    return min(1.0, base * max(1, attempt))
+
+
+def _run_db_action_with_retry(
+    db_path,
+    action: Callable[[sqlite3.Connection], _T],
+    *,
+    poll_interval: float,
+    max_attempts: int = _SQLITE_LOCK_RETRY_ATTEMPTS,
+) -> _T:
+    attempt = 0
+    while True:
+        try:
+            with db.connect(db_path) as conn:
+                return action(conn)
+        except sqlite3.OperationalError as exc:
+            if (not _is_transient_sqlite_lock_error(exc)) or attempt >= max_attempts - 1:
+                raise
+            attempt += 1
+            time.sleep(_sqlite_retry_delay(poll_interval, attempt))
 
 
 class WorkerContext:
@@ -93,6 +131,7 @@ class WorkerContext:
         payload: dict[str, Any],
         params: dict[str, Any],
         db_path=None,
+        poll_interval: float = 1.0,
         lease_seconds: int = 30,
     ) -> None:
         self.job_id = job_id
@@ -100,13 +139,14 @@ class WorkerContext:
         self.payload = payload
         self.params = params
         self._db_path = db_path
+        self._poll_interval = poll_interval
         self._lease_seconds = lease_seconds
         self._last_payload: dict[str, Any] | None = None
 
     def emit(self, event: JobEvent) -> None:
         if isinstance(event.payload, dict):
             self._last_payload = dict(event.payload)
-        with db.connect(self._db_path) as conn:
+        def _action(conn: sqlite3.Connection) -> None:
             job_repo.add_job_event(
                 conn,
                 self.job_id,
@@ -118,9 +158,18 @@ class WorkerContext:
             )
             job_repo.extend_lease(conn, self.job_id, lease_seconds=self._lease_seconds)
 
+        _run_db_action_with_retry(
+            self._db_path,
+            _action,
+            poll_interval=self._poll_interval,
+        )
+
     def check_cancelled(self) -> bool:
-        with db.connect(self._db_path) as conn:
-            return job_repo.is_cancel_requested(conn, self.job_id)
+        return _run_db_action_with_retry(
+            self._db_path,
+            lambda conn: job_repo.is_cancel_requested(conn, self.job_id),
+            poll_interval=self._poll_interval,
+        )
 
     def result_payload(self) -> dict[str, Any] | None:
         return dict(self._last_payload) if isinstance(self._last_payload, dict) else None
@@ -179,15 +228,21 @@ def run_worker(
                 pass
             time.sleep(poll_interval)
             continue
-        with db.connect(db_path) as conn:
+        def _lease(conn: sqlite3.Connection):
             allow_heavy = job_repo.count_running_jobs(conn, heavy_types) < max_heavy_jobs
             deny = None if allow_heavy else heavy_types
-            leased = job_repo.lease_next_job(
+            return job_repo.lease_next_job(
                 conn,
                 worker_id=worker_id,
                 lease_seconds=lease_seconds,
                 deny_job_types=deny,
             )
+
+        leased = _run_db_action_with_retry(
+            db_path,
+            _lease,
+            poll_interval=poll_interval,
+        )
 
         if leased is None:
             time.sleep(poll_interval)
@@ -199,6 +254,7 @@ def run_worker(
                 payload=inputs,
                 params=params,
                 db_path=db_path,
+                poll_interval=poll_interval,
                 lease_seconds=lease_seconds,
             )
             try:
@@ -213,9 +269,14 @@ def run_worker(
                     )
                 )
                 _run_job(job.type, ctx)
-                with db.connect(db_path) as conn:
+                def _mark_succeeded(conn: sqlite3.Connection) -> None:
                     job_repo.set_job_result(conn, job.job_id, result=ctx.result_payload())
                     job_repo.update_job_status(conn, job.job_id, JobStatus.SUCCEEDED)
+                _run_db_action_with_retry(
+                    db_path,
+                    _mark_succeeded,
+                    poll_interval=poll_interval,
+                )
                 ctx.emit(
                     JobEvent(
                         event_id="",
@@ -227,9 +288,14 @@ def run_worker(
                     )
                 )
             except CancelledError:
-                with db.connect(db_path) as conn:
+                def _mark_canceled(conn: sqlite3.Connection) -> None:
                     job_repo.set_job_result(conn, job.job_id, result=None)
                     job_repo.update_job_status(conn, job.job_id, JobStatus.CANCELED)
+                _run_db_action_with_retry(
+                    db_path,
+                    _mark_canceled,
+                    poll_interval=poll_interval,
+                )
                 ctx.emit(
                     JobEvent(
                         event_id="",
@@ -241,10 +307,15 @@ def run_worker(
                     )
                 )
             except Exception as exc:  # noqa: BLE001
-                with db.connect(db_path) as conn:
+                def _mark_failed(conn: sqlite3.Connection) -> None:
                     job_repo.set_job_result(conn, job.job_id, result=None)
                     job_repo.set_job_error(conn, job.job_id, error_code="INTERNAL_ERROR", error_message=str(exc))
                     job_repo.update_job_status(conn, job.job_id, JobStatus.FAILED)
+                _run_db_action_with_retry(
+                    db_path,
+                    _mark_failed,
+                    poll_interval=poll_interval,
+                )
                 ctx.emit(
                     JobEvent(
                         event_id="",
@@ -275,6 +346,10 @@ def _estimate_index_mb(text: str, chunk_count: int) -> float:
 
 def _elapsed_ms(start_perf: float) -> int:
     return max(0, int((time.perf_counter() - start_perf) * 1000))
+
+
+def _is_transient_sqlite_lock_error(exc: Exception) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and "database is locked" in str(exc).lower()
 
 
 def _standard_metrics_payload(
@@ -1566,9 +1641,40 @@ def _handle_consistency(ctx: WorkerContext) -> None:
         if isinstance(metadata_grouping_enabled, bool):
             req["metadata_grouping_enabled"] = metadata_grouping_enabled
     req.setdefault("metadata_grouping_enabled", metadata_grouping_enabled_for_preflight)
+    verdicts = []
     req_stats: dict[str, Any] = {}
-    req["stats"] = req_stats
-    verdicts = engine.run(req)
+    last_lock_error: Exception | None = None
+    for attempt_idx in range(_CONSISTENCY_LOCK_RETRY_MAX_ATTEMPTS):
+        req_stats = {}
+        req["stats"] = req_stats
+        try:
+            verdicts = engine.run(req)
+            last_lock_error = None
+            break
+        except Exception as exc:  # noqa: BLE001
+            if not _is_transient_sqlite_lock_error(exc) or attempt_idx >= (_CONSISTENCY_LOCK_RETRY_MAX_ATTEMPTS - 1):
+                raise
+            last_lock_error = exc
+            backoff_sec = _CONSISTENCY_LOCK_RETRY_BASE_SEC * float(attempt_idx + 1)
+            ctx.emit(
+                JobEvent(
+                    event_id="",
+                    job_id=ctx.job_id,
+                    ts="",
+                    level=JobEventLevel.WARN,
+                    message="consistency transient sqlite lock retry",
+                    progress=None,
+                    payload={
+                        "attempt": int(attempt_idx + 1),
+                        "max_attempts": int(_CONSISTENCY_LOCK_RETRY_MAX_ATTEMPTS),
+                        "backoff_sec": float(backoff_sec),
+                        "error": str(exc),
+                    },
+                )
+            )
+            time.sleep(backoff_sec)
+    if last_lock_error is not None and not verdicts:
+        raise last_lock_error
     total = len(verdicts)
     violates = len([v for v in verdicts if v.verdict is Verdict.VIOLATE])
     unknowns = len([v for v in verdicts if v.verdict is Verdict.UNKNOWN])
@@ -1604,12 +1710,55 @@ def _handle_consistency(ctx: WorkerContext) -> None:
                 "confirmed_overlap_rejected_count": int(req_stats.get("confirmed_overlap_rejected_count", 0)),
                 "layer3_rerank_applied_count": int(req_stats.get("layer3_rerank_applied_count", 0)),
                 "layer3_model_fallback_count": int(req_stats.get("layer3_model_fallback_count", 0)),
+                "layer3_model_enabled": bool(req_stats.get("layer3_model_enabled", False)),
+                "layer3_local_nli_enabled": bool(req_stats.get("layer3_local_nli_enabled", False)),
+                "layer3_local_reranker_enabled": bool(req_stats.get("layer3_local_reranker_enabled", False)),
+                "layer3_remote_api_enabled": bool(req_stats.get("layer3_remote_api_enabled", False)),
+                "layer3_nli_capable": bool(req_stats.get("layer3_nli_capable", False)),
+                "layer3_reranker_capable": bool(req_stats.get("layer3_reranker_capable", False)),
+                "layer3_effective_capable": bool(req_stats.get("layer3_effective_capable", False)),
+                "layer3_promotion_enabled": bool(req_stats.get("layer3_promotion_enabled", False)),
+                "layer3_inactive_reasons": list(req_stats.get("layer3_inactive_reasons", []))
+                if isinstance(req_stats.get("layer3_inactive_reasons"), list)
+                else [],
                 "verification_loop_trigger_count": int(req_stats.get("verification_loop_trigger_count", 0)),
+                "verification_loop_attempted_rounds_total": int(
+                    req_stats.get("verification_loop_attempted_rounds_total", 0)
+                ),
                 "verification_loop_rounds_total": int(req_stats.get("verification_loop_rounds_total", 0)),
                 "verification_loop_timeout_count": int(req_stats.get("verification_loop_timeout_count", 0)),
                 "verification_loop_stagnation_break_count": int(
                     req_stats.get("verification_loop_stagnation_break_count", 0)
                 ),
+                "verification_loop_round_elapsed_ms_sum": float(
+                    req_stats.get("verification_loop_round_elapsed_ms_sum", 0.0)
+                ),
+                "verification_loop_round_elapsed_ms_max": float(
+                    req_stats.get("verification_loop_round_elapsed_ms_max", 0.0)
+                ),
+                "verification_loop_round_elapsed_ms_samples": list(
+                    req_stats.get("verification_loop_round_elapsed_ms_samples", [])
+                )
+                if isinstance(req_stats.get("verification_loop_round_elapsed_ms_samples"), list)
+                else [],
+                "verification_loop_candidate_growth_total": int(
+                    req_stats.get("verification_loop_candidate_growth_total", 0)
+                ),
+                "verification_loop_candidate_growth_samples": list(
+                    req_stats.get("verification_loop_candidate_growth_samples", [])
+                )
+                if isinstance(req_stats.get("verification_loop_candidate_growth_samples"), list)
+                else [],
+                "verification_loop_exit_reason_counts": dict(
+                    req_stats.get("verification_loop_exit_reason_counts", {})
+                )
+                if isinstance(req_stats.get("verification_loop_exit_reason_counts"), dict)
+                else {},
+                "verification_loop_reason_transition_counts": dict(
+                    req_stats.get("verification_loop_reason_transition_counts", {})
+                )
+                if isinstance(req_stats.get("verification_loop_reason_transition_counts"), dict)
+                else {},
                 "self_evidence_filtered_count": int(req_stats.get("self_evidence_filtered_count", 0)),
                 "layer3_promoted_ok_count": int(req_stats.get("layer3_promoted_ok_count", 0)),
                 **_standard_metrics_payload(

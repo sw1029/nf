@@ -10,6 +10,7 @@ from modules.nf_retrieval.graph.materialized import build_project_graph, load_pr
 _SEED_WEIGHT_FILTER = 1.0
 _SEED_WEIGHT_ALIAS = 0.7
 _SEED_WEIGHT_TERM = 0.45
+_SEED_WEIGHT_TIME = 0.5
 _HOP_BOOST_DECAY = {1: 1.0, 2: 0.5}
 _WORD_BOUNDARY_RE = re.compile(r"[0-9A-Za-z\uac00-\ud7a3]+")
 _SHORT_ALIAS_SUFFIXES = {
@@ -94,6 +95,19 @@ def _apply_seed_weight(target: dict[str, float], doc_ids: list[str], weight: flo
             target[doc_id] = weight
 
 
+def _time_signal_variants(time_key: str) -> list[str]:
+    normalized = _normalize_query(time_key)
+    if not normalized:
+        return []
+    variants: list[str] = [normalized]
+    marker = "/rel:"
+    if marker in normalized:
+        rel = normalized.split(marker, 1)[1].strip()
+        if rel and rel not in variants:
+            variants.append(rel)
+    return variants
+
+
 def _collect_seed_doc_weights(graph: dict[str, Any], query: str, filters: dict[str, Any]) -> dict[str, float]:
     seed_doc_weights: dict[str, float] = {}
     entity_doc_ids = graph.get("entity_doc_ids") or {}
@@ -136,6 +150,12 @@ def _collect_seed_doc_weights(graph: dict[str, Any], query: str, filters: dict[s
         for term in _as_str_list(terms):
             if _matches_signal(query_norm, query_tokens, term):
                 _apply_seed_weight(seed_doc_weights, _as_str_list(entity_doc_ids.get(key)), _SEED_WEIGHT_TERM)
+                break
+
+    for time_key_value, doc_ids in time_doc_ids.items():
+        for signal in _time_signal_variants(str(time_key_value)):
+            if _matches_signal(query_norm, query_tokens, signal):
+                _apply_seed_weight(seed_doc_weights, _as_str_list(doc_ids), _SEED_WEIGHT_TIME)
                 break
 
     return seed_doc_weights

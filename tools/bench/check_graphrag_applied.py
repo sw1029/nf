@@ -230,6 +230,39 @@ def _build_probe_query(filters: dict[str, Any]) -> str:
     return "graph probe"
 
 
+def _summarize_probe_context(
+    *,
+    initial_filters_count: int,
+    final_filters_count: int,
+    bootstrap: dict[str, Any] | None,
+    probe_count: int,
+    applied_count: int,
+    require_applied: bool,
+) -> dict[str, Any]:
+    bootstrap_used = bootstrap is not None
+    bootstrap_status = str((bootstrap or {}).get("status") or "")
+    bootstrap_succeeded = bootstrap_status == "SUCCEEDED"
+    normal_path_ready = initial_filters_count > 0
+    if normal_path_ready:
+        validation_mode = "normal_path"
+    elif bootstrap_used and bootstrap_succeeded and final_filters_count > 0:
+        validation_mode = "bootstrap_assisted"
+    else:
+        validation_mode = "no_grouping"
+    return {
+        "probe_count": int(probe_count),
+        "applied_count": int(applied_count),
+        "require_applied": bool(require_applied),
+        "normal_path_filter_count": int(initial_filters_count),
+        "final_filter_count": int(final_filters_count),
+        "normal_path_ready": bool(normal_path_ready),
+        "bootstrap_used": bool(bootstrap_used),
+        "bootstrap_status": bootstrap_status,
+        "bootstrap_succeeded": bool(bootstrap_succeeded),
+        "validation_mode": validation_mode,
+    }
+
+
 def _compact_text(text: str, *, limit: int = 140) -> str:
     compact = " ".join((text or "").split())
     if len(compact) <= limit:
@@ -329,6 +362,23 @@ def _bootstrap_grouping(
     return {"job_id": job_id, "status": status, "payload": step_payload}
 
 
+def _raise_jobs_submit_context(
+    *,
+    stage: str,
+    exc: RuntimeError,
+    project_id: str,
+    base_url: str,
+    db_path: Path,
+) -> None:
+    message = str(exc)
+    if "HTTP 404 /jobs" in message:
+        raise SystemExit(
+            f"{stage} failed: {message} "
+            f"(hint: artifact-origin stack mismatch; project_id={project_id} base_url={base_url} db_path={db_path})"
+        ) from exc
+    raise exc
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Probe GraphRAG applied path using metadata filters.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8085")
@@ -367,13 +417,31 @@ def main() -> int:
 
     bootstrap: dict[str, Any] | None = None
     filters_list = _discover_filters(db_path, project_id, max_filters=args.max_probes)
+    initial_filters_count = len(filters_list)
     initial_counts = _collect_grouping_counts(db_path, project_id)
     final_counts = dict(initial_counts)
     if not filters_list and args.bootstrap_grouping_if_empty:
-        bootstrap = _bootstrap_grouping(client=ApiClient(args.base_url), project_id=project_id)
+        try:
+            bootstrap = _bootstrap_grouping(client=ApiClient(args.base_url), project_id=project_id)
+        except RuntimeError as exc:
+            _raise_jobs_submit_context(
+                stage="bootstrap_grouping",
+                exc=exc,
+                project_id=project_id,
+                base_url=args.base_url,
+                db_path=db_path,
+            )
         final_counts = _collect_grouping_counts(db_path, project_id)
         filters_list = _discover_filters(db_path, project_id, max_filters=args.max_probes)
     if not filters_list:
+        summary = _summarize_probe_context(
+            initial_filters_count=initial_filters_count,
+            final_filters_count=0,
+            bootstrap=bootstrap,
+            probe_count=0,
+            applied_count=0,
+            require_applied=bool(args.require_applied),
+        )
         result = {
             "ok": False,
             "project_id": project_id,
@@ -381,7 +449,7 @@ def main() -> int:
             "bootstrap": bootstrap,
             "counts": {"before": initial_counts, "after": final_counts},
             "probes": [],
-            "summary": {"probe_count": 0, "applied_count": 0},
+            "summary": summary,
         }
         print(json.dumps(result, ensure_ascii=False))
         return 2 if args.require_applied else 0
@@ -408,7 +476,16 @@ def main() -> int:
                 }
             },
         }
-        created = client.post("/jobs", payload)
+        try:
+            created = client.post("/jobs", payload)
+        except RuntimeError as exc:
+            _raise_jobs_submit_context(
+                stage=f"probe#{idx}_submit",
+                exc=exc,
+                project_id=project_id,
+                base_url=args.base_url,
+                db_path=db_path,
+            )
         job_id = str((created.get("job") or {}).get("job_id") or "")
         if not job_id:
             probes.append(
@@ -451,6 +528,14 @@ def main() -> int:
     out_json = out_dir / f"graphrag_probe_{stamp}.json"
     out_md = out_dir / f"graphrag_probe_{stamp}.md"
 
+    summary = _summarize_probe_context(
+        initial_filters_count=initial_filters_count,
+        final_filters_count=len(filters_list),
+        bootstrap=bootstrap,
+        probe_count=len(probes),
+        applied_count=applied_count,
+        require_applied=bool(args.require_applied),
+    )
     result = {
         "ok": applied_count > 0,
         "checked_at": now_ts(),
@@ -459,11 +544,7 @@ def main() -> int:
         "project_id": project_id,
         "bootstrap": bootstrap,
         "counts": {"before": initial_counts, "after": final_counts},
-        "summary": {
-            "probe_count": len(probes),
-            "applied_count": applied_count,
-            "require_applied": bool(args.require_applied),
-        },
+        "summary": summary,
         "probes": probes,
     }
     out_json.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -474,6 +555,12 @@ def main() -> int:
         f"- probe_count: `{len(probes)}`",
         f"- applied_count: `{applied_count}`",
         f"- require_applied: `{bool(args.require_applied)}`",
+        f"- validation_mode: `{summary['validation_mode']}`",
+        f"- normal_path_ready: `{summary['normal_path_ready']}`",
+        f"- normal_path_filter_count: `{summary['normal_path_filter_count']}`",
+        f"- final_filter_count: `{summary['final_filter_count']}`",
+        f"- bootstrap_used: `{summary['bootstrap_used']}`",
+        f"- bootstrap_status: `{summary['bootstrap_status']}`",
         f"- counts(before): `{initial_counts}`",
         f"- counts(after): `{final_counts}`",
         f"- bootstrap: `{bootstrap}`",

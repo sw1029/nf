@@ -268,3 +268,42 @@ def test_graph_rerank_prefers_filter_seed_weight(tmp_path: Path) -> None:
     assert float(weights.get("doc-filter", 0.0)) > float(weights.get("doc-alias", 0.0))
     score_by_doc = {item["evidence"]["doc_id"]: float(item.get("score", 0.0)) for item in reranked}
     assert score_by_doc["doc-filter"] - 0.35 > score_by_doc["doc-alias"] - 0.42
+
+
+@pytest.mark.unit
+def test_graph_rerank_can_seed_from_time_key_rel_phrase_without_filters(tmp_path: Path) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+
+    with db.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO time_anchor (
+                anchor_id, project_id, doc_id, snapshot_id, span_start, span_end,
+                time_key, timeline_idx, status, created_by, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (str(uuid.uuid4()), project_id, "doc-time", "snap-time", 0, 5, "episode:3/scene:1/rel:그날", 1, "APPROVED", "AUTO", _ts()),
+        )
+        conn.commit()
+
+        results = [
+            {"source": "vector", "score": 0.40, "evidence": {"doc_id": "doc-other", "span_start": 0, "span_end": 10}},
+            {"source": "vector", "score": 0.20, "evidence": {"doc_id": "doc-time", "span_start": 0, "span_end": 10}},
+        ]
+        reranked, meta = rerank_results_with_graph(
+            conn,
+            project_id=project_id,
+            query="그날 무슨 일이 있었나",
+            results=results,
+            filters={},
+            max_hops=1,
+            rerank_weight=0.30,
+        )
+
+    assert meta["applied"] is True
+    weights = meta.get("seed_doc_weights")
+    assert isinstance(weights, dict)
+    assert float(weights.get("doc-time", 0.0)) > 0.0
+    assert reranked[0]["evidence"]["doc_id"] == "doc-time"

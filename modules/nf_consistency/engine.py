@@ -67,6 +67,7 @@ _DEFAULT_TRIAGE_MAX_SEGMENTS_PER_RUN = 8
 _DEFAULT_VERIFICATION_LOOP_ENABLED = False
 _DEFAULT_VERIFICATION_LOOP_MAX_ROUNDS = 2
 _DEFAULT_VERIFICATION_LOOP_ROUND_TIMEOUT_MS = 250
+_DEFAULT_VERIFICATION_LOOP_SAMPLE_CAP = 64
 _DEFAULT_CLAIM_CONFIDENCE_MIN = 0.20
 _DEFAULT_GRAPH_MODE = "off"
 _DEFAULT_EPISODE_SCOPE_WINDOW = 10
@@ -1853,6 +1854,65 @@ def _add_unknown_reasons(req_stats: dict[str, Any] | None, reasons: set[str]) ->
     req_stats["unknown_reason_counts"] = bucket_raw
 
 
+def _increment_stat_counter(req_stats: dict[str, Any] | None, key: str, name: str, amount: int = 1) -> None:
+    if req_stats is None or not key or not name:
+        return
+    bucket_raw = req_stats.get(key)
+    if not isinstance(bucket_raw, dict):
+        bucket_raw = {}
+    bucket_raw[name] = int(bucket_raw.get(name, 0)) + int(amount)
+    req_stats[key] = bucket_raw
+
+
+def _append_stat_sample(
+    req_stats: dict[str, Any] | None,
+    key: str,
+    value: float | int,
+    *,
+    limit: int = _DEFAULT_VERIFICATION_LOOP_SAMPLE_CAP,
+) -> None:
+    if req_stats is None or not key:
+        return
+    bucket_raw = req_stats.get(key)
+    if not isinstance(bucket_raw, list):
+        bucket_raw = []
+    if len(bucket_raw) >= max(1, int(limit)):
+        return
+    bucket_raw.append(value)
+    req_stats[key] = bucket_raw
+
+
+def _unknown_reason_signature(reasons: set[str] | tuple[str, ...] | list[str]) -> str:
+    if not reasons:
+        return "<none>"
+    ordered = sorted(str(item) for item in reasons if isinstance(item, str) and item)
+    return "|".join(ordered) if ordered else "<none>"
+
+
+def _resolve_layer3_inactive_reasons(
+    *,
+    settings: Any,
+    verifier_mode: str,
+    layer3_promotion_enabled: bool,
+) -> list[str]:
+    reasons: list[str] = []
+    layer3_model_enabled = bool(getattr(settings, "enable_layer3_model", False))
+    local_nli_enabled = bool(getattr(settings, "enable_local_nli", False))
+    local_reranker_enabled = bool(getattr(settings, "enable_local_reranker", False))
+    remote_api_enabled = bool(getattr(settings, "enable_remote_api", False))
+    nli_capable = bool(layer3_model_enabled and (local_nli_enabled or remote_api_enabled))
+    reranker_capable = bool(layer3_model_enabled and local_reranker_enabled)
+    if not layer3_model_enabled:
+        reasons.append("GLOBAL_LAYER3_MODEL_DISABLED")
+    if verifier_mode == "conservative_nli" and not nli_capable:
+        reasons.append("STRICT_VERIFIER_NLI_UNAVAILABLE")
+    if layer3_promotion_enabled and not nli_capable:
+        reasons.append("LAYER3_PROMOTION_NLI_UNAVAILABLE")
+    if not reranker_capable:
+        reasons.append("LOCAL_RERANKER_DISABLED")
+    return reasons
+
+
 class ConsistencyEngineImpl:
     def __init__(self, *, db_path=None) -> None:
         self._db_path = db_path
@@ -1920,12 +1980,21 @@ class ConsistencyEngineImpl:
             req_stats.setdefault("layer3_promoted_ok_count", 0)
             req_stats.setdefault("layer3_rerank_applied_count", 0)
             req_stats.setdefault("layer3_model_fallback_count", 0)
+            req_stats.setdefault("layer3_inactive_reasons", [])
             req_stats.setdefault("claims_skipped_low_confidence", 0)
             req_stats.setdefault("triage_skipped_claims", 0)
             req_stats.setdefault("verification_loop_trigger_count", 0)
+            req_stats.setdefault("verification_loop_attempted_rounds_total", 0)
             req_stats.setdefault("verification_loop_rounds_total", 0)
             req_stats.setdefault("verification_loop_timeout_count", 0)
             req_stats.setdefault("verification_loop_stagnation_break_count", 0)
+            req_stats.setdefault("verification_loop_round_elapsed_ms_sum", 0.0)
+            req_stats.setdefault("verification_loop_round_elapsed_ms_max", 0.0)
+            req_stats.setdefault("verification_loop_round_elapsed_ms_samples", [])
+            req_stats.setdefault("verification_loop_candidate_growth_total", 0)
+            req_stats.setdefault("verification_loop_candidate_growth_samples", [])
+            req_stats.setdefault("verification_loop_exit_reason_counts", {})
+            req_stats.setdefault("verification_loop_reason_transition_counts", {})
             req_stats.setdefault("entity_unresolved_skip_count", 0)
             req_stats.setdefault("numeric_conflict_unknown_count", 0)
             req_stats.setdefault("confirmed_overlap_rejected_count", 0)
@@ -1993,6 +2062,18 @@ class ConsistencyEngineImpl:
 
             settings = load_config()
             gateway = select_model(purpose="consistency")
+            layer3_model_enabled = bool(settings.enable_layer3_model)
+            layer3_local_nli_enabled = bool(settings.enable_local_nli)
+            layer3_local_reranker_enabled = bool(settings.enable_local_reranker)
+            layer3_remote_api_enabled = bool(settings.enable_remote_api)
+            layer3_nli_capable = bool(layer3_model_enabled and (layer3_local_nli_enabled or layer3_remote_api_enabled))
+            layer3_reranker_capable = bool(layer3_model_enabled and layer3_local_reranker_enabled)
+            layer3_effective_capable = bool(layer3_nli_capable or layer3_reranker_capable)
+            layer3_inactive_reasons = _resolve_layer3_inactive_reasons(
+                settings=settings,
+                verifier_mode=verifier_mode,
+                layer3_promotion_enabled=layer3_promotion_enabled,
+            )
             extraction_profile = normalize_extraction_profile(req.get("extraction"))
             extraction_mappings: list[ExtractorMapping] = []
             if extraction_profile.get("use_user_mappings", True):
@@ -2022,6 +2103,15 @@ class ConsistencyEngineImpl:
                 req_stats["extractor_version"] = extractor_pipeline.version
                 req_stats["ruleset_checksum"] = extractor_pipeline.ruleset_checksum
                 req_stats["mapping_checksum"] = extractor_pipeline.mapping_checksum
+                req_stats["layer3_model_enabled"] = layer3_model_enabled
+                req_stats["layer3_local_nli_enabled"] = layer3_local_nli_enabled
+                req_stats["layer3_local_reranker_enabled"] = layer3_local_reranker_enabled
+                req_stats["layer3_remote_api_enabled"] = layer3_remote_api_enabled
+                req_stats["layer3_nli_capable"] = layer3_nli_capable
+                req_stats["layer3_reranker_capable"] = layer3_reranker_capable
+                req_stats["layer3_effective_capable"] = layer3_effective_capable
+                req_stats["layer3_promotion_enabled"] = bool(layer3_promotion_enabled)
+                req_stats["layer3_inactive_reasons"] = list(layer3_inactive_reasons)
             claims = _extract_claims(text, pipeline=extractor_pipeline, stats=req_stats)
             if req_stats is not None:
                 selected = int(req_stats.get("slot_candidate_selected", 0))
@@ -2443,6 +2533,32 @@ class ConsistencyEngineImpl:
                         req_stats["verification_loop_trigger_count"] = int(
                             req_stats.get("verification_loop_trigger_count", 0)
                         ) + 1
+                    loop_exit_reason: str | None = None
+
+                    def _record_loop_round_diagnostics(*, elapsed_ms: float, candidate_growth: int) -> None:
+                        if req_stats is None:
+                            return
+                        req_stats["verification_loop_round_elapsed_ms_sum"] = float(
+                            req_stats.get("verification_loop_round_elapsed_ms_sum", 0.0)
+                        ) + float(elapsed_ms)
+                        req_stats["verification_loop_round_elapsed_ms_max"] = max(
+                            float(req_stats.get("verification_loop_round_elapsed_ms_max", 0.0)),
+                            float(elapsed_ms),
+                        )
+                        _append_stat_sample(
+                            req_stats,
+                            "verification_loop_round_elapsed_ms_samples",
+                            float(elapsed_ms),
+                        )
+                        req_stats["verification_loop_candidate_growth_total"] = int(
+                            req_stats.get("verification_loop_candidate_growth_total", 0)
+                        ) + int(candidate_growth)
+                        _append_stat_sample(
+                            req_stats,
+                            "verification_loop_candidate_growth_samples",
+                            int(candidate_growth),
+                        )
+
                     loop_started = time.perf_counter()
                     for round_idx in range(verification_loop_max_rounds):
                         elapsed_ms = (time.perf_counter() - loop_started) * 1000.0
@@ -2451,7 +2567,14 @@ class ConsistencyEngineImpl:
                                 req_stats["verification_loop_timeout_count"] = int(
                                     req_stats.get("verification_loop_timeout_count", 0)
                                 ) + 1
+                            loop_exit_reason = "timeout_before_round"
                             break
+                        if req_stats is not None:
+                            req_stats["verification_loop_attempted_rounds_total"] = int(
+                                req_stats.get("verification_loop_attempted_rounds_total", 0)
+                            ) + 1
+                        round_started = time.perf_counter()
+                        round_start_reason_signature = _unknown_reason_signature(evaluation["unknown_reasons"])
                         previous_candidate_count = len(candidate_results)
                         loop_query = claim_text if round_idx == 0 else f"{claim_text} {segment_text}".strip()
                         loop_filters = dict(claim_filters)
@@ -2481,10 +2604,15 @@ class ConsistencyEngineImpl:
                             not loop_results
                             and _UNKNOWN_REASON_NO_EVIDENCE in evaluation["unknown_reasons"]
                         ):
+                            _record_loop_round_diagnostics(
+                                elapsed_ms=(time.perf_counter() - round_started) * 1000.0,
+                                candidate_growth=0,
+                            )
                             if req_stats is not None:
                                 req_stats["verification_loop_stagnation_break_count"] = int(
                                     req_stats.get("verification_loop_stagnation_break_count", 0)
                                 ) + 1
+                            loop_exit_reason = "no_results_fts"
                             break
                         if (
                             len(loop_results) < _VECTOR_REFILL_MIN
@@ -2508,17 +2636,28 @@ class ConsistencyEngineImpl:
                             not loop_results
                             and _UNKNOWN_REASON_NO_EVIDENCE in evaluation["unknown_reasons"]
                         ):
+                            _record_loop_round_diagnostics(
+                                elapsed_ms=(time.perf_counter() - round_started) * 1000.0,
+                                candidate_growth=0,
+                            )
                             if req_stats is not None:
                                 req_stats["verification_loop_stagnation_break_count"] = int(
                                     req_stats.get("verification_loop_stagnation_break_count", 0)
                                 ) + 1
+                            loop_exit_reason = "no_results_after_refill"
                             break
                         candidate_results = _merge_result_lists(candidate_results, loop_results, limit=_CANDIDATE_K * 4)
+                        candidate_growth = max(0, len(candidate_results) - previous_candidate_count)
                         if len(candidate_results) <= previous_candidate_count:
+                            _record_loop_round_diagnostics(
+                                elapsed_ms=(time.perf_counter() - round_started) * 1000.0,
+                                candidate_growth=candidate_growth,
+                            )
                             if req_stats is not None:
                                 req_stats["verification_loop_stagnation_break_count"] = int(
                                     req_stats.get("verification_loop_stagnation_break_count", 0)
                                 ) + 1
+                            loop_exit_reason = "candidate_stagnation"
                             break
                         if exclude_self_evidence:
                             candidate_results, filtered_count = _filter_self_evidence_results(
@@ -2560,14 +2699,31 @@ class ConsistencyEngineImpl:
                             req_stats["verification_loop_rounds_total"] = int(
                                 req_stats.get("verification_loop_rounds_total", 0)
                             ) + 1
+                        _record_loop_round_diagnostics(
+                            elapsed_ms=(time.perf_counter() - round_started) * 1000.0,
+                            candidate_growth=candidate_growth,
+                        )
                         evaluation = _evaluate_current_results(results, rerank_meta)
+                        round_end_reason_signature = _unknown_reason_signature(evaluation["unknown_reasons"])
+                        if round_end_reason_signature != round_start_reason_signature:
+                            _increment_stat_counter(
+                                req_stats,
+                                "verification_loop_reason_transition_counts",
+                                f"{round_start_reason_signature}->{round_end_reason_signature}",
+                            )
                         if evaluation["verdict"] is not Verdict.UNKNOWN:
+                            loop_exit_reason = "verdict_resolved"
                             break
                         if not (
                             evaluation["unknown_reasons"]
                             & {_UNKNOWN_REASON_NO_EVIDENCE, _UNKNOWN_REASON_CONFLICTING_EVIDENCE}
                         ):
+                            loop_exit_reason = "reason_resolved"
                             break
+                    else:
+                        loop_exit_reason = "max_rounds_exhausted"
+                    if loop_exit_reason is not None:
+                        _increment_stat_counter(req_stats, "verification_loop_exit_reason_counts", loop_exit_reason)
 
                 verdict = evaluation["verdict"]
                 unknown_reasons = set(evaluation["unknown_reasons"])

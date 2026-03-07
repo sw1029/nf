@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -68,3 +69,36 @@ def test_run_worker_emits_memory_pressure_pause_reason_with_cooldown(
     assert payload["reason_code"] == "PAUSED_DUE_TO_MEMORY_PRESSURE"
     assert int(payload["max_ram_mb"]) == 1024
     assert float(payload["rss_mb"]) >= 4096.0
+
+
+@pytest.mark.unit
+def test_run_worker_retries_transient_sqlite_lock_during_leasing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    with db.connect(db_path) as conn:
+        project = project_repo.create_project(conn, "p", {})
+        job = job_repo.create_job(conn, project.project_id, JobType.INDEX_FTS, {"scope": "global"}, {})
+
+    real_connect = runner.db.connect
+    attempts = {"count": 0}
+
+    def flaky_connect(path=None):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real_connect(path)
+
+    monkeypatch.setattr(runner, "_memory_pressure", lambda _max_ram_mb: False)
+    monkeypatch.setattr(runner, "_run_job", lambda _job_type, _ctx: None)
+    monkeypatch.setattr(runner.db, "connect", flaky_connect)
+
+    runner.run_worker(db_path=db_path, poll_interval=0.01, max_jobs=1)
+
+    with db.connect(db_path) as conn:
+        loaded = job_repo.get_job(conn, job.job_id)
+
+    assert loaded is not None
+    assert loaded.status.name == "SUCCEEDED"
+    assert attempts["count"] >= 2

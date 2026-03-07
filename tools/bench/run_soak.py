@@ -51,6 +51,7 @@ _NETWORK_ERROR_HINTS = (
     "urlopen error",
     "network_error",
 )
+_FAILURE_SAMPLE_LIMIT = 12
 
 
 def _is_cancelled(cancel_event: threading.Event | None) -> bool:
@@ -244,6 +245,46 @@ def _to_positive_float(value: Any) -> float:
     return 0.0
 
 
+def _classify_exception_status(exc: Exception) -> str:
+    if is_policy_violation(exc):
+        return "POLICY_VIOLATION"
+    if is_network_error(exc):
+        return "NETWORK_ERROR"
+    return "UNEXPECTED_ERROR"
+
+
+def _increment_counter(bucket: dict[str, int], key: str, amount: int = 1) -> None:
+    token = str(key or "").strip()
+    if not token:
+        return
+    bucket[token] = int(bucket.get(token, 0)) + int(amount)
+
+
+def _append_failure_sample(samples: list[dict[str, str]], *, stage: str, status: str, detail: str) -> None:
+    if len(samples) >= _FAILURE_SAMPLE_LIMIT:
+        return
+    samples.append(
+        {
+            "stage": str(stage),
+            "status": str(status),
+            "detail": str(detail),
+        }
+    )
+
+
+def _accumulate_named_counts(target: dict[str, int], raw: Any) -> None:
+    if not isinstance(raw, dict):
+        return
+    for key, value in raw.items():
+        if not isinstance(key, str) or not key:
+            continue
+        try:
+            amount = int(value)
+        except (TypeError, ValueError):
+            continue
+        _increment_counter(target, key, amount)
+
+
 def extract_job_payload_metrics(payloads: list[dict[str, Any]]) -> tuple[float, float, float, list[float]]:
     claims_processed = 0.0
     chunks_processed = 0.0
@@ -311,7 +352,7 @@ def get_job_type_pressure(db_path: Path, job_type: str) -> tuple[int, int]:
 def wait_for_consistency_slot(
     db_path: Path,
     *,
-    max_heavy_jobs: int,
+    max_running_jobs: int,
     max_outstanding: int,
     max_wait_sec: float = 60.0,
     poll_sec: float = 0.25,
@@ -326,11 +367,18 @@ def wait_for_consistency_slot(
         except sqlite3.Error:
             running, queued = 0, 0
         outstanding = running + queued
-        if running < max_heavy_jobs and outstanding < max_outstanding:
+        if running < max_running_jobs and outstanding < max_outstanding:
             return (time.perf_counter() - start) * 1000.0
         if (time.perf_counter() - start) >= max_wait_sec:
             return (time.perf_counter() - start) * 1000.0
         _sleep_with_cancel(max(0.05, poll_sec), cancel_event=cancel_event)
+
+
+def _resolve_consistency_slot_limits(*, streams: int, max_heavy_jobs: int) -> tuple[int, int]:
+    heavy_limit = max(1, int(max_heavy_jobs))
+    if streams > heavy_limit:
+        return max(1, heavy_limit - 1), heavy_limit
+    return heavy_limit, heavy_limit + 1
 
 
 def create_project_and_doc(client: ApiClient, *, project_name: str, seed_text: str, profile: str) -> tuple[str, str]:
@@ -394,6 +442,7 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
     try:
         project_id, doc_id = create_project_and_doc(client, project_name=project_name, seed_text=SEED_TEXT, profile=profile)
     except Exception as exc:  # noqa: BLE001
+        failure_status = _classify_exception_status(exc)
         status_breakdown = {
             "policy_violations": 1 if is_policy_violation(exc) else 0,
             "submit_retries": 0,
@@ -456,6 +505,12 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
                     }
                 )
             ),
+            "failure_breakdown": {
+                "by_stage": {"project_init": 1},
+                "by_status": {failure_status: 1},
+                "by_stage_status": {f"project_init:{failure_status}": 1},
+            },
+            "failure_samples": [{"stage": "project_init", "status": failure_status, "detail": str(exc)}],
             "errors": errors,
         }
 
@@ -476,22 +531,34 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
     throttle_wait_ms = 0.0
     graph_jobs_total = 0
     graph_jobs_applied = 0
+    failure_by_stage: dict[str, int] = {}
+    failure_by_status: dict[str, int] = {}
+    failure_by_stage_status: dict[str, int] = {}
+    failure_samples: list[dict[str, str]] = []
 
     adaptive_delay_sec = 0.0
     if adaptive_throttle and streams > max_heavy_jobs:
         overflow_rank = max(0, stream_id - max_heavy_jobs)
         adaptive_delay_sec = min(policy_retry_max_sec, overflow_rank * policy_retry_base_sec)
 
+    def record_failure(stage: str, status: str, detail: str) -> None:
+        _increment_counter(failure_by_stage, stage)
+        _increment_counter(failure_by_status, status)
+        _increment_counter(failure_by_stage_status, f"{stage}:{status}")
+        _append_failure_sample(failure_samples, stage=stage, status=status, detail=detail)
+
     def record_error(label: str, exc: Exception) -> None:
         nonlocal policy_violations, network_errors, unexpected_errors
-        if is_policy_violation(exc):
+        status = _classify_exception_status(exc)
+        if status == "POLICY_VIOLATION":
             policy_violations += 1
-        elif is_network_error(exc):
+        elif status == "NETWORK_ERROR":
             network_errors += 1
         else:
             unexpected_errors += 1
         if len(errors) < 5:
             errors.append(f"{label}: {exc}")
+        record_failure(label, status, str(exc))
 
     def submit_with_retry(
         *,
@@ -499,16 +566,16 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
         inputs: dict[str, Any],
         params: dict[str, Any] | None = None,
         timeout_sec: float,
-    ) -> JobRun | None:
+    ) -> tuple[JobRun | None, str | None, str | None]:
         nonlocal policy_violations, submit_retries, adaptive_delay_sec, network_errors, unexpected_errors
         attempt = 0
         while True:
             if _is_cancelled(cancel_event):
-                return JobRun(job_id="", status="CANCELED_BY_INTERRUPT", elapsed_ms=0.0, job_type=job_type)
+                return JobRun(job_id="", status="CANCELED_BY_INTERRUPT", elapsed_ms=0.0, job_type=job_type), None, None
             if adaptive_throttle and adaptive_delay_sec > 0:
                 _sleep_with_cancel(adaptive_delay_sec, cancel_event=cancel_event)
                 if _is_cancelled(cancel_event):
-                    return JobRun(job_id="", status="CANCELED_BY_INTERRUPT", elapsed_ms=0.0, job_type=job_type)
+                    return JobRun(job_id="", status="CANCELED_BY_INTERRUPT", elapsed_ms=0.0, job_type=job_type), None, None
             try:
                 run = submit_and_wait(
                     client,
@@ -521,31 +588,33 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
                 )
                 if adaptive_throttle and adaptive_delay_sec > 0:
                     adaptive_delay_sec = max(0.0, adaptive_delay_sec * 0.7)
-                return run
+                return run, None, None
             except Exception as exc:  # noqa: BLE001
                 if is_policy_violation(exc):
                     policy_violations += 1
                     if attempt >= policy_retry_max:
                         if len(errors) < 5:
                             errors.append(f"{job_type}: {exc}")
-                        return None
+                        return None, "POLICY_VIOLATION", str(exc)
                     submit_retries += 1
                     backoff = min(policy_retry_max_sec, policy_retry_base_sec * (2**attempt))
                     jitter = rng.uniform(0.0, min(0.25, backoff * 0.25))
                     _sleep_with_cancel(backoff + jitter, cancel_event=cancel_event)
                     if _is_cancelled(cancel_event):
-                        return JobRun(job_id="", status="CANCELED_BY_INTERRUPT", elapsed_ms=0.0, job_type=job_type)
+                        return JobRun(job_id="", status="CANCELED_BY_INTERRUPT", elapsed_ms=0.0, job_type=job_type), None, None
                     if adaptive_throttle:
                         adaptive_delay_sec = min(policy_retry_max_sec, max(adaptive_delay_sec, backoff))
                     attempt += 1
                     continue
                 if is_network_error(exc):
                     network_errors += 1
+                    failure_status = "NETWORK_ERROR"
                 else:
                     unexpected_errors += 1
+                    failure_status = "UNEXPECTED_ERROR"
                 if len(errors) < 5:
                     errors.append(f"{job_type}: {exc}")
-                return None
+                return None, failure_status, str(exc)
 
     def run_stage(
         *,
@@ -556,12 +625,19 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
     ) -> JobRun | None:
         nonlocal total_jobs, failed_jobs
         total_jobs += 1
-        run = submit_with_retry(job_type=job_type, inputs=inputs, params=params, timeout_sec=timeout_sec)
+        run, failure_status, failure_detail = submit_with_retry(
+            job_type=job_type,
+            inputs=inputs,
+            params=params,
+            timeout_sec=timeout_sec,
+        )
         if run is None:
             failed_jobs += 1
+            record_failure(job_type, failure_status or "SUBMIT_ERROR", failure_detail or "submit failed")
             return None
         if run.status not in {"SUCCEEDED", "CANCELED_BY_INTERRUPT"}:
             failed_jobs += 1
+            record_failure(job_type, run.status, f"job_id={run.job_id}")
         return run
 
     while time.perf_counter() < deadline and not _is_cancelled(cancel_event):
@@ -588,10 +664,13 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
             _sleep_with_cancel(max(0.0, sleep_sec), cancel_event=cancel_event)
             continue
         if adaptive_throttle and streams > max_heavy_jobs:
-            max_outstanding = max_heavy_jobs + 1
+            max_running_consistency, max_outstanding = _resolve_consistency_slot_limits(
+                streams=streams,
+                max_heavy_jobs=max_heavy_jobs,
+            )
             throttle_wait_ms += wait_for_consistency_slot(
                 db_path,
-                max_heavy_jobs=max_heavy_jobs,
+                max_running_jobs=max_running_consistency,
                 max_outstanding=max_outstanding,
                 cancel_event=cancel_event,
             )
@@ -756,6 +835,12 @@ def _stream_worker(task: dict[str, Any]) -> dict[str, Any]:
         "_rss_samples": positive_rss,
         "semantic": semantic_payload,
         "semantic_hash": sha256_obj(normalize_semantic(semantic_payload)),
+        "failure_breakdown": {
+            "by_stage": failure_by_stage,
+            "by_status": failure_by_status,
+            "by_stage_status": failure_by_stage_status,
+        },
+        "failure_samples": failure_samples,
         "errors": errors,
         "interrupted": stream_interrupted,
         "interrupt_reason": "keyboard_interrupt" if stream_interrupted else None,
@@ -784,6 +869,10 @@ def _aggregate_streams(stream_results: list[dict[str, Any]], *, hours: float) ->
     throttle_wait_ms = 0.0
     graph_jobs_total = 0
     graph_jobs_applied = 0
+    failure_by_stage: dict[str, int] = {}
+    failure_by_status: dict[str, int] = {}
+    failure_by_stage_status: dict[str, int] = {}
+    failure_samples: list[dict[str, str]] = []
     for item in stream_results:
         queue_lags_all.extend(item.get("_queue_lags_all_ms") or [])
         queue_lags_consistency.extend(item.get("_queue_lags_consistency_ms") or [])
@@ -797,6 +886,19 @@ def _aggregate_streams(stream_results: list[dict[str, Any]], *, hours: float) ->
         graph_info = item.get("graph") or {}
         graph_jobs_total += int(graph_info.get("jobs_total", 0) or 0)
         graph_jobs_applied += int(graph_info.get("jobs_applied", 0) or 0)
+        failure_breakdown = item.get("failure_breakdown") or {}
+        _accumulate_named_counts(failure_by_stage, failure_breakdown.get("by_stage"))
+        _accumulate_named_counts(failure_by_status, failure_breakdown.get("by_status"))
+        _accumulate_named_counts(failure_by_stage_status, failure_breakdown.get("by_stage_status"))
+        for sample in item.get("failure_samples") or []:
+            if not isinstance(sample, dict):
+                continue
+            _append_failure_sample(
+                failure_samples,
+                stage=str(sample.get("stage") or ""),
+                status=str(sample.get("status") or ""),
+                detail=str(sample.get("detail") or ""),
+            )
 
     failed_ratio = (failed_jobs / total_jobs) if total_jobs else 0.0
     queue_lag_all_p95 = percentile(queue_lags_all, 95)
@@ -848,6 +950,12 @@ def _aggregate_streams(stream_results: list[dict[str, Any]], *, hours: float) ->
             "jobs_applied": graph_jobs_applied,
             "applied_ratio": (graph_jobs_applied / graph_jobs_total) if graph_jobs_total > 0 else 0.0,
         },
+        "failure_breakdown": {
+            "by_stage": failure_by_stage,
+            "by_status": failure_by_status,
+            "by_stage_status": failure_by_stage_status,
+        },
+        "failure_samples": failure_samples,
         "rss_mb_min": min(positive_rss) if positive_rss else 0.0,
         "rss_mb_max": max(positive_rss) if positive_rss else 0.0,
         "rss_drift_pct": rss_drift_pct,
@@ -1244,6 +1352,8 @@ def main() -> int:
         "timings_ms": aggregate["timings_ms"],
         "workload": aggregate["workload"],
         "graph_runtime": aggregate.get("graph", {}),
+        "failure_breakdown": aggregate.get("failure_breakdown", {}),
+        "failure_samples": aggregate.get("failure_samples", []),
         "rss_mb_min": aggregate["rss_mb_min"],
         "rss_mb_max": aggregate["rss_mb_max"],
         "rss_drift_pct": aggregate["rss_drift_pct"],
@@ -1321,6 +1431,8 @@ def main() -> int:
         f"- queue_lag_consistency_p95_ms: `{aggregate['timings_ms']['queue_lag_consistency_p95']:.2f}`",
         f"- consistency_p95_ms: `{aggregate['consistency_p95_ms']:.2f}`",
         f"- status_breakdown: `{aggregate['status_breakdown']}`",
+        f"- failure_breakdown: `{aggregate.get('failure_breakdown')}`",
+        f"- failure_samples: `{aggregate.get('failure_samples')}`",
         f"- graph: `{result['graph']}`",
         f"- graph_runtime: `{result['graph_runtime']}`",
         f"- semantic_hash: `{result['repro']['semantic_hash']}`",

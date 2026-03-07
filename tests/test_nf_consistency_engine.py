@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import hashlib
+import time
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -684,4 +685,134 @@ def test_verification_loop_breaks_on_stagnation_and_counts_stat(
     assert len(verdicts) == 1
     assert verdicts[0].verdict is Verdict.UNKNOWN
     assert int(stats.get("verification_loop_trigger_count", 0)) == 1
+    assert int(stats.get("verification_loop_attempted_rounds_total", 0)) >= 1
     assert int(stats.get("verification_loop_stagnation_break_count", 0)) >= 1
+    assert float(stats.get("verification_loop_round_elapsed_ms_sum", 0.0)) >= 0.0
+    assert isinstance(stats.get("verification_loop_round_elapsed_ms_samples"), list)
+    assert isinstance(stats.get("verification_loop_candidate_growth_samples"), list)
+    exit_reason_counts = stats.get("verification_loop_exit_reason_counts")
+    assert isinstance(exit_reason_counts, dict)
+    assert any(key in exit_reason_counts for key in ("no_results_fts", "no_results_after_refill", "candidate_stagnation"))
+
+
+@pytest.mark.unit
+def test_verification_loop_timeout_before_second_round_records_exit_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "시로는 오늘 북부 성채로 이동했다."
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine._extract_claims",
+        lambda *_args, **_kwargs: [
+            {
+                "segment_start": 0,
+                "segment_end": len(text),
+                "segment_text": text,
+                "claim_start": 0,
+                "claim_end": len(text),
+                "claim_text": text,
+                "slots": {"place": "북부 성채"},
+                "slot_key": "place",
+                "slot_confidence": 1.0,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.load_config",
+        lambda: Settings(enable_layer3_model=False, vector_index_mode="DISABLED"),
+    )
+
+    call_state = {"count": 0}
+
+    def fake_fts_search(_conn, _req):  # noqa: ANN001
+        idx = call_state["count"]
+        call_state["count"] += 1
+        if idx == 0:
+            return [
+                {
+                    "source": "fts",
+                    "score": 0.11,
+                    "evidence": {
+                        "doc_id": "doc-ref-1",
+                        "snapshot_id": "snap-ref",
+                        "chunk_id": "chunk-ref-1",
+                        "section_path": "body",
+                        "tag_path": "",
+                        "snippet_text": "reference-one",
+                        "span_start": 0,
+                        "span_end": 8,
+                        "fts_score": 0.11,
+                        "match_type": "EXACT",
+                        "confirmed": False,
+                    },
+                }
+            ]
+        if idx == 1:
+            time.sleep(0.01)
+            return [
+                {
+                    "source": "fts",
+                    "score": 0.12,
+                    "evidence": {
+                        "doc_id": "doc-ref-2",
+                        "snapshot_id": "snap-ref",
+                        "chunk_id": "chunk-ref-2",
+                        "section_path": "body",
+                        "tag_path": "",
+                        "snippet_text": "reference-two",
+                        "span_start": 0,
+                        "span_end": 8,
+                        "fts_score": 0.12,
+                        "match_type": "EXACT",
+                        "confirmed": False,
+                    },
+                }
+            ]
+        return []
+
+    monkeypatch.setattr("modules.nf_consistency.engine.fts_search", fake_fts_search)
+
+    stats: dict[str, object] = {}
+    engine = ConsistencyEngineImpl(db_path=db_path)
+    verdicts = engine.run(
+        {
+            "project_id": project_id,
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "schema_ver": "",
+            "stats": stats,
+            "verification_loop": {
+                "enabled": True,
+                "max_rounds": 2,
+                "round_timeout_ms": 1,
+            },
+        }
+    )
+
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict is Verdict.UNKNOWN
+    assert int(stats.get("verification_loop_trigger_count", 0)) == 1
+    assert int(stats.get("verification_loop_attempted_rounds_total", 0)) == 1
+    assert int(stats.get("verification_loop_rounds_total", 0)) == 1
+    assert int(stats.get("verification_loop_timeout_count", 0)) == 1
+    exit_reason_counts = stats.get("verification_loop_exit_reason_counts")
+    assert isinstance(exit_reason_counts, dict)
+    assert int(exit_reason_counts.get("timeout_before_round", 0)) == 1
+    assert float(stats.get("verification_loop_round_elapsed_ms_sum", 0.0)) > 0.0
+    assert int(stats.get("verification_loop_candidate_growth_total", 0)) >= 1

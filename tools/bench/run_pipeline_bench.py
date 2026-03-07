@@ -5,6 +5,7 @@ import concurrent.futures
 import json
 import os
 import random
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -42,6 +43,13 @@ def percentile(values: list[float], p: float) -> float:
 def _as_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return default
 
@@ -186,18 +194,122 @@ def _pick_consistency_targets(doc_ids: list[str], *, sample_count: int, seed: in
     return pool[: max(1, min(sample_count, len(pool)))]
 
 
-def _pick_retrieval_queries(records: list[dict[str, Any]], *, limit: int, seed: int) -> list[str]:
+_GRAPH_TIME_SIGNAL_RE = re.compile(r"\d+\s*(?:일|달|개월|년)\s*(?:후|뒤|전)")
+_GRAPH_TIME_SIGNAL_TOKENS = (
+    "다음 날",
+    "그날",
+    "이튿날",
+    "며칠 후",
+    "며칠 뒤",
+    "첫날",
+    "둘째 날",
+    "셋째 날",
+)
+
+
+def _compact_query_text(text: str, *, limit: int = 120) -> str:
+    compact = " ".join((text or "").split()).strip()
+    return compact[:limit].strip()
+
+
+def _graph_signal_span(text: str) -> tuple[int, int] | None:
+    for token in _GRAPH_TIME_SIGNAL_TOKENS:
+        idx = text.find(token)
+        if idx >= 0:
+            return idx, idx + len(token)
+    match = _GRAPH_TIME_SIGNAL_RE.search(text)
+    if match is not None:
+        return match.start(), match.end()
+    return None
+
+
+def _extract_graph_signal_query(text: str, *, limit: int = 120) -> str:
+    signal_span = _graph_signal_span(text)
+    if signal_span is None:
+        return _compact_query_text(text, limit=limit)
+    compact_source = " ".join((text or "").split()).strip()
+    if not compact_source:
+        return ""
+    start_idx = max(0, signal_span[0] - 40)
+    end_idx = min(len(compact_source), start_idx + limit)
+    snippet = compact_source[start_idx:end_idx].strip()
+    return snippet[:limit].strip()
+
+
+def _has_graph_query_signal(text: str) -> bool:
+    if not isinstance(text, str) or not text.strip():
+        return False
+    if _graph_signal_span(text) is not None:
+        return True
+    return False
+
+
+def _pick_retrieval_queries(records: list[dict[str, Any]], *, limit: int, seed: int, graph_enabled: bool = False) -> list[str]:
     indices = list(range(len(records)))
     rng = random.Random(seed + 17)
     rng.shuffle(indices)
+    preferred: list[str] = []
     picked: list[str] = []
+    seen: set[str] = set()
     for idx in indices:
-        text = str(records[idx].get("content") or "")[:120].strip()
-        if text:
-            picked.append(text)
-        if len(picked) >= limit:
+        raw_text = str(records[idx].get("content") or "")
+        if not raw_text.strip():
+            continue
+        query_text = (
+            _extract_graph_signal_query(raw_text, limit=120)
+            if graph_enabled
+            else _compact_query_text(raw_text, limit=120)
+        )
+        if not query_text or query_text in seen:
+            continue
+        seen.add(query_text)
+        if graph_enabled and _has_graph_query_signal(raw_text):
+            preferred.append(query_text)
+        else:
+            picked.append(query_text)
+        if len(preferred) + len(picked) >= limit:
             break
-    return picked
+    return [*preferred, *picked][:limit]
+
+
+def _build_index_fts_params(*, graph_enabled: bool) -> dict[str, Any]:
+    if not graph_enabled:
+        return {}
+    return {
+        "grouping": {
+            "entity_mentions": True,
+            "time_anchors": True,
+            "graph_extract": True,
+        }
+    }
+
+
+def _extract_index_fts_graph_runtime(events: list[tuple[int, dict[str, Any]]]) -> dict[str, Any]:
+    for _seq, event in reversed(events):
+        message = str((event.get("message") or "")).strip().lower()
+        if message != "fts indexed":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        graph_info = payload.get("graph")
+        graph_index = payload.get("graph_index")
+        return {
+            "graph_extract_enabled": bool(payload.get("graph_extract_enabled", False)),
+            "entity_mentions_created": _as_int(payload.get("entity_mentions_created"), 0),
+            "time_anchors_created": _as_int(payload.get("time_anchors_created"), 0),
+            "timeline_events_created": _as_int(payload.get("timeline_events_created"), 0),
+            "graph_index": dict(graph_index) if isinstance(graph_index, dict) else {},
+            "graph": dict(graph_info) if isinstance(graph_info, dict) else {},
+        }
+    return {
+        "graph_extract_enabled": False,
+        "entity_mentions_created": 0,
+        "time_anchors_created": 0,
+        "timeline_events_created": 0,
+        "graph_index": {},
+        "graph": {},
+    }
 
 
 def _build_consistency_params(
@@ -215,6 +327,7 @@ def _build_consistency_params(
         "evidence_link_cap": evidence_link_cap,
         "graph_mode": "off",
         "graph_expand_enabled": False,
+        "metadata_grouping_enabled": False,
         "layer3_verdict_promotion": False,
         "verifier": {
             "mode": "off",
@@ -236,6 +349,7 @@ def _build_consistency_params(
     if level in {"deep", "strict"}:
         consistency_params["graph_mode"] = "auto"
         consistency_params["graph_expand_enabled"] = True
+        consistency_params["metadata_grouping_enabled"] = True
         consistency_params["layer3_verdict_promotion"] = True
         consistency_params["triage"] = {
             "mode": "embedding_anomaly",
@@ -252,7 +366,7 @@ def _build_consistency_params(
         consistency_params["verification_loop"] = {
             "enabled": True,
             "max_rounds": 2,
-            "round_timeout_ms": 250,
+            "round_timeout_ms": 800,
         }
     return {"consistency": consistency_params}, level
 
@@ -266,6 +380,32 @@ def _accumulate_unknown_reason_counts(target: dict[str, int], raw: Any) -> None:
         target[key] = int(target.get(key, 0)) + _as_int(value, 0)
 
 
+def _accumulate_reason_list_counts(target: dict[str, int], raw: Any) -> None:
+    if not isinstance(raw, list):
+        return
+    for item in raw:
+        if not isinstance(item, str) or not item:
+            continue
+        target[item] = int(target.get(item, 0)) + 1
+
+
+def _accumulate_numeric_samples(target: list[float], raw: Any, *, limit: int = 512) -> None:
+    if not isinstance(target, list) or not isinstance(raw, list):
+        return
+    remaining = max(0, int(limit) - len(target))
+    if remaining <= 0:
+        return
+    for item in raw:
+        if remaining <= 0:
+            break
+        try:
+            parsed = float(item)
+        except (TypeError, ValueError):
+            continue
+        target.append(parsed)
+        remaining -= 1
+
+
 def _new_consistency_runtime(*, graph_mode: str) -> dict[str, Any]:
     return {
         "graph_mode": graph_mode,
@@ -275,10 +415,24 @@ def _new_consistency_runtime(*, graph_mode: str) -> dict[str, Any]:
         "graph_auto_skip_count": 0,
         "layer3_rerank_applied_count": 0,
         "layer3_model_fallback_count": 0,
+        "layer3_model_enabled_jobs": 0,
+        "layer3_nli_capable_jobs": 0,
+        "layer3_reranker_capable_jobs": 0,
+        "layer3_effective_capable_jobs": 0,
+        "layer3_promotion_enabled_jobs": 0,
+        "layer3_inactive_reason_counts": {},
         "verification_loop_trigger_count": 0,
+        "verification_loop_attempted_rounds_total": 0,
         "verification_loop_rounds_total": 0,
         "verification_loop_timeout_count": 0,
         "verification_loop_stagnation_break_count": 0,
+        "verification_loop_round_elapsed_ms_sum": 0.0,
+        "verification_loop_round_elapsed_ms_max": 0.0,
+        "verification_loop_round_elapsed_ms_samples": [],
+        "verification_loop_candidate_growth_total": 0,
+        "verification_loop_candidate_growth_samples": [],
+        "verification_loop_exit_reason_counts": {},
+        "verification_loop_reason_transition_counts": {},
         "self_evidence_filtered_count": 0,
         "layer3_promoted_ok_count": 0,
         "vid_count_total": 0,
@@ -305,9 +459,33 @@ def _accumulate_consistency_runtime(runtime: dict[str, Any], payload: dict[str, 
     runtime["layer3_model_fallback_count"] = _as_int(runtime.get("layer3_model_fallback_count"), 0) + _as_int(
         payload.get("layer3_model_fallback_count")
     )
+    runtime["layer3_model_enabled_jobs"] = _as_int(runtime.get("layer3_model_enabled_jobs"), 0) + (
+        1 if bool(payload.get("layer3_model_enabled")) else 0
+    )
+    runtime["layer3_nli_capable_jobs"] = _as_int(runtime.get("layer3_nli_capable_jobs"), 0) + (
+        1 if bool(payload.get("layer3_nli_capable")) else 0
+    )
+    runtime["layer3_reranker_capable_jobs"] = _as_int(runtime.get("layer3_reranker_capable_jobs"), 0) + (
+        1 if bool(payload.get("layer3_reranker_capable")) else 0
+    )
+    runtime["layer3_effective_capable_jobs"] = _as_int(runtime.get("layer3_effective_capable_jobs"), 0) + (
+        1 if bool(payload.get("layer3_effective_capable")) else 0
+    )
+    runtime["layer3_promotion_enabled_jobs"] = _as_int(runtime.get("layer3_promotion_enabled_jobs"), 0) + (
+        1 if bool(payload.get("layer3_promotion_enabled")) else 0
+    )
+    inactive_reason_counts = runtime.get("layer3_inactive_reason_counts")
+    if not isinstance(inactive_reason_counts, dict):
+        inactive_reason_counts = {}
+        runtime["layer3_inactive_reason_counts"] = inactive_reason_counts
+    _accumulate_reason_list_counts(inactive_reason_counts, payload.get("layer3_inactive_reasons"))
     runtime["verification_loop_trigger_count"] = _as_int(runtime.get("verification_loop_trigger_count"), 0) + _as_int(
         payload.get("verification_loop_trigger_count")
     )
+    runtime["verification_loop_attempted_rounds_total"] = _as_int(
+        runtime.get("verification_loop_attempted_rounds_total"),
+        0,
+    ) + _as_int(payload.get("verification_loop_attempted_rounds_total"))
     runtime["verification_loop_rounds_total"] = _as_int(runtime.get("verification_loop_rounds_total"), 0) + _as_int(
         payload.get("verification_loop_rounds_total")
     )
@@ -318,6 +496,27 @@ def _accumulate_consistency_runtime(runtime: dict[str, Any], payload: dict[str, 
         runtime.get("verification_loop_stagnation_break_count"),
         0,
     ) + _as_int(payload.get("verification_loop_stagnation_break_count"))
+    runtime["verification_loop_round_elapsed_ms_sum"] = float(
+        runtime.get("verification_loop_round_elapsed_ms_sum", 0.0)
+    ) + _as_float(payload.get("verification_loop_round_elapsed_ms_sum"), 0.0)
+    runtime["verification_loop_round_elapsed_ms_max"] = max(
+        _as_float(runtime.get("verification_loop_round_elapsed_ms_max"), 0.0),
+        _as_float(payload.get("verification_loop_round_elapsed_ms_max"), 0.0),
+    )
+    round_elapsed_samples = runtime.get("verification_loop_round_elapsed_ms_samples")
+    if not isinstance(round_elapsed_samples, list):
+        round_elapsed_samples = []
+        runtime["verification_loop_round_elapsed_ms_samples"] = round_elapsed_samples
+    _accumulate_numeric_samples(round_elapsed_samples, payload.get("verification_loop_round_elapsed_ms_samples"))
+    runtime["verification_loop_candidate_growth_total"] = _as_int(
+        runtime.get("verification_loop_candidate_growth_total"),
+        0,
+    ) + _as_int(payload.get("verification_loop_candidate_growth_total"))
+    candidate_growth_samples = runtime.get("verification_loop_candidate_growth_samples")
+    if not isinstance(candidate_growth_samples, list):
+        candidate_growth_samples = []
+        runtime["verification_loop_candidate_growth_samples"] = candidate_growth_samples
+    _accumulate_numeric_samples(candidate_growth_samples, payload.get("verification_loop_candidate_growth_samples"))
     runtime["self_evidence_filtered_count"] = _as_int(runtime.get("self_evidence_filtered_count"), 0) + _as_int(
         payload.get("self_evidence_filtered_count")
     )
@@ -332,6 +531,16 @@ def _accumulate_consistency_runtime(runtime: dict[str, Any], payload: dict[str, 
         reason_counts = {}
         runtime["unknown_reason_counts"] = reason_counts
     _accumulate_unknown_reason_counts(reason_counts, payload.get("unknown_reason_counts"))
+    exit_reason_counts = runtime.get("verification_loop_exit_reason_counts")
+    if not isinstance(exit_reason_counts, dict):
+        exit_reason_counts = {}
+        runtime["verification_loop_exit_reason_counts"] = exit_reason_counts
+    _accumulate_unknown_reason_counts(exit_reason_counts, payload.get("verification_loop_exit_reason_counts"))
+    transition_counts = runtime.get("verification_loop_reason_transition_counts")
+    if not isinstance(transition_counts, dict):
+        transition_counts = {}
+        runtime["verification_loop_reason_transition_counts"] = transition_counts
+    _accumulate_unknown_reason_counts(transition_counts, payload.get("verification_loop_reason_transition_counts"))
     mode = payload.get("graph_mode")
     if isinstance(mode, str) and mode:
         runtime["graph_mode"] = mode
@@ -348,6 +557,41 @@ def _finalize_consistency_runtime(runtime: dict[str, Any]) -> dict[str, Any]:
     else:
         runtime_out["violate_rate"] = 0.0
         runtime_out["unknown_rate"] = 0.0
+    attempted_rounds_total = max(0, _as_int(runtime_out.get("verification_loop_attempted_rounds_total"), 0))
+    round_elapsed_sum = _as_float(runtime_out.get("verification_loop_round_elapsed_ms_sum"), 0.0)
+    candidate_growth_total = max(0, _as_int(runtime_out.get("verification_loop_candidate_growth_total"), 0))
+    jobs_sampled = max(1, _as_int(runtime_out.get("jobs_sampled"), 0))
+    if attempted_rounds_total > 0:
+        runtime_out["verification_loop_round_elapsed_ms_avg"] = round_elapsed_sum / float(attempted_rounds_total)
+        runtime_out["verification_loop_candidate_growth_avg"] = (
+            float(candidate_growth_total) / float(attempted_rounds_total)
+        )
+    else:
+        runtime_out["verification_loop_round_elapsed_ms_avg"] = 0.0
+        runtime_out["verification_loop_candidate_growth_avg"] = 0.0
+    runtime_out["verification_loop_round_elapsed_ms_p95"] = percentile(
+        [float(item) for item in (runtime_out.get("verification_loop_round_elapsed_ms_samples") or [])],
+        95,
+    )
+    runtime_out["verification_loop_candidate_growth_p95"] = percentile(
+        [float(item) for item in (runtime_out.get("verification_loop_candidate_growth_samples") or [])],
+        95,
+    )
+    runtime_out["layer3_model_enabled_ratio"] = (
+        float(_as_int(runtime_out.get("layer3_model_enabled_jobs"), 0)) / float(jobs_sampled)
+    )
+    runtime_out["layer3_nli_capable_ratio"] = (
+        float(_as_int(runtime_out.get("layer3_nli_capable_jobs"), 0)) / float(jobs_sampled)
+    )
+    runtime_out["layer3_reranker_capable_ratio"] = (
+        float(_as_int(runtime_out.get("layer3_reranker_capable_jobs"), 0)) / float(jobs_sampled)
+    )
+    runtime_out["layer3_effective_capable_ratio"] = (
+        float(_as_int(runtime_out.get("layer3_effective_capable_jobs"), 0)) / float(jobs_sampled)
+    )
+    runtime_out["layer3_promotion_enabled_ratio"] = (
+        float(_as_int(runtime_out.get("layer3_promotion_enabled_jobs"), 0)) / float(jobs_sampled)
+    )
     return runtime_out
 
 
@@ -413,11 +657,13 @@ def run_pipeline_once(
     ]
     ingest_runs = run_parallel_jobs(ingest_tasks, parallelism=ingest_parallelism)
 
+    index_fts_params = _build_index_fts_params(graph_enabled=bool(graph_enabled))
     index_fts = submit_and_wait(
         client,
         project_id=project_id,
         job_type="INDEX_FTS",
         inputs={"scope": "global"},
+        params=index_fts_params,
         timeout_sec=7200.0,
     )
     index_vec = submit_and_wait(
@@ -427,6 +673,10 @@ def run_pipeline_once(
         inputs={"scope": "global", "shard_policy": {"mode": "doc"}},
         timeout_sec=7200.0,
     )
+
+    index_fts_graph_runtime = {}
+    if index_fts.status == "SUCCEEDED":
+        index_fts_graph_runtime = _extract_index_fts_graph_runtime(get_job_events(client, index_fts.job_id))
 
     sample_doc_ids = _pick_consistency_targets(doc_ids, sample_count=consistency_samples, seed=seed)
     consistency_params, resolved_consistency_level = _build_consistency_params(
@@ -478,7 +728,12 @@ def run_pipeline_once(
     retrieve_vec_failures = 0
     graph_applied = 0
     graph_total = 0
-    for query in _pick_retrieval_queries(records, limit=min(30, len(records)), seed=seed):
+    for query in _pick_retrieval_queries(
+        records,
+        limit=min(30, len(records)),
+        seed=seed,
+        graph_enabled=bool(graph_enabled),
+    ):
         t0 = time.perf_counter()
         client.post("/query/retrieval", {"project_id": project_id, "query": query, "k": 10, "filters": {}})
         retrieval_ms.append((time.perf_counter() - t0) * 1000.0)
@@ -545,6 +800,7 @@ def run_pipeline_once(
             "enabled": bool(graph_enabled),
             "applied_count": graph_applied,
             "sampled_jobs": graph_total,
+            "index_runtime": dict(index_fts_graph_runtime),
         },
         "consistency_runtime": {
             "graph_mode": consistency_graph_mode_observed,
@@ -617,6 +873,7 @@ def main() -> int:
     parser.add_argument("--base-url", default="http://127.0.0.1:8085")
     parser.add_argument("--dataset", default="verify/datasets/DS-GROWTH-200.jsonl")
     parser.add_argument("--project-name", default="bench-project")
+    parser.add_argument("--bench-label", default="")
     parser.add_argument("--limit-docs", type=int, default=200)
     parser.add_argument("--consistency-samples", type=int, default=100)
     parser.add_argument("--output-dir", default="verify/benchmarks")
@@ -759,6 +1016,7 @@ def main() -> int:
         "finished_at": main_run.finished_at,
         "base_url": main_run.base_url,
         "dataset_path": main_run.dataset_path,
+        "bench_label": str(args.bench_label or ""),
         "project_id": main_run.project_id,
         "doc_count": main_run.doc_count,
         "rss_mb_process": main_run.rss_mb_process,
@@ -782,7 +1040,9 @@ def main() -> int:
             "max_hops": max(1, min(2, int(args.graph_max_hops))),
             "rerank_weight": max(0.0, min(0.5, float(args.graph_rerank_weight))),
             "applied_path": "retrieve_vec_async_only",
+            "normal_path_grouping_enabled": bool(args.graph_enabled),
         },
+        "graph_index_runtime": dict(((main_run.semantic.get("graph") or {}).get("index_runtime") or {})),
         "graph_runtime": {
             "applied_count": int((main_run.semantic.get("graph") or {}).get("applied_count", 0)),
             "sampled_jobs": int((main_run.semantic.get("graph") or {}).get("sampled_jobs", 0)),
@@ -810,6 +1070,7 @@ def main() -> int:
     summary_lines = [
         f"# Pipeline Benchmark Summary ({stamp})",
         "",
+        f"- bench_label: `{str(args.bench_label or '')}`",
         f"- profile: `{args.profile}`",
         f"- ingest_parallelism: `{args.ingest_parallelism}`",
         f"- consistency_parallelism: `{args.consistency_parallelism}`",
@@ -822,6 +1083,7 @@ def main() -> int:
         f"- consistency_p95_ms: `{main_run.timings_ms.get('consistency_p95', 0.0):.2f}`",
         f"- retrieval_fts_p95_ms: `{main_run.timings_ms.get('retrieval_fts_p95', 0.0):.2f}`",
         f"- retrieval_vec_p95_ms: `{main_run.timings_ms.get('retrieval_vec_p95', 0.0):.2f}`",
+        f"- graph_index_runtime: `{output['graph_index_runtime']}`",
         f"- graph_runtime: `{output['graph_runtime']}`",
         f"- consistency_runtime: `{output['consistency_runtime']}`",
         f"- semantic_hash: `{output['repro']['semantic_hash']}`",

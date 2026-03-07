@@ -3,10 +3,16 @@
 import hashlib
 import os
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Iterable
 
 DEFAULT_DB_PATH = Path(os.environ.get("NF_ORCH_DB_PATH", "nf_orchestrator.sqlite3"))
+_SCHEMA_USER_VERSION = 1
+_SQLITE_CONNECT_TIMEOUT_SEC = 30.0
+_SQLITE_BUSY_TIMEOUT_MS = 30000
+_INITIALIZED_DB_KEYS: set[str] = set()
+_INITIALIZE_LOCK = threading.Lock()
 
 
 def get_db_path() -> Path:
@@ -14,11 +20,12 @@ def get_db_path() -> Path:
 
 
 def connect(db_path: Path | None = None) -> sqlite3.Connection:
-    path = db_path or get_db_path()
-    conn = sqlite3.connect(path, check_same_thread=False)
+    path = (db_path or get_db_path()).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, check_same_thread=False, timeout=_SQLITE_CONNECT_TIMEOUT_SEC)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
     try:
         conn.execute("PRAGMA journal_mode = WAL")
     except sqlite3.OperationalError:
@@ -27,11 +34,49 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
         conn.execute("PRAGMA synchronous = NORMAL")
     except sqlite3.OperationalError:
         pass
-    _initialize(conn)
+    _initialize_if_needed(conn, path)
     return conn
 
 
-def _initialize(conn: sqlite3.Connection) -> None:
+def _db_key(path: Path) -> str:
+    return str(path.resolve())
+
+
+def _get_user_version(conn: sqlite3.Connection) -> int:
+    row = conn.execute("PRAGMA user_version").fetchone()
+    if row is None:
+        return 0
+    try:
+        return int(row[0])
+    except (TypeError, ValueError, IndexError):
+        return 0
+
+
+def _set_user_version(conn: sqlite3.Connection, version: int) -> None:
+    conn.execute(f"PRAGMA user_version = {int(version)}")
+
+
+def _initialize_if_needed(conn: sqlite3.Connection, path: Path) -> None:
+    key = _db_key(path)
+    if key in _INITIALIZED_DB_KEYS and _get_user_version(conn) >= _SCHEMA_USER_VERSION:
+        return
+
+    with _INITIALIZE_LOCK:
+        if key in _INITIALIZED_DB_KEYS and _get_user_version(conn) >= _SCHEMA_USER_VERSION:
+            return
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if _get_user_version(conn) < _SCHEMA_USER_VERSION:
+                _apply_schema(conn)
+                _set_user_version(conn, _SCHEMA_USER_VERSION)
+            conn.commit()
+            _INITIALIZED_DB_KEYS.add(key)
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def _apply_schema(conn: sqlite3.Connection) -> None:
     statements: Iterable[str] = (
         """
         CREATE TABLE IF NOT EXISTS projects (
@@ -386,9 +431,6 @@ def _initialize(conn: sqlite3.Connection) -> None:
     _drop_redundant_indexes(conn)
     _backfill_verdict_log_claim_fingerprints(conn)
     _backfill_verdict_log_unknown_reasons(conn)
-    conn.commit()
-
-
 def _ensure_indexes(conn: sqlite3.Connection) -> None:
     index_statements: Iterable[str] = (
         "CREATE INDEX IF NOT EXISTS idx_jobs_status_type_priority_created ON jobs(status, type, priority, created_at)",
@@ -425,7 +467,13 @@ def _drop_redundant_indexes(conn: sqlite3.Connection) -> None:
 def _ensure_columns(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
     existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in existing:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
+        except sqlite3.OperationalError as exc:
+            refreshed = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if column in refreshed and "duplicate column name" in str(exc).lower():
+                return
+            raise
 
 
 def _fingerprint(text: str) -> str:

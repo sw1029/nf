@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -151,10 +152,27 @@ def test_consistency_complete_payload_includes_unknown_reason_counts(
     assert "confirmed_overlap_rejected_count" in payload
     assert "layer3_rerank_applied_count" in payload
     assert "layer3_model_fallback_count" in payload
+    assert "layer3_model_enabled" in payload
+    assert "layer3_local_nli_enabled" in payload
+    assert "layer3_local_reranker_enabled" in payload
+    assert "layer3_remote_api_enabled" in payload
+    assert "layer3_nli_capable" in payload
+    assert "layer3_reranker_capable" in payload
+    assert "layer3_effective_capable" in payload
+    assert "layer3_promotion_enabled" in payload
+    assert "layer3_inactive_reasons" in payload
     assert "verification_loop_trigger_count" in payload
+    assert "verification_loop_attempted_rounds_total" in payload
     assert "verification_loop_rounds_total" in payload
     assert "verification_loop_timeout_count" in payload
     assert "verification_loop_stagnation_break_count" in payload
+    assert "verification_loop_round_elapsed_ms_sum" in payload
+    assert "verification_loop_round_elapsed_ms_max" in payload
+    assert "verification_loop_round_elapsed_ms_samples" in payload
+    assert "verification_loop_candidate_growth_total" in payload
+    assert "verification_loop_candidate_growth_samples" in payload
+    assert "verification_loop_exit_reason_counts" in payload
+    assert "verification_loop_reason_transition_counts" in payload
     assert "self_evidence_filtered_count" in payload
     assert "layer3_promoted_ok_count" in payload
 
@@ -255,6 +273,140 @@ def test_consistency_worker_forwards_layer3_promotion_options(
     assert int(verification_loop_req.get("max_rounds", 0)) == 2
     assert int(verification_loop_req.get("round_timeout_ms", 0)) == 250
     assert captured_req.get("metadata_grouping_enabled") is True
+
+
+@pytest.mark.unit
+def test_consistency_payload_reports_layer3_capability_flags(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "시로는 10살이다."
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    def fake_run(self, req):  # noqa: ANN001
+        stats = req.get("stats")
+        assert isinstance(stats, dict)
+        stats["layer3_model_enabled"] = False
+        stats["layer3_local_nli_enabled"] = False
+        stats["layer3_local_reranker_enabled"] = False
+        stats["layer3_remote_api_enabled"] = False
+        stats["layer3_nli_capable"] = False
+        stats["layer3_reranker_capable"] = False
+        stats["layer3_effective_capable"] = False
+        stats["layer3_promotion_enabled"] = True
+        stats["layer3_inactive_reasons"] = [
+            "GLOBAL_LAYER3_MODEL_DISABLED",
+            "STRICT_VERIFIER_NLI_UNAVAILABLE",
+        ]
+        return []
+
+    monkeypatch.setattr("modules.nf_workers.runner.ConsistencyEngineImpl.run", fake_run)
+
+    ctx = runner.WorkerContext(
+        job_id="job-consistency-layer3-diag",
+        project_id=project_id,
+        payload={
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "preflight": {
+                "ensure_ingest": False,
+                "ensure_index_fts": False,
+                "schema_scope": "latest_approved",
+            },
+        },
+        params={
+            "consistency": {
+                "layer3_verdict_promotion": True,
+                "verifier": {"mode": "conservative_nli"},
+            }
+        },
+        db_path=db_path,
+    )
+    runner._handle_consistency(ctx)
+
+    with db.connect(db_path) as conn:
+        payload = _last_event_payload(conn, ctx.job_id)
+    assert payload.get("layer3_model_enabled") is False
+    assert payload.get("layer3_nli_capable") is False
+    assert payload.get("layer3_reranker_capable") is False
+    assert payload.get("layer3_effective_capable") is False
+    assert payload.get("layer3_promotion_enabled") is True
+    inactive = payload.get("layer3_inactive_reasons")
+    assert isinstance(inactive, list)
+    assert "GLOBAL_LAYER3_MODEL_DISABLED" in inactive
+    assert "STRICT_VERIFIER_NLI_UNAVAILABLE" in inactive
+
+
+@pytest.mark.unit
+def test_consistency_worker_retries_transient_sqlite_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "시로는 10살이다."
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    call_state = {"count": 0}
+
+    def flaky_run(self, req):  # noqa: ANN001
+        call_state["count"] += 1
+        if call_state["count"] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        stats = req.get("stats")
+        assert isinstance(stats, dict)
+        return []
+
+    monkeypatch.setattr("modules.nf_workers.runner.ConsistencyEngineImpl.run", flaky_run)
+    monkeypatch.setattr("modules.nf_workers.runner.time.sleep", lambda _seconds: None)
+
+    ctx = runner.WorkerContext(
+        job_id="job-consistency-retry",
+        project_id=project_id,
+        payload={
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "preflight": {
+                "ensure_ingest": False,
+                "ensure_index_fts": False,
+                "schema_scope": "latest_approved",
+            },
+        },
+        params={},
+        db_path=db_path,
+    )
+    runner._handle_consistency(ctx)
+
+    assert call_state["count"] == 2
+    with db.connect(db_path) as conn:
+        events = runner.job_repo.list_job_events(conn, ctx.job_id)
+    assert any(event.message == "consistency transient sqlite lock retry" for _, event in events)
 
 
 @pytest.mark.unit

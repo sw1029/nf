@@ -36,6 +36,9 @@ class ApiClient:
     def patch(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         return self._request("PATCH", path, body)
 
+    def delete(self, path: str) -> dict[str, Any]:
+        return self._request("DELETE", path)
+
     def get_text(self, path: str) -> str:
         url = self.base_url + path
         req = request.Request(url=url, method="GET")

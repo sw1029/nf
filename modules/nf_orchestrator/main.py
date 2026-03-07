@@ -108,6 +108,13 @@ def _build_openapi_spec() -> dict[str, Any]:
                 "patch": {"summary": "Update extraction mapping"},
                 "delete": {"summary": "Delete extraction mapping"},
             },
+            "/projects/{project_id}/tags/assignments": {
+                "get": {"summary": "List tag assignments"},
+                "post": {"summary": "Create tag assignment"},
+            },
+            "/projects/{project_id}/tags/assignments/{assign_id}": {
+                "delete": {"summary": "Delete tag assignment"},
+            },
             "/projects/{project_id}/whitelist": {"post": {"summary": "Add whitelist item"}, "delete": {"summary": "Delete whitelist item"}},
             "/projects/{project_id}/ignore": {"post": {"summary": "Add ignore item"}, "delete": {"summary": "Delete ignore item"}},
             "/jobs": {"get": {"summary": "List jobs"}, "post": {"summary": "Submit job"}},

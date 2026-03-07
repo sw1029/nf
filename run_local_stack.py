@@ -12,6 +12,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1).")
     parser.add_argument("--port", type=int, default=8080, help="Bind port (default: 8080).")
     parser.add_argument("--db-path", default="", help="SQLite DB path (default: nf_orchestrator.sqlite3).")
+    parser.add_argument("--docstore-path", default="", help="Docstore path override.")
+    parser.add_argument("--vector-path", default="", help="Vector store path override.")
+    parser.add_argument("--export-path", default="", help="Export path override.")
     parser.add_argument("--api-token", default="", help="Optional NF_ORCHESTRATOR_TOKEN for API calls.")
     parser.add_argument("--no-worker", action="store_true", help="Do not start a worker process.")
     parser.add_argument("--worker-procs", type=int, default=1, help="Number of worker processes (default: 1).")
@@ -42,6 +45,16 @@ def _spawn_worker(repo_root: Path, *, poll_interval: float, lease_seconds: int) 
     return subprocess.Popen([sys.executable, "-c", code], env=env)
 
 
+def _prime_storage(db_path: Path | None) -> Path:
+    from modules.nf_orchestrator.storage import db as storage_db
+
+    resolved_db_path = db_path or storage_db.get_db_path()
+    resolved_db_path.parent.mkdir(parents=True, exist_ok=True)
+    with storage_db.connect(resolved_db_path):
+        pass
+    return resolved_db_path
+
+
 def main() -> int:
     args = _parse_args()
     repo_root = Path(__file__).resolve().parent
@@ -49,13 +62,24 @@ def main() -> int:
         sys.path.insert(0, str(repo_root))
 
     db_path = _resolve_db_path(repo_root, args.db_path)
+    docstore_path = _resolve_db_path(repo_root, args.docstore_path)
+    vector_path = _resolve_db_path(repo_root, args.vector_path)
+    export_path = _resolve_db_path(repo_root, args.export_path)
     if db_path is not None:
         os.environ["NF_ORCH_DB_PATH"] = str(db_path)
+    if docstore_path is not None:
+        os.environ["NF_DOCSTORE_PATH"] = str(docstore_path)
+    if vector_path is not None:
+        os.environ["NF_VECTOR_PATH"] = str(vector_path)
+    if export_path is not None:
+        os.environ["NF_EXPORT_PATH"] = str(export_path)
     if args.api_token.strip():
         os.environ["NF_ORCHESTRATOR_TOKEN"] = args.api_token.strip()
     else:
         os.environ.pop("NF_ORCHESTRATOR_TOKEN", None)
     os.environ["NF_MAX_HEAVY_JOBS"] = str(max(1, int(args.max_heavy_jobs)))
+
+    db_path = _prime_storage(db_path)
 
     worker_procs: list[subprocess.Popen[bytes]] = []
     worker_count = 0 if args.no_worker else max(0, args.worker_procs)
@@ -69,6 +93,12 @@ def main() -> int:
         print(f"- Orchestrator: http://{args.host}:{args.port}")
         if db_path is not None:
             print(f"- DB: {db_path}")
+        if docstore_path is not None:
+            print(f"- Docstore: {docstore_path}")
+        if vector_path is not None:
+            print(f"- Vector: {vector_path}")
+        if export_path is not None:
+            print(f"- Export: {export_path}")
         if worker_procs:
             print(f"- Worker Procs: {len(worker_procs)}")
             for idx, worker_proc in enumerate(worker_procs, start=1):
