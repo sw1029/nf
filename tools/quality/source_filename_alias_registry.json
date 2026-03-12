@@ -1,0 +1,29 @@
+{
+  "version": "20260313-r1",
+  "aliases": [
+    {
+      "source_id": "SRC-4acdce6d77d8",
+      "public_alias": "source-01"
+    },
+    {
+      "source_id": "SRC-7acbd790b5b5",
+      "public_alias": "source-02"
+    },
+    {
+      "source_id": "SRC-07ba6fabce0d",
+      "public_alias": "source-03"
+    },
+    {
+      "source_id": "SRC-2ea3a7ce97b2",
+      "public_alias": "source-04"
+    },
+    {
+      "source_id": "SRC-4986913f40bd",
+      "public_alias": "source-05"
+    },
+    {
+      "source_id": "SRC-cd02f1b1d623",
+      "public_alias": "source-06"
+    }
+  ]
+}

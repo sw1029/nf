@@ -4,9 +4,11 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -227,6 +229,35 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "찾을 수 없음")
         except AppError as exc:
             self._send_app_error(HTTPStatus.BAD_REQUEST, exc.code, exc.message, exc.details)
+        except sqlite3.OperationalError as exc:
+            traceback.print_exc()
+            if db.is_transient_sqlite_lock_error(exc):
+                self._send_app_error(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    ErrorCode.INTERNAL_ERROR,
+                    "database temporarily unavailable",
+                    {
+                        "error_class": type(exc).__name__,
+                        "detail": str(exc),
+                        "retryable": True,
+                        "transient_sqlite_lock": True,
+                    },
+                )
+                return
+            self._send_app_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                ErrorCode.INTERNAL_ERROR,
+                "database operation failed",
+                {"error_class": type(exc).__name__, "detail": str(exc)},
+            )
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            self._send_app_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                ErrorCode.INTERNAL_ERROR,
+                "server internal error",
+                {"error_class": type(exc).__name__},
+            )
 
     def _handle_projects(self, segments: list[str]) -> None:
         if len(segments) == 1:

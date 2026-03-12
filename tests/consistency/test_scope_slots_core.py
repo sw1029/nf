@@ -94,7 +94,7 @@ def test_consistency_detects_job_and_talent_conflicts(tmp_path: Path) -> None:
     tag_job = "설정/인물/주인공/직업"
     tag_talent = "설정/인물/주인공/재능"
     setting_text = "직업: 노 클래스\n재능: 재능 없음"
-    body_text = "그는 9서클 마법사이자 천재였다."
+    body_text = "직업: 9서클 마법사\n재능: 천재"
 
     with db.connect(db_path) as conn:
         _seed_document(

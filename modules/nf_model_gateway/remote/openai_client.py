@@ -30,7 +30,7 @@ def _extract_text(payload: dict[str, Any]) -> str:
     return ""
 
 
-def call_openai(prompt: str) -> str:
+def call_openai(prompt: str, *, timeout_sec: float = 30.0) -> str:
     api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("NF_OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY (or NF_OPENAI_API_KEY) is required")
@@ -53,7 +53,7 @@ def call_openai(prompt: str) -> str:
         },
     )
     try:
-        with request.urlopen(req, timeout=30) as resp:
+        with request.urlopen(req, timeout=max(0.1, float(timeout_sec))) as resp:
             raw = resp.read().decode("utf-8", errors="ignore")
     except error.HTTPError as exc:
         payload = exc.read().decode("utf-8", errors="ignore")

@@ -19,6 +19,18 @@ def test_compare_slot_relation_equivalent_with_postposition() -> None:
 
 
 @pytest.mark.unit
+def test_compare_slot_relation_allows_possessive_head_match() -> None:
+    verdict = consistency_engine._compare_slot("relation", "동생", "주인공의 동생")
+    assert verdict is Verdict.OK
+
+
+@pytest.mark.unit
+def test_compare_slot_relation_rejects_descriptive_phrase_head_match() -> None:
+    verdict = consistency_engine._compare_slot("relation", "조력자", "주인공을 돕는 조력자")
+    assert verdict is None
+
+
+@pytest.mark.unit
 def test_compare_slot_low_similarity_single_token_is_violate() -> None:
     verdict = consistency_engine._compare_slot("job", "검사", "마법사")
     assert verdict is Verdict.VIOLATE

@@ -205,9 +205,6 @@ def _heuristic_extract(bundle: ExtractionBundle) -> list[ExtractionCandidate]:
             _add_candidate(candidates, slot_key="talent", value=m.group(1).strip(), confidence=0.55, matched_text=m.group(1), span_start=m.start(1), span_end=m.end(1))
         elif m := _NO_TALENT_RE.search(text):
             _add_candidate(candidates, slot_key="talent", value="재능 없음", confidence=0.45, matched_text=m.group(1), span_start=m.start(1), span_end=m.end(1))
-        elif "천재" in text:
-            idx = text.find("천재")
-            _add_candidate(candidates, slot_key="talent", value="천재", confidence=0.4, matched_text="천재", span_start=idx, span_end=idx + len("천재"))
     if "death" in allow:
         if m := _DEATH_RE.search(text):
             _add_candidate(candidates, slot_key="death", value=True, confidence=0.55, matched_text=m.group(1), span_start=m.start(1), span_end=m.end(1))

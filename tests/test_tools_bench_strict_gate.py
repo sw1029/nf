@@ -26,6 +26,14 @@ def _artifact(
     rounds_total: int = 10,
     conflicting_unknown_count: int = 0,
     violate_count_total: int = 0,
+    layer3_model_enabled_jobs: int = 0,
+    layer3_local_nli_enabled_jobs: int = 0,
+    layer3_remote_api_enabled_jobs: int = 0,
+    layer3_local_reranker_enabled_jobs: int = 0,
+    layer3_effective_capable_jobs: int = 0,
+    layer3_rerank_applied_count: int = 0,
+    layer3_promoted_ok_count: int = 0,
+    layer3_model_fallback_count: int = 0,
 ) -> dict:
     return {
         "timings_ms": {
@@ -52,6 +60,14 @@ def _artifact(
             "vid_count_total": 10,
             "violate_count_total": violate_count_total,
             "unknown_count_total": 3,
+            "layer3_model_enabled_jobs": layer3_model_enabled_jobs,
+            "layer3_local_nli_enabled_jobs": layer3_local_nli_enabled_jobs,
+            "layer3_remote_api_enabled_jobs": layer3_remote_api_enabled_jobs,
+            "layer3_local_reranker_enabled_jobs": layer3_local_reranker_enabled_jobs,
+            "layer3_effective_capable_jobs": layer3_effective_capable_jobs,
+            "layer3_rerank_applied_count": layer3_rerank_applied_count,
+            "layer3_promoted_ok_count": layer3_promoted_ok_count,
+            "layer3_model_fallback_count": layer3_model_fallback_count,
         },
     }
 
@@ -78,6 +94,12 @@ def test_strict_gate_passes_when_all_conditions_are_met() -> None:
 
     assert result["passed"] is True
     assert all(bool(check["passed"]) for check in result["checks"])
+    assert result["strict_core_gate"]["passed"] is True
+    assert result["strict_core_gate"]["status"] == "PASS"
+    assert result["strict_layer3_gate"]["status"] == "SKIPPED"
+    assert result["strict_layer3_gate"]["reason"] == "layer3_capability_off"
+    assert result["layer3_summary"]["mode"] == "off"
+    assert result["layer3_summary"]["active_capability_source"] == "none"
 
 
 @pytest.mark.unit
@@ -125,3 +147,131 @@ def test_strict_gate_fails_when_inject_conflict_signal_missing() -> None:
     assert result["passed"] is False
     signal_check = next(item for item in result["checks"] if item["name"] == "inject_conflict_signal_present")
     assert signal_check["passed"] is False
+
+
+@pytest.mark.unit
+def test_strict_gate_marks_layer3_skipped_when_no_layer3_signal() -> None:
+    mod = _import_module()
+    baseline = _artifact(consistency_p95=1000.0, retrieval_fts_p95=300.0, level="quick")
+    control = _artifact(consistency_p95=1700.0, retrieval_fts_p95=430.0, level="strict")
+    inject = _artifact(
+        consistency_p95=1700.0,
+        retrieval_fts_p95=430.0,
+        level="strict",
+        conflicting_unknown_count=1,
+    )
+
+    result = mod.evaluate_strict_gate(
+        baseline_payload=baseline,
+        control_payload=control,
+        inject_payload=inject,
+    )
+
+    assert result["strict_core_gate"]["passed"] is True
+    assert result["strict_layer3_gate"]["applicable"] is False
+    assert result["strict_layer3_gate"]["status"] == "SKIPPED"
+    assert result["strict_layer3_gate"]["passed"] is None
+    assert result["layer3_summary"]["effective_state"] == "off"
+
+
+@pytest.mark.unit
+def test_strict_gate_exposes_layer3_gate_when_signal_present() -> None:
+    mod = _import_module()
+    baseline = _artifact(consistency_p95=1000.0, retrieval_fts_p95=300.0, level="quick")
+    control = _artifact(
+        consistency_p95=1700.0,
+        retrieval_fts_p95=430.0,
+        level="strict",
+        layer3_model_enabled_jobs=2,
+        layer3_local_nli_enabled_jobs=2,
+        layer3_effective_capable_jobs=1,
+        layer3_promoted_ok_count=1,
+    )
+    inject = _artifact(
+        consistency_p95=1700.0,
+        retrieval_fts_p95=430.0,
+        level="strict",
+        conflicting_unknown_count=1,
+        layer3_model_enabled_jobs=1,
+        layer3_remote_api_enabled_jobs=1,
+        layer3_effective_capable_jobs=1,
+        layer3_rerank_applied_count=1,
+    )
+
+    result = mod.evaluate_strict_gate(
+        baseline_payload=baseline,
+        control_payload=control,
+        inject_payload=inject,
+    )
+
+    assert result["passed"] is True
+    assert result["strict_layer3_gate"]["applicable"] is True
+    assert result["strict_layer3_gate"]["status"] == "PASS"
+    assert result["strict_layer3_gate"]["passed"] is True
+    assert result["layer3_summary"]["mode"] == "on"
+    assert result["layer3_summary"]["active_capability_source"] == "local_nli+remote_api"
+    assert result["layer3_summary"]["effective_state"] == "active"
+    assert result["layer3_summary"]["control"]["active_capability_source"] == "local_nli"
+    assert result["layer3_summary"]["inject"]["active_capability_source"] == "remote_api"
+
+
+@pytest.mark.unit
+def test_strict_gate_marks_layer3_fail_when_source_is_configured_but_not_effective() -> None:
+    mod = _import_module()
+    baseline = _artifact(consistency_p95=1000.0, retrieval_fts_p95=300.0, level="quick")
+    control = _artifact(
+        consistency_p95=1700.0,
+        retrieval_fts_p95=430.0,
+        level="strict",
+        layer3_local_nli_enabled_jobs=1,
+    )
+    inject = _artifact(
+        consistency_p95=1700.0,
+        retrieval_fts_p95=430.0,
+        level="strict",
+        conflicting_unknown_count=1,
+        layer3_local_nli_enabled_jobs=1,
+    )
+
+    result = mod.evaluate_strict_gate(
+        baseline_payload=baseline,
+        control_payload=control,
+        inject_payload=inject,
+    )
+
+    assert result["passed"] is False
+    assert result["strict_layer3_gate"]["applicable"] is True
+    assert result["strict_layer3_gate"]["status"] == "FAIL"
+    assert result["layer3_summary"]["mode"] == "on"
+    assert result["layer3_summary"]["effective_state"] == "inactive"
+    assert result["layer3_summary"]["active_capability_source"] == "local_nli"
+
+
+@pytest.mark.unit
+def test_render_markdown_surfaces_core_vs_layer3_interpretation() -> None:
+    mod = _import_module()
+    baseline = _artifact(consistency_p95=1000.0, retrieval_fts_p95=300.0, level="quick")
+    control = _artifact(consistency_p95=1700.0, retrieval_fts_p95=430.0, level="strict")
+    inject = _artifact(
+        consistency_p95=1700.0,
+        retrieval_fts_p95=430.0,
+        level="strict",
+        conflicting_unknown_count=1,
+    )
+    result = mod.evaluate_strict_gate(
+        baseline_payload=baseline,
+        control_payload=control,
+        inject_payload=inject,
+    )
+
+    markdown = mod._render_markdown(
+        result,
+        baseline_path=Path("baseline.json"),
+        control_path=Path("control.json"),
+        inject_path=Path("inject.json"),
+    )
+
+    assert "- strict_core_gate_status: `PASS`" in markdown
+    assert "- strict_layer3_gate_status: `SKIPPED`" in markdown
+    assert "- layer3_mode: `off`" in markdown
+    assert "## Strict Meaning" in markdown

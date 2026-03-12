@@ -14,3 +14,4 @@ test_files
 *.sqlite3-shm
 *.sqlite3-wal
 .agents/rules/window.md
+!tools/bench/run_one_shot_validation.ps1

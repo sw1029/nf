@@ -146,3 +146,26 @@ def test_worker_context_heartbeat_extends_job_lease(tmp_path: Path) -> None:
     assert isinstance(before, str)
     assert isinstance(after, str)
     assert after > before
+
+
+@pytest.mark.unit
+def test_owned_lease_extension_rejects_wrong_worker_owner(tmp_path: Path) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    with db.connect(db_path) as conn:
+        project = project_repo.create_project(conn, "p", {})
+        job = job_repo.create_job(conn, project.project_id, JobType.INDEX_FTS, {"scope": "global"}, {})
+        leased = job_repo.lease_next_job(conn, worker_id="worker-a", lease_seconds=5)
+
+        assert leased is not None
+        renewed = job_repo.extend_lease_if_matches(
+            conn,
+            job.job_id,
+            lease_seconds=30,
+            expected_statuses=(runner.JobStatus.RUNNING,),
+            expected_lease_owner="worker-b",
+        )
+        loaded = job_repo.get_job(conn, job.job_id)
+
+    assert renewed is False
+    assert loaded is not None
+    assert loaded.status is runner.JobStatus.RUNNING

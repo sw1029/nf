@@ -1,9 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
-from modules.nf_model_gateway.local.model_store import ensure_model
+from modules.nf_model_gateway.local.model_store import describe_model_path, ensure_model, read_model_manifest
 
 _TOKEN_RE = re.compile(r"\w+", flags=re.UNICODE)
 _NUMBER_RE = re.compile(r"-?\d+")
@@ -46,22 +48,20 @@ def _has_token_pair_mismatch(left: set[str], right: set[str]) -> bool:
     return False
 
 
-def classify_text_pair(
-    premise: str,
-    hypothesis: str,
+def _heuristic_distribution(
+    premise_text: str,
+    hypothesis_text: str,
     *,
-    enabled: bool = False,
-    model_id: str | None = None,
+    fallback_used: bool,
 ) -> dict[str, Any]:
-    model_missing = bool(enabled and model_id and ensure_model(model_id) is None)
-    premise_text = str(premise or "").strip()
-    hypothesis_text = str(hypothesis or "").strip()
+    effective_backend = "heuristic"
     if not premise_text or not hypothesis_text:
         return {
             "entail": 0.0,
             "contradict": 0.0,
             "neutral": 1.0,
-            "fallback_used": model_missing,
+            "effective_backend": effective_backend,
+            "fallback_used": fallback_used,
         }
 
     premise_tokens = _tokens(premise_text)
@@ -71,7 +71,8 @@ def classify_text_pair(
             "entail": 0.0,
             "contradict": 0.0,
             "neutral": 1.0,
-            "fallback_used": model_missing,
+            "effective_backend": effective_backend,
+            "fallback_used": fallback_used,
         }
 
     overlap = premise_tokens.intersection(hypothesis_tokens)
@@ -102,7 +103,8 @@ def classify_text_pair(
             "entail": entail,
             "contradict": contradict,
             "neutral": neutral,
-            "fallback_used": model_missing,
+            "effective_backend": effective_backend,
+            "fallback_used": fallback_used,
         }
 
     entail = _clamp01(0.08 + (0.72 * coverage) + (0.20 * precision))
@@ -126,5 +128,146 @@ def classify_text_pair(
         "entail": entail,
         "contradict": contradict,
         "neutral": neutral,
-        "fallback_used": model_missing,
+        "effective_backend": effective_backend,
+        "fallback_used": fallback_used,
     }
+
+
+def _normalize_label(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def _resolve_label_indices(
+    *,
+    model: Any,
+    manifest: dict[str, Any],
+    label_count: int,
+) -> tuple[int, int, int]:
+    id2label = getattr(getattr(model, "config", None), "id2label", {}) or {}
+    normalized_labels: dict[int, str] = {}
+    if isinstance(id2label, dict):
+        for idx, label in id2label.items():
+            try:
+                normalized_labels[int(idx)] = _normalize_label(label)
+            except (TypeError, ValueError):
+                continue
+    entail_idx = next((idx for idx, label in normalized_labels.items() if "entail" in label), None)
+    contradict_idx = next((idx for idx, label in normalized_labels.items() if "contradict" in label), None)
+    neutral_idx = next((idx for idx, label in normalized_labels.items() if "neutral" in label), None)
+    if entail_idx is not None and contradict_idx is not None and neutral_idx is not None:
+        return entail_idx, contradict_idx, neutral_idx
+
+    manifest_order = manifest.get("label_order")
+    if isinstance(manifest_order, list) and len(manifest_order) == label_count:
+        normalized = [_normalize_label(item) for item in manifest_order]
+        entail_idx = normalized.index("entailment") if "entailment" in normalized else None
+        contradict_idx = normalized.index("contradiction") if "contradiction" in normalized else None
+        neutral_idx = normalized.index("neutral") if "neutral" in normalized else None
+        if entail_idx is not None and contradict_idx is not None and neutral_idx is not None:
+            return entail_idx, contradict_idx, neutral_idx
+
+    if label_count == 3:
+        return 2, 0, 1
+    raise RuntimeError("unable to resolve local NLI label mapping")
+
+
+@lru_cache(maxsize=2)
+def _load_local_sequence_classifier(model_path_str: str) -> tuple[Any, Any, dict[str, Any]]:
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    model_path = Path(model_path_str)
+    tokenizer = AutoTokenizer.from_pretrained(model_path_str, use_fast=True)
+    model = AutoModelForSequenceClassification.from_pretrained(model_path_str)
+    model.eval()
+    return tokenizer, model, read_model_manifest(model_path)
+
+
+def _resolve_max_length(tokenizer: Any, manifest: dict[str, Any]) -> int:
+    if manifest.get("max_length") is not None:
+        try:
+            return max(8, min(1024, int(manifest["max_length"])))
+        except (TypeError, ValueError):
+            pass
+    try:
+        model_max_length = int(getattr(tokenizer, "model_max_length", 512))
+    except (TypeError, ValueError):
+        model_max_length = 512
+    if model_max_length <= 0 or model_max_length > 16384:
+        model_max_length = 512
+    return max(8, min(1024, model_max_length))
+
+
+def _classify_with_local_model(
+    premise_text: str,
+    hypothesis_text: str,
+    *,
+    model_path: Path,
+) -> dict[str, Any]:
+    import torch
+
+    tokenizer, model, manifest = _load_local_sequence_classifier(str(model_path))
+    max_length = _resolve_max_length(tokenizer, manifest)
+    encoded = tokenizer(
+        premise_text,
+        hypothesis_text,
+        truncation=True,
+        max_length=max_length,
+        return_tensors="pt",
+    )
+    with torch.inference_mode():
+        outputs = model(**encoded)
+    logits = outputs.logits[0]
+    probs = torch.nn.functional.softmax(logits, dim=-1).detach().cpu().tolist()
+    entail_idx, contradict_idx, neutral_idx = _resolve_label_indices(
+        model=model,
+        manifest=manifest,
+        label_count=len(probs),
+    )
+    entail = _clamp01(float(probs[entail_idx]))
+    contradict = _clamp01(float(probs[contradict_idx]))
+    neutral = _clamp01(float(probs[neutral_idx]))
+    total = entail + contradict + neutral
+    if total <= 0:
+        entail, contradict, neutral = 0.0, 0.0, 1.0
+    else:
+        entail = _clamp01(entail / total)
+        contradict = _clamp01(contradict / total)
+        neutral = _clamp01(neutral / total)
+    return {
+        "entail": entail,
+        "contradict": contradict,
+        "neutral": neutral,
+        "effective_backend": "local_nli_model",
+        "fallback_used": False,
+    }
+
+
+def classify_text_pair(
+    premise: str,
+    hypothesis: str,
+    *,
+    enabled: bool = False,
+    model_id: str | None = None,
+) -> dict[str, Any]:
+    premise_text = str(premise or "").strip()
+    hypothesis_text = str(hypothesis or "").strip()
+    model_ref = ensure_model(model_id) if enabled and model_id else None
+    fallback_used = bool(enabled and model_id and model_ref is None)
+    if isinstance(model_ref, Path):
+        model_status = describe_model_path(model_ref, model_id=str(model_id or ""))
+        if bool(model_status.get("runtime_ready")):
+            try:
+                return _classify_with_local_model(
+                    premise_text,
+                    hypothesis_text,
+                    model_path=model_ref,
+                )
+            except Exception:
+                fallback_used = True
+        else:
+            fallback_used = True
+    return _heuristic_distribution(
+        premise_text,
+        hypothesis_text,
+        fallback_used=fallback_used,
+    )

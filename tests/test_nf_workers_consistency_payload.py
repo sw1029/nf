@@ -7,9 +7,10 @@ from pathlib import Path
 import pytest
 
 from modules.nf_orchestrator.storage import db, docstore
-from modules.nf_orchestrator.storage.repos import document_repo
+from modules.nf_orchestrator.storage.repos import document_repo, job_repo
 from modules.nf_shared.protocol.dtos import (
     DocumentType,
+    JobType,
     ReliabilityBreakdown,
     Span,
     Verdict,
@@ -69,6 +70,13 @@ def _last_event_payload(conn, job_id: str) -> dict:
     return payload
 
 
+def _seed_running_consistency_job(conn, *, project_id: str) -> str:
+    job = job_repo.create_job(conn, project_id, JobType.CONSISTENCY, {}, {})
+    job_repo.update_job_status(conn, job.job_id, runner.JobStatus.RUNNING)
+    job_repo.extend_lease(conn, job.job_id, lease_seconds=30)
+    return str(job.job_id)
+
+
 @pytest.mark.unit
 def test_consistency_complete_payload_includes_unknown_reason_counts(
     tmp_path: Path,
@@ -89,11 +97,22 @@ def test_consistency_complete_payload_includes_unknown_reason_counts(
             snapshot_id=snapshot_id,
             text=text,
         )
+        job_id = _seed_running_consistency_job(conn, project_id=project_id)
 
     def fake_run(self, req):  # noqa: ANN001
         stats = req.get("stats")
         if isinstance(stats, dict):
             stats["unknown_reason_counts"] = {"NO_EVIDENCE": 1, "SLOT_UNCOMPARABLE": 1}
+            stats["claim_slot_counts"] = {"relation": 1}
+            stats["unknown_slot_counts"] = {"relation": 1}
+            stats["no_evidence_slot_counts"] = {"relation": 1}
+            stats["retrieval_anchor_filtered_count"] = 2
+            stats["anchor_filtered_slot_counts"] = {"relation": 2}
+            stats["snippet_slot_cache_hit_count"] = 3
+            stats["snippet_slot_cache_miss_count"] = 1
+            stats["anchor_rescue_attempt_count"] = 2
+            stats["anchor_rescue_ok_count"] = 1
+            stats["snippet_corroborated_count"] = 1
         return [
             VerdictLog(
                 vid="vid-1",
@@ -119,7 +138,7 @@ def test_consistency_complete_payload_includes_unknown_reason_counts(
     monkeypatch.setattr("modules.nf_workers.runner.ConsistencyEngineImpl.run", fake_run)
 
     ctx = runner.WorkerContext(
-        job_id="job-consistency-1",
+        job_id=job_id,
         project_id=project_id,
         payload={
             "input_doc_id": doc_id,
@@ -142,10 +161,23 @@ def test_consistency_complete_payload_includes_unknown_reason_counts(
     assert isinstance(reason_counts, dict)
     assert int(reason_counts.get("NO_EVIDENCE", 0)) == 1
     assert int(reason_counts.get("SLOT_UNCOMPARABLE", 0)) == 1
+    assert payload.get("claim_slot_counts") == {"relation": 1}
+    assert payload.get("unknown_slot_counts") == {"relation": 1}
+    assert payload.get("no_evidence_slot_counts") == {"relation": 1}
     assert payload.get("graph_mode") == "off"
+    assert "segment_count" in payload
+    assert "segments_with_claims_count" in payload
+    assert "claim_count" in payload
     assert "graph_expand_applied_count" in payload
     assert "graph_auto_trigger_count" in payload
     assert "graph_auto_skip_count" in payload
+    assert "slot_candidate_count" in payload
+    assert "slot_candidate_selected" in payload
+    assert "avg_slot_confidence" in payload
+    assert "claims_skipped_low_confidence" in payload
+    assert "triage_total_claims" in payload
+    assert "triage_selected_claims" in payload
+    assert "triage_skipped_claims" in payload
     assert "metadata_grouping_enabled" in payload
     assert "entity_unresolved_skip_count" in payload
     assert "numeric_conflict_unknown_count" in payload
@@ -174,6 +206,13 @@ def test_consistency_complete_payload_includes_unknown_reason_counts(
     assert "verification_loop_exit_reason_counts" in payload
     assert "verification_loop_reason_transition_counts" in payload
     assert "self_evidence_filtered_count" in payload
+    assert int(payload.get("retrieval_anchor_filtered_count", 0)) == 2
+    assert payload.get("anchor_filtered_slot_counts") == {"relation": 2}
+    assert int(payload.get("snippet_slot_cache_hit_count", 0)) == 3
+    assert int(payload.get("snippet_slot_cache_miss_count", 0)) == 1
+    assert int(payload.get("anchor_rescue_attempt_count", 0)) == 2
+    assert int(payload.get("anchor_rescue_ok_count", 0)) == 1
+    assert int(payload.get("snippet_corroborated_count", 0)) == 1
     assert "layer3_promoted_ok_count" in payload
 
 
@@ -197,6 +236,7 @@ def test_consistency_worker_forwards_layer3_promotion_options(
             snapshot_id=snapshot_id,
             text=text,
         )
+        job_id = _seed_running_consistency_job(conn, project_id=project_id)
 
     captured_req: dict[str, object] = {}
 
@@ -207,7 +247,7 @@ def test_consistency_worker_forwards_layer3_promotion_options(
     monkeypatch.setattr("modules.nf_workers.runner.ConsistencyEngineImpl.run", fake_run)
 
     ctx = runner.WorkerContext(
-        job_id="job-consistency-2",
+        job_id=job_id,
         project_id=project_id,
         payload={
             "input_doc_id": doc_id,
@@ -295,6 +335,7 @@ def test_consistency_payload_reports_layer3_capability_flags(
             snapshot_id=snapshot_id,
             text=text,
         )
+        job_id = _seed_running_consistency_job(conn, project_id=project_id)
 
     def fake_run(self, req):  # noqa: ANN001
         stats = req.get("stats")
@@ -316,7 +357,7 @@ def test_consistency_payload_reports_layer3_capability_flags(
     monkeypatch.setattr("modules.nf_workers.runner.ConsistencyEngineImpl.run", fake_run)
 
     ctx = runner.WorkerContext(
-        job_id="job-consistency-layer3-diag",
+        job_id=job_id,
         project_id=project_id,
         payload={
             "input_doc_id": doc_id,
@@ -380,6 +421,7 @@ def test_consistency_worker_retries_transient_sqlite_lock(
             snapshot_id=snapshot_id,
             text=text,
         )
+        job_id = _seed_running_consistency_job(conn, project_id=project_id)
 
     call_state = {"count": 0}
 
@@ -395,7 +437,7 @@ def test_consistency_worker_retries_transient_sqlite_lock(
     monkeypatch.setattr("modules.nf_workers.runner.time.sleep", lambda _seconds: None)
 
     ctx = runner.WorkerContext(
-        job_id="job-consistency-retry",
+        job_id=job_id,
         project_id=project_id,
         payload={
             "input_doc_id": doc_id,
@@ -438,6 +480,7 @@ def test_consistency_preflight_graph_mode_does_not_force_metadata_grouping(
             snapshot_id=snapshot_id,
             text=text,
         )
+        job_id = _seed_running_consistency_job(conn, project_id=project_id)
 
     captured_params: list[dict[str, object]] = []
 
@@ -449,7 +492,7 @@ def test_consistency_preflight_graph_mode_does_not_force_metadata_grouping(
     monkeypatch.setattr("modules.nf_workers.runner._handle_index_fts", capture_index_fts)
 
     ctx = runner.WorkerContext(
-        job_id="job-consistency-preflight-1",
+        job_id=job_id,
         project_id=project_id,
         payload={
             "input_doc_id": doc_id,
@@ -494,6 +537,7 @@ def test_consistency_preflight_enables_metadata_grouping_when_requested(
             snapshot_id=snapshot_id,
             text=text,
         )
+        job_id = _seed_running_consistency_job(conn, project_id=project_id)
 
     captured_params: list[dict[str, object]] = []
 
@@ -505,7 +549,7 @@ def test_consistency_preflight_enables_metadata_grouping_when_requested(
     monkeypatch.setattr("modules.nf_workers.runner._handle_index_fts", capture_index_fts)
 
     ctx = runner.WorkerContext(
-        job_id="job-consistency-preflight-2",
+        job_id=job_id,
         project_id=project_id,
         payload={
             "input_doc_id": doc_id,

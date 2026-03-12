@@ -21,7 +21,7 @@ class JobServiceImpl:
         *,
         priority: int = 100,
     ) -> Job:
-        with db.connect(self._db_path) as conn:
+        def _action(conn):  # noqa: ANN001
             job = job_repo.create_job(conn, project_id, job_type, inputs, params, priority=priority)
             job_repo.add_job_event(
                 conn,
@@ -32,9 +32,10 @@ class JobServiceImpl:
                 metrics={"job_type": job_type.value},
             )
             return job
+        return db.run_with_retry(self._db_path, _action)
 
     def cancel(self, job_id: str) -> Job | None:
-        with db.connect(self._db_path) as conn:
+        def _action(conn):  # noqa: ANN001
             job = job_repo.cancel_job(conn, job_id)
             if job is not None:
                 job_repo.add_job_event(
@@ -45,23 +46,25 @@ class JobServiceImpl:
                     progress=1.0,
                 )
             return job
+        return db.run_with_retry(self._db_path, _action)
 
     def get(self, job_id: str) -> Job | None:
-        with db.connect(self._db_path) as conn:
-            return job_repo.get_job(conn, job_id)
+        return db.run_with_retry(self._db_path, lambda conn: job_repo.get_job(conn, job_id))
 
     def list(self, *, project_id: str | None = None, limit: int = 20) -> list[Job]:
-        with db.connect(self._db_path) as conn:
-            return job_repo.list_jobs(conn, project_id=project_id, limit=limit)
+        return db.run_with_retry(
+            self._db_path,
+            lambda conn: job_repo.list_jobs(conn, project_id=project_id, limit=limit),
+        )
 
     def get_payloads(self, job_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
-        with db.connect(self._db_path) as conn:
-            return job_repo.get_job_payloads(conn, job_id)
+        return db.run_with_retry(self._db_path, lambda conn: job_repo.get_job_payloads(conn, job_id))
 
     def set_result(self, job_id: str, result: dict[str, Any] | None) -> None:
-        with db.connect(self._db_path) as conn:
-            job_repo.set_job_result(conn, job_id, result=result)
+        db.run_with_retry(self._db_path, lambda conn: job_repo.set_job_result(conn, job_id, result=result))
 
     def list_events(self, job_id: str, *, after_seq: int = 0) -> list[tuple[int, JobEvent]]:
-        with db.connect(self._db_path) as conn:
-            return job_repo.list_job_events(conn, job_id, after_seq=after_seq)
+        return db.run_with_retry(
+            self._db_path,
+            lambda conn: job_repo.list_job_events(conn, job_id, after_seq=after_seq),
+        )

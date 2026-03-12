@@ -94,6 +94,10 @@ class CancelledError(RuntimeError):
     pass
 
 
+class LostLeaseError(RuntimeError):
+    pass
+
+
 def _is_transient_sqlite_lock_error(exc: sqlite3.OperationalError) -> bool:
     message = str(exc).strip().lower()
     return any(token in message for token in _SQLITE_LOCK_ERROR_TOKENS)
@@ -131,6 +135,7 @@ class WorkerContext:
         project_id: str,
         payload: dict[str, Any],
         params: dict[str, Any],
+        worker_id: str | None = None,
         db_path=None,
         poll_interval: float = 1.0,
         lease_seconds: int = 30,
@@ -139,16 +144,41 @@ class WorkerContext:
         self.project_id = project_id
         self.payload = payload
         self.params = params
+        self._worker_id = str(worker_id or "")
         self._db_path = db_path
         self._poll_interval = poll_interval
         self._lease_seconds = lease_seconds
         self._last_payload: dict[str, Any] | None = None
         self._last_lease_heartbeat_mono = time.monotonic()
 
+    def _renew_owned_lease(self) -> None:
+        renewed = _run_db_action_with_retry(
+            self._db_path,
+            lambda conn: job_repo.extend_lease_if_matches(
+                conn,
+                self.job_id,
+                lease_seconds=self._lease_seconds,
+                expected_statuses=(JobStatus.RUNNING,),
+                expected_lease_owner=(self._worker_id or None),
+            ),
+            poll_interval=self._poll_interval,
+        )
+        if not renewed:
+            raise LostLeaseError(f"job lease lost: {self.job_id}")
+
     def emit(self, event: JobEvent) -> None:
         if isinstance(event.payload, dict):
             self._last_payload = dict(event.payload)
         def _action(conn: sqlite3.Connection) -> None:
+            renewed = job_repo.extend_lease_if_matches(
+                conn,
+                self.job_id,
+                lease_seconds=self._lease_seconds,
+                expected_statuses=(JobStatus.RUNNING,),
+                expected_lease_owner=(self._worker_id or None),
+            )
+            if not renewed:
+                raise LostLeaseError(f"job lease lost: {self.job_id}")
             job_repo.add_job_event(
                 conn,
                 self.job_id,
@@ -158,7 +188,6 @@ class WorkerContext:
                 metrics=dict(event.metrics) if event.metrics else None,
                 payload=dict(event.payload) if event.payload else None,
             )
-            job_repo.extend_lease(conn, self.job_id, lease_seconds=self._lease_seconds)
 
         _run_db_action_with_retry(
             self._db_path,
@@ -178,11 +207,7 @@ class WorkerContext:
         now_mono = time.monotonic()
         if not force and (now_mono - self._last_lease_heartbeat_mono) < _LEASE_HEARTBEAT_INTERVAL_SEC:
             return False
-        _run_db_action_with_retry(
-            self._db_path,
-            lambda conn: job_repo.extend_lease(conn, self.job_id, lease_seconds=self._lease_seconds),
-            poll_interval=self._poll_interval,
-        )
+        self._renew_owned_lease()
         self._last_lease_heartbeat_mono = time.monotonic()
         return True
 
@@ -268,6 +293,7 @@ def run_worker(
                 project_id=job.project_id,
                 payload=inputs,
                 params=params,
+                worker_id=worker_id,
                 db_path=db_path,
                 poll_interval=poll_interval,
                 lease_seconds=lease_seconds,
@@ -284,14 +310,29 @@ def run_worker(
                     )
                 )
                 _run_job(job.type, ctx)
-                def _mark_succeeded(conn: sqlite3.Connection) -> None:
-                    job_repo.set_job_result(conn, job.job_id, result=ctx.result_payload())
-                    job_repo.update_job_status(conn, job.job_id, JobStatus.SUCCEEDED)
-                _run_db_action_with_retry(
+                def _mark_succeeded(conn: sqlite3.Connection) -> bool:
+                    result_set = job_repo.set_job_result_if_matches(
+                        conn,
+                        job.job_id,
+                        result=ctx.result_payload(),
+                        expected_statuses=(JobStatus.RUNNING,),
+                        expected_lease_owner=worker_id,
+                    )
+                    updated = job_repo.update_job_status_if_matches(
+                        conn,
+                        job.job_id,
+                        JobStatus.SUCCEEDED,
+                        expected_statuses=(JobStatus.RUNNING,),
+                        expected_lease_owner=worker_id,
+                    )
+                    return bool(result_set and updated is not None)
+                marked_succeeded = _run_db_action_with_retry(
                     db_path,
                     _mark_succeeded,
                     poll_interval=poll_interval,
                 )
+                if not marked_succeeded:
+                    raise LostLeaseError(f"job terminal transition blocked after lease loss: {job.job_id}")
                 ctx.emit(
                     JobEvent(
                         event_id="",
@@ -302,15 +343,33 @@ def run_worker(
                         progress=1.0,
                     )
                 )
+            except LostLeaseError:
+                pass
             except CancelledError:
-                def _mark_canceled(conn: sqlite3.Connection) -> None:
-                    job_repo.set_job_result(conn, job.job_id, result=None)
-                    job_repo.update_job_status(conn, job.job_id, JobStatus.CANCELED)
-                _run_db_action_with_retry(
+                def _mark_canceled(conn: sqlite3.Connection) -> bool:
+                    result_set = job_repo.set_job_result_if_matches(
+                        conn,
+                        job.job_id,
+                        result=None,
+                        expected_statuses=(JobStatus.RUNNING,),
+                        expected_lease_owner=worker_id,
+                    )
+                    updated = job_repo.update_job_status_if_matches(
+                        conn,
+                        job.job_id,
+                        JobStatus.CANCELED,
+                        expected_statuses=(JobStatus.RUNNING,),
+                        expected_lease_owner=worker_id,
+                    )
+                    return bool(result_set and updated is not None)
+                marked_canceled = _run_db_action_with_retry(
                     db_path,
                     _mark_canceled,
                     poll_interval=poll_interval,
                 )
+                if not marked_canceled:
+                    processed += 1
+                    continue
                 ctx.emit(
                     JobEvent(
                         event_id="",
@@ -322,15 +381,38 @@ def run_worker(
                     )
                 )
             except Exception as exc:  # noqa: BLE001
-                def _mark_failed(conn: sqlite3.Connection) -> None:
-                    job_repo.set_job_result(conn, job.job_id, result=None)
-                    job_repo.set_job_error(conn, job.job_id, error_code="INTERNAL_ERROR", error_message=str(exc))
-                    job_repo.update_job_status(conn, job.job_id, JobStatus.FAILED)
-                _run_db_action_with_retry(
+                def _mark_failed(conn: sqlite3.Connection) -> bool:
+                    result_set = job_repo.set_job_result_if_matches(
+                        conn,
+                        job.job_id,
+                        result=None,
+                        expected_statuses=(JobStatus.RUNNING,),
+                        expected_lease_owner=worker_id,
+                    )
+                    error_set = job_repo.set_job_error_if_matches(
+                        conn,
+                        job.job_id,
+                        error_code="INTERNAL_ERROR",
+                        error_message=str(exc),
+                        expected_statuses=(JobStatus.RUNNING,),
+                        expected_lease_owner=worker_id,
+                    )
+                    updated = job_repo.update_job_status_if_matches(
+                        conn,
+                        job.job_id,
+                        JobStatus.FAILED,
+                        expected_statuses=(JobStatus.RUNNING,),
+                        expected_lease_owner=worker_id,
+                    )
+                    return bool(result_set and error_set and updated is not None)
+                marked_failed = _run_db_action_with_retry(
                     db_path,
                     _mark_failed,
                     poll_interval=poll_interval,
                 )
+                if not marked_failed:
+                    processed += 1
+                    continue
                 ctx.emit(
                     JobEvent(
                         event_id="",
@@ -1708,9 +1790,28 @@ def _handle_consistency(ctx: WorkerContext) -> None:
                 "mapping_checksum": req_stats.get("mapping_checksum", ""),
                 "rule_eval_ms": float(req_stats.get("rule_eval_ms", 0.0)),
                 "model_eval_ms": float(req_stats.get("model_eval_ms", 0.0)),
+                "segment_count": int(req_stats.get("segment_count", 0)),
+                "segments_with_claims_count": int(req_stats.get("segments_with_claims_count", 0)),
+                "claim_count": int(req_stats.get("claim_count", 0)),
                 "slot_matches": int(req_stats.get("slot_matches", 0)),
+                "slot_candidate_count": int(req_stats.get("slot_candidate_count", 0)),
+                "slot_candidate_selected": int(req_stats.get("slot_candidate_selected", 0)),
+                "avg_slot_confidence": float(req_stats.get("avg_slot_confidence", 0.0)),
+                "claims_skipped_low_confidence": int(req_stats.get("claims_skipped_low_confidence", 0)),
+                "triage_total_claims": int(req_stats.get("triage_total_claims", 0)),
+                "triage_selected_claims": int(req_stats.get("triage_selected_claims", 0)),
+                "triage_skipped_claims": int(req_stats.get("triage_skipped_claims", 0)),
+                "claim_slot_counts": dict(req_stats.get("claim_slot_counts", {}))
+                if isinstance(req_stats.get("claim_slot_counts"), dict)
+                else {},
                 "unknown_reason_counts": dict(req_stats.get("unknown_reason_counts", {}))
                 if isinstance(req_stats.get("unknown_reason_counts"), dict)
+                else {},
+                "unknown_slot_counts": dict(req_stats.get("unknown_slot_counts", {}))
+                if isinstance(req_stats.get("unknown_slot_counts"), dict)
+                else {},
+                "no_evidence_slot_counts": dict(req_stats.get("no_evidence_slot_counts", {}))
+                if isinstance(req_stats.get("no_evidence_slot_counts"), dict)
                 else {},
                 "graph_mode": str(req_stats.get("graph_mode", req.get("graph_mode", "off"))),
                 "graph_expand_applied_count": int(req_stats.get("graph_expand_applied_count", 0)),
@@ -1772,6 +1873,15 @@ def _handle_consistency(ctx: WorkerContext) -> None:
                 if isinstance(req_stats.get("verification_loop_reason_transition_counts"), dict)
                 else {},
                 "self_evidence_filtered_count": int(req_stats.get("self_evidence_filtered_count", 0)),
+                "retrieval_anchor_filtered_count": int(req_stats.get("retrieval_anchor_filtered_count", 0)),
+                "anchor_filtered_slot_counts": dict(req_stats.get("anchor_filtered_slot_counts", {}))
+                if isinstance(req_stats.get("anchor_filtered_slot_counts"), dict)
+                else {},
+                "snippet_slot_cache_hit_count": int(req_stats.get("snippet_slot_cache_hit_count", 0)),
+                "snippet_slot_cache_miss_count": int(req_stats.get("snippet_slot_cache_miss_count", 0)),
+                "anchor_rescue_attempt_count": int(req_stats.get("anchor_rescue_attempt_count", 0)),
+                "anchor_rescue_ok_count": int(req_stats.get("anchor_rescue_ok_count", 0)),
+                "snippet_corroborated_count": int(req_stats.get("snippet_corroborated_count", 0)),
                 "layer3_promoted_ok_count": int(req_stats.get("layer3_promoted_ok_count", 0)),
                 **_standard_metrics_payload(
                     start_perf=start_perf,

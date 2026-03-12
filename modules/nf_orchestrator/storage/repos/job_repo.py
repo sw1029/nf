@@ -3,7 +3,7 @@
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from modules.nf_shared.protocol.dtos import Job, JobEvent, JobEventLevel, JobStatus, JobType
 
@@ -50,6 +50,24 @@ def _build_in_clause(values: Iterable[str]) -> tuple[str, list[str]]:
     values = list(values)
     placeholders = ",".join(["?"] * len(values))
     return f"({placeholders})", values
+
+
+def _build_job_match_clause(
+    *,
+    job_id: str,
+    expected_statuses: Sequence[JobStatus] | None = None,
+    expected_lease_owner: str | None = None,
+) -> tuple[str, list[Any]]:
+    clauses = ["job_id = ?"]
+    params: list[Any] = [job_id]
+    if expected_statuses:
+        clause, values = _build_in_clause([status.value for status in expected_statuses])
+        clauses.append(f"status IN {clause}")
+        params.extend(values)
+    if expected_lease_owner is not None:
+        clauses.append("lease_owner = ?")
+        params.append(expected_lease_owner)
+    return " AND ".join(clauses), params
 
 
 def create_job(
@@ -135,33 +153,54 @@ def get_job_payloads(conn, job_id: str) -> tuple[dict[str, Any], dict[str, Any]]
 
 
 def update_job_status(conn, job_id: str, status: JobStatus) -> Job | None:
+    return update_job_status_if_matches(conn, job_id, status)
+
+
+def update_job_status_if_matches(
+    conn,
+    job_id: str,
+    status: JobStatus,
+    *,
+    expected_statuses: Sequence[JobStatus] | None = None,
+    expected_lease_owner: str | None = None,
+) -> Job | None:
     ts = _now_ts()
+    where_clause, where_params = _build_job_match_clause(
+        job_id=job_id,
+        expected_statuses=expected_statuses,
+        expected_lease_owner=expected_lease_owner,
+    )
     if status is JobStatus.RUNNING:
-        conn.execute(
-            "UPDATE jobs SET status = ?, started_at = ? WHERE job_id = ?",
-            (status.value, ts, job_id),
+        cur = conn.execute(
+            f"UPDATE jobs SET status = ?, started_at = ? WHERE {where_clause}",
+            (status.value, ts, *where_params),
         )
     elif status in {JobStatus.SUCCEEDED, JobStatus.CANCELED}:
-        conn.execute(
+        cur = conn.execute(
             """
             UPDATE jobs
             SET status = ?, finished_at = ?, lease_owner = NULL, lease_expires_at = NULL, error_code = NULL, error_message = NULL
-            WHERE job_id = ?
-            """,
-            (status.value, ts, job_id),
+            WHERE """
+            + where_clause,
+            (status.value, ts, *where_params),
         )
     elif status is JobStatus.FAILED:
-        conn.execute(
+        cur = conn.execute(
             """
             UPDATE jobs
             SET status = ?, finished_at = ?, lease_owner = NULL, lease_expires_at = NULL
-            WHERE job_id = ?
-            """,
-            (status.value, ts, job_id),
+            WHERE """
+            + where_clause,
+            (status.value, ts, *where_params),
         )
     else:
-        conn.execute("UPDATE jobs SET status = ? WHERE job_id = ?", (status.value, job_id))
+        cur = conn.execute(
+            "UPDATE jobs SET status = ? WHERE " + where_clause,
+            (status.value, *where_params),
+        )
     conn.commit()
+    if cur.rowcount == 0:
+        return None
     return get_job(conn, job_id)
 
 
@@ -357,27 +396,79 @@ def lease_next_job(
 
 
 def extend_lease(conn, job_id: str, *, lease_seconds: int) -> None:
+    extend_lease_if_matches(conn, job_id, lease_seconds=lease_seconds)
+
+
+def extend_lease_if_matches(
+    conn,
+    job_id: str,
+    *,
+    lease_seconds: int,
+    expected_statuses: Sequence[JobStatus] | None = None,
+    expected_lease_owner: str | None = None,
+) -> bool:
     now = _now_ts()
     lease_expires_at = _add_seconds(now, lease_seconds)
-    conn.execute(
-        "UPDATE jobs SET lease_expires_at = ? WHERE job_id = ?",
-        (lease_expires_at, job_id),
+    where_clause, where_params = _build_job_match_clause(
+        job_id=job_id,
+        expected_statuses=expected_statuses,
+        expected_lease_owner=expected_lease_owner,
+    )
+    cur = conn.execute(
+        "UPDATE jobs SET lease_expires_at = ? WHERE " + where_clause,
+        (lease_expires_at, *where_params),
     )
     conn.commit()
+    return cur.rowcount > 0
 
 
 def set_job_error(conn, job_id: str, *, error_code: str, error_message: str) -> None:
-    conn.execute(
-        "UPDATE jobs SET error_code = ?, error_message = ? WHERE job_id = ?",
-        (error_code, error_message, job_id),
+    set_job_error_if_matches(conn, job_id, error_code=error_code, error_message=error_message)
+
+
+def set_job_error_if_matches(
+    conn,
+    job_id: str,
+    *,
+    error_code: str,
+    error_message: str,
+    expected_statuses: Sequence[JobStatus] | None = None,
+    expected_lease_owner: str | None = None,
+) -> bool:
+    where_clause, where_params = _build_job_match_clause(
+        job_id=job_id,
+        expected_statuses=expected_statuses,
+        expected_lease_owner=expected_lease_owner,
+    )
+    cur = conn.execute(
+        "UPDATE jobs SET error_code = ?, error_message = ? WHERE " + where_clause,
+        (error_code, error_message, *where_params),
     )
     conn.commit()
+    return cur.rowcount > 0
 
 
 def set_job_result(conn, job_id: str, *, result: dict[str, Any] | None) -> None:
+    set_job_result_if_matches(conn, job_id, result=result)
+
+
+def set_job_result_if_matches(
+    conn,
+    job_id: str,
+    *,
+    result: dict[str, Any] | None,
+    expected_statuses: Sequence[JobStatus] | None = None,
+    expected_lease_owner: str | None = None,
+) -> bool:
     payload = json.dumps(result, ensure_ascii=False) if isinstance(result, dict) else None
-    conn.execute(
-        "UPDATE jobs SET result_json = ? WHERE job_id = ?",
-        (payload, job_id),
+    where_clause, where_params = _build_job_match_clause(
+        job_id=job_id,
+        expected_statuses=expected_statuses,
+        expected_lease_owner=expected_lease_owner,
+    )
+    cur = conn.execute(
+        "UPDATE jobs SET result_json = ? WHERE " + where_clause,
+        (payload, *where_params),
     )
     conn.commit()
+    return cur.rowcount > 0

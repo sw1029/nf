@@ -4,15 +4,24 @@ import hashlib
 import os
 import sqlite3
 import threading
+import time
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable, TypeVar
 
 DEFAULT_DB_PATH = Path(os.environ.get("NF_ORCH_DB_PATH", "nf_orchestrator.sqlite3"))
 _SCHEMA_USER_VERSION = 1
 _SQLITE_CONNECT_TIMEOUT_SEC = 30.0
 _SQLITE_BUSY_TIMEOUT_MS = 30000
+_SQLITE_LOCK_RETRY_ATTEMPTS = 4
+_SQLITE_LOCK_RETRY_BASE_SEC = 0.25
+_SQLITE_LOCK_ERROR_TOKENS = (
+    "database is locked",
+    "database schema is locked",
+    "database table is locked",
+)
 _INITIALIZED_DB_KEYS: set[str] = set()
 _INITIALIZE_LOCK = threading.Lock()
+_T = TypeVar("_T")
 
 
 def get_db_path() -> Path:
@@ -36,6 +45,35 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
         pass
     _initialize_if_needed(conn, path)
     return conn
+
+
+def is_transient_sqlite_lock_error(exc: sqlite3.OperationalError) -> bool:
+    message = str(exc).strip().lower()
+    return any(token in message for token in _SQLITE_LOCK_ERROR_TOKENS)
+
+
+def sqlite_retry_delay(base_delay_sec: float, attempt: int) -> float:
+    base = max(0.05, float(base_delay_sec))
+    return min(1.0, base * max(1, attempt))
+
+
+def run_with_retry(
+    db_path: Path | None,
+    action: Callable[[sqlite3.Connection], _T],
+    *,
+    max_attempts: int = _SQLITE_LOCK_RETRY_ATTEMPTS,
+    retry_delay_sec: float = _SQLITE_LOCK_RETRY_BASE_SEC,
+) -> _T:
+    attempt = 0
+    while True:
+        try:
+            with connect(db_path) as conn:
+                return action(conn)
+        except sqlite3.OperationalError as exc:
+            if (not is_transient_sqlite_lock_error(exc)) or attempt >= max_attempts - 1:
+                raise
+            attempt += 1
+            time.sleep(sqlite_retry_delay(retry_delay_sec, attempt))
 
 
 def _db_key(path: Path) -> str:

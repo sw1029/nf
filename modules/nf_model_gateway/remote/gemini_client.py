@@ -29,7 +29,7 @@ def _extract_text(payload: dict[str, Any]) -> str:
     return "\n".join(texts)
 
 
-def call_gemini(prompt: str) -> str:
+def call_gemini(prompt: str, *, timeout_sec: float = 30.0) -> str:
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("NF_GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY (or NF_GEMINI_API_KEY) is required")
@@ -54,7 +54,7 @@ def call_gemini(prompt: str) -> str:
         headers={"Content-Type": "application/json"},
     )
     try:
-        with request.urlopen(req, timeout=30) as resp:
+        with request.urlopen(req, timeout=max(0.1, float(timeout_sec))) as resp:
             raw = resp.read().decode("utf-8", errors="ignore")
     except error.HTTPError as exc:
         payload = exc.read().decode("utf-8", errors="ignore")

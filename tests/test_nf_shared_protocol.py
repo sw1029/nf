@@ -1,4 +1,5 @@
 ﻿import dataclasses
+import os
 from pathlib import Path
 
 import pytest
@@ -131,14 +132,29 @@ def test_version_is_not_placeholder() -> None:
 
 @pytest.mark.unit
 def test_load_config_reads_file_and_env_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in (
+        "NF_ENABLE_TEST_JUDGE_LOCAL_NLI",
+        "NF_TEST_JUDGE_LOCAL_NLI_MODEL_ID",
+        "NF_TEST_JUDGE_MIN_CONFIDENCE",
+        "NF_TEST_JUDGE_TIMEOUT_MS",
+    ):
+        monkeypatch.delenv(key, raising=False)
     config_path = tmp_path / "nf_config.toml"
-    config_path.write_text("enable_remote_api = true\nmax_loaded_shards = 5\n", encoding="utf-8")
+    config_path.write_text(
+        "enable_remote_api = true\n"
+        "enable_test_judge_local_nli = true\n"
+        "test_judge_timeout_ms = 1500\n"
+        "max_loaded_shards = 5\n",
+        encoding="utf-8",
+    )
 
     monkeypatch.setenv("NF_MAX_RAM_MB", "1024")
     monkeypatch.setenv("NF_MAX_HEAVY_JOBS", "3")
 
     settings = load_config(config_path)
     assert settings.enable_remote_api is True
+    assert settings.enable_test_judge_local_nli is True
+    assert settings.test_judge_timeout_ms == 1500
     assert settings.max_loaded_shards == 5
     assert settings.max_ram_mb == 1024
     assert settings.max_heavy_jobs == 3
@@ -147,6 +163,25 @@ def test_load_config_reads_file_and_env_overrides(tmp_path: Path, monkeypatch: p
 @pytest.mark.unit
 def test_load_config_defaults_when_no_file(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NF_ENABLE_REMOTE_API", raising=False)
+    monkeypatch.delenv("NF_ENABLE_TEST_JUDGE_LOCAL_NLI", raising=False)
+    monkeypatch.delenv("NF_TEST_JUDGE_TIMEOUT_MS", raising=False)
     settings = load_config(path=None)
     assert isinstance(settings, Settings)
     assert settings.enable_remote_api is False
+
+
+@pytest.mark.unit
+def test_load_config_accepts_utf8_bom_toml(tmp_path: Path) -> None:
+    os.environ.pop("NF_ENABLE_TEST_JUDGE_LOCAL_NLI", None)
+    os.environ.pop("NF_TEST_JUDGE_TIMEOUT_MS", None)
+    config_path = tmp_path / "nf_config.toml"
+    config_path.write_bytes(
+        b"\xef\xbb\xbf"
+        + "enable_test_judge_local_nli = true\n"
+        "test_judge_timeout_ms = 1500\n".encode("utf-8")
+    )
+
+    settings = load_config(config_path)
+
+    assert settings.enable_test_judge_local_nli is True
+    assert settings.test_judge_timeout_ms == 1500

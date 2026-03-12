@@ -18,17 +18,40 @@ def _write_bench(
     dataset_path: str | None = None,
     bench_label: str | None = None,
     status: dict[str, object] | None = None,
+    artifact_cohort: str | None = None,
 ) -> None:
     payload = {
         "doc_count": doc_count,
         "finished_at": finished_at,
         "dataset_path": dataset_path or f"verify/datasets/DS-GROWTH-{doc_count}.jsonl",
         "bench_label": bench_label or "",
+        "artifact_cohort": artifact_cohort or "",
         "status": status or {},
         "timings_ms": {
             "consistency_p95": consistency_p95,
             "retrieval_fts_p95": retrieval_fts_p95,
         },
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _write_failure(
+    path: Path,
+    *,
+    dataset_path: str,
+    bench_label: str,
+    attempt_stage: str,
+    error_class: str,
+    generated_at_utc: str = "2026-03-07T08:00:00Z",
+) -> None:
+    payload = {
+        "generated_at_utc": generated_at_utc,
+        "ok": False,
+        "failure_kind": "bench_transport_or_frontdoor",
+        "dataset_path": dataset_path,
+        "bench_label": bench_label,
+        "attempt_stage": attempt_stage,
+        "error_class": error_class,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -322,6 +345,10 @@ def test_bench_latest_metrics_summary_excludes_unsuccessful_pipeline_artifacts(t
     ds800 = summary["datasets"]["DS-800"]
 
     assert ds800["latest_file"] == "20260301T100000Z.json"
+    assert ds800["latest_successful_file"] == "20260301T100000Z.json"
+    assert ds800["latest_attempt_file"] == "20260301T101000Z.json"
+    assert ds800["latest_attempt_status"] == "index_fts:FAILED"
+    assert ds800["latest_attempt_succeeded"] is False
     assert ds800["status"] == "NO_BASELINE"
     assert summary["label_filter"]["excluded_unsuccessful_status"] == 1
 
@@ -362,3 +389,304 @@ def test_bench_latest_metrics_summary_separates_trend_status_from_absolute_goal_
     markdown = summary_mod.render_markdown(summary)
     assert "overall_status (trend_relative)" in markdown
     assert "absolute_goal_status" in markdown
+
+
+@pytest.mark.unit
+def test_bench_latest_metrics_summary_surfaces_latest_attempt_without_overwriting_latest_successful(tmp_path: Path) -> None:
+    bench_dir = tmp_path / "benchmarks"
+    bench_dir.mkdir(parents=True, exist_ok=True)
+
+    _write_bench(
+        bench_dir / "20260307T060000Z.json",
+        doc_count=400,
+        finished_at="2026-03-07T06:00:00Z",
+        consistency_p95=2200.0,
+        retrieval_fts_p95=40.0,
+        dataset_path="verify/datasets/DS-GROWTH-400.jsonl",
+        bench_label="operational-main:DS-400",
+        status={
+            "index_fts": "SUCCEEDED",
+            "index_vec": "SUCCEEDED",
+            "ingest_failures": 0,
+            "consistency_failures": 0,
+            "retrieve_vec_failures": 0,
+        },
+    )
+    _write_bench(
+        bench_dir / "20260307T070000Z.json",
+        doc_count=400,
+        finished_at="2026-03-07T07:00:00Z",
+        consistency_p95=1800.0,
+        retrieval_fts_p95=35.0,
+        dataset_path="verify/datasets/DS-GROWTH-400.jsonl",
+        bench_label="operational-main:DS-400",
+        status={
+            "index_fts": "FAILED",
+            "index_vec": "SUCCEEDED",
+            "ingest_failures": 0,
+            "consistency_failures": 0,
+            "retrieve_vec_failures": 0,
+        },
+    )
+
+    bench_tools_dir = Path("tools/bench").resolve()
+    sys.path.insert(0, str(bench_tools_dir))
+    try:
+        summary_mod = importlib.import_module("summarize_latest_metrics")
+    finally:
+        if str(bench_tools_dir) in sys.path:
+            sys.path.remove(str(bench_tools_dir))
+
+    summary = summary_mod.summarize_benchmarks(
+        bench_dir,
+        datasets=("DS-400",),
+        label_mode="operational",
+    )
+    ds400 = summary["datasets"]["DS-400"]
+
+    assert ds400["latest_file"] == "20260307T060000Z.json"
+    assert ds400["latest_successful_file"] == "20260307T060000Z.json"
+    assert ds400["latest_attempt_file"] == "20260307T070000Z.json"
+    assert ds400["latest_attempt_status"] == "index_fts:FAILED"
+    assert ds400["latest_attempt_succeeded"] is False
+
+    markdown = summary_mod.render_markdown(summary)
+    assert "20260307T070000Z.json (index_fts:FAILED)" in markdown
+
+
+@pytest.mark.unit
+def test_bench_latest_metrics_summary_tracks_failure_artifact_as_latest_attempt(tmp_path: Path) -> None:
+    bench_dir = tmp_path / "benchmarks"
+    bench_dir.mkdir(parents=True, exist_ok=True)
+
+    _write_bench(
+        bench_dir / "20260307T060000Z.json",
+        doc_count=800,
+        finished_at="2026-03-07T06:00:00Z",
+        consistency_p95=2200.0,
+        retrieval_fts_p95=40.0,
+        dataset_path="verify/datasets/DS-GROWTH-800.jsonl",
+        bench_label="operational-main:DS-800",
+        status={
+            "index_fts": "SUCCEEDED",
+            "index_vec": "SUCCEEDED",
+            "ingest_failures": 0,
+            "consistency_failures": 0,
+            "retrieve_vec_failures": 0,
+        },
+    )
+    _write_failure(
+        bench_dir / "failure_20260307T080000Z.json",
+        dataset_path="verify/datasets/DS-GROWTH-800.jsonl",
+        bench_label="operational-main:DS-800",
+        attempt_stage="index_vec",
+        error_class="RemoteDisconnected",
+        generated_at_utc="2026-03-07T08:00:00Z",
+    )
+
+    bench_tools_dir = Path("tools/bench").resolve()
+    sys.path.insert(0, str(bench_tools_dir))
+    try:
+        summary_mod = importlib.import_module("summarize_latest_metrics")
+    finally:
+        if str(bench_tools_dir) in sys.path:
+            sys.path.remove(str(bench_tools_dir))
+
+    summary = summary_mod.summarize_benchmarks(
+        bench_dir,
+        datasets=("DS-800",),
+        label_mode="operational",
+    )
+    ds800 = summary["datasets"]["DS-800"]
+
+    assert ds800["latest_successful_file"] == "20260307T060000Z.json"
+    assert ds800["latest_attempt_file"] == "failure_20260307T080000Z.json"
+    assert ds800["latest_attempt_status"] == "index_vec:RemoteDisconnected"
+    assert ds800["latest_attempt_succeeded"] is False
+
+
+@pytest.mark.unit
+def test_bench_latest_metrics_summary_prefers_canonical_operational_cohort_when_present(tmp_path: Path) -> None:
+    bench_dir = tmp_path / "benchmarks"
+    bench_dir.mkdir(parents=True, exist_ok=True)
+
+    _write_bench(
+        bench_dir / "20260309T080000Z.json",
+        doc_count=200,
+        finished_at="2026-03-09T08:00:00Z",
+        consistency_p95=100.0,
+        retrieval_fts_p95=50.0,
+        dataset_path="verify/datasets/DS-GROWTH-200.jsonl",
+        bench_label="operational-main:DS-200",
+        artifact_cohort="operational_closeout",
+    )
+    _write_bench(
+        bench_dir / "20260309T081000Z.json",
+        doc_count=200,
+        finished_at="2026-03-09T08:10:00Z",
+        consistency_p95=101.0,
+        retrieval_fts_p95=51.0,
+        dataset_path="verify/datasets/DS-GROWTH-200.jsonl",
+        bench_label="operational-main:DS-200",
+        artifact_cohort="operational_closeout",
+    )
+    _write_bench(
+        bench_dir / "20260309T082000Z.json",
+        doc_count=200,
+        finished_at="2026-03-09T08:20:00Z",
+        consistency_p95=80.0,
+        retrieval_fts_p95=40.0,
+        dataset_path="verify/datasets/DS-GROWTH-200.jsonl",
+        bench_label="operational-main:DS-200",
+        artifact_cohort="",
+    )
+
+    bench_tools_dir = Path("tools/bench").resolve()
+    sys.path.insert(0, str(bench_tools_dir))
+    try:
+        summary_mod = importlib.import_module("summarize_latest_metrics")
+    finally:
+        if str(bench_tools_dir) in sys.path:
+            sys.path.remove(str(bench_tools_dir))
+
+    summary = summary_mod.summarize_benchmarks(
+        bench_dir,
+        datasets=("DS-200",),
+        label_mode="operational",
+    )
+    ds200 = summary["datasets"]["DS-200"]
+
+    assert ds200["latest_file"] == "20260309T081000Z.json"
+    assert ds200["previous_file"] == "20260309T080000Z.json"
+    assert ds200["latest_attempt_file"] == "20260309T082000Z.json"
+    assert summary["label_filter"]["preferred_artifact_cohort"] == "operational_closeout"
+    assert summary["label_filter"]["excluded_artifact_cohort_mismatch"] >= 1
+    assert "DS-200" in summary["label_filter"]["artifact_cohort_filter_applied_datasets"]
+
+    markdown = summary_mod.render_markdown(summary)
+    assert "20260309T082000Z.json (SUCCEEDED)" in markdown
+
+
+@pytest.mark.unit
+def test_bench_latest_metrics_summary_keeps_older_operational_baseline_when_only_latest_has_cohort(tmp_path: Path) -> None:
+    bench_dir = tmp_path / "benchmarks"
+    bench_dir.mkdir(parents=True, exist_ok=True)
+
+    _write_bench(
+        bench_dir / "20260309T070000Z.json",
+        doc_count=400,
+        finished_at="2026-03-09T07:00:00Z",
+        consistency_p95=100.0,
+        retrieval_fts_p95=50.0,
+        dataset_path="verify/datasets/DS-GROWTH-400.jsonl",
+        bench_label="operational-main:DS-400",
+        artifact_cohort="",
+    )
+    _write_bench(
+        bench_dir / "20260309T071000Z.json",
+        doc_count=400,
+        finished_at="2026-03-09T07:10:00Z",
+        consistency_p95=101.0,
+        retrieval_fts_p95=51.0,
+        dataset_path="verify/datasets/DS-GROWTH-400.jsonl",
+        bench_label="operational-main:DS-400",
+        artifact_cohort="operational_closeout",
+    )
+    _write_bench(
+        bench_dir / "20260309T072000Z.json",
+        doc_count=400,
+        finished_at="2026-03-09T07:20:00Z",
+        consistency_p95=80.0,
+        retrieval_fts_p95=40.0,
+        dataset_path="verify/datasets/DS-GROWTH-400.jsonl",
+        bench_label="operational-main:DS-400",
+        artifact_cohort="",
+    )
+
+    bench_tools_dir = Path("tools/bench").resolve()
+    sys.path.insert(0, str(bench_tools_dir))
+    try:
+        summary_mod = importlib.import_module("summarize_latest_metrics")
+    finally:
+        if str(bench_tools_dir) in sys.path:
+            sys.path.remove(str(bench_tools_dir))
+
+    summary = summary_mod.summarize_benchmarks(
+        bench_dir,
+        datasets=("DS-400",),
+        label_mode="operational",
+    )
+    ds400 = summary["datasets"]["DS-400"]
+
+    assert ds400["latest_file"] == "20260309T071000Z.json"
+    assert ds400["previous_file"] == "20260309T070000Z.json"
+    assert ds400["latest_attempt_file"] == "20260309T072000Z.json"
+
+
+@pytest.mark.unit
+def test_bench_latest_metrics_summary_keeps_newer_failure_attempt_visible_after_cohort_filter(tmp_path: Path) -> None:
+    bench_dir = tmp_path / "benchmarks"
+    bench_dir.mkdir(parents=True, exist_ok=True)
+
+    _write_bench(
+        bench_dir / "20260309T080000Z.json",
+        doc_count=800,
+        finished_at="2026-03-09T08:00:00Z",
+        consistency_p95=120.0,
+        retrieval_fts_p95=55.0,
+        dataset_path="verify/datasets/DS-GROWTH-800.jsonl",
+        bench_label="operational-main:DS-800",
+        artifact_cohort="operational_closeout",
+        status={
+            "index_fts": "SUCCEEDED",
+            "index_vec": "SUCCEEDED",
+            "ingest_failures": 0,
+            "consistency_failures": 0,
+            "retrieve_vec_failures": 0,
+        },
+    )
+    _write_bench(
+        bench_dir / "20260309T081000Z.json",
+        doc_count=800,
+        finished_at="2026-03-09T08:10:00Z",
+        consistency_p95=121.0,
+        retrieval_fts_p95=56.0,
+        dataset_path="verify/datasets/DS-GROWTH-800.jsonl",
+        bench_label="operational-main:DS-800",
+        artifact_cohort="operational_closeout",
+        status={
+            "index_fts": "SUCCEEDED",
+            "index_vec": "SUCCEEDED",
+            "ingest_failures": 0,
+            "consistency_failures": 0,
+            "retrieve_vec_failures": 0,
+        },
+    )
+    _write_failure(
+        bench_dir / "failure_20260309T083000Z.json",
+        dataset_path="verify/datasets/DS-GROWTH-800.jsonl",
+        bench_label="operational-main:DS-800",
+        attempt_stage="consistency_jobs",
+        error_class="URLError",
+        generated_at_utc="2026-03-09T08:30:00Z",
+    )
+
+    bench_tools_dir = Path("tools/bench").resolve()
+    sys.path.insert(0, str(bench_tools_dir))
+    try:
+        summary_mod = importlib.import_module("summarize_latest_metrics")
+    finally:
+        if str(bench_tools_dir) in sys.path:
+            sys.path.remove(str(bench_tools_dir))
+
+    summary = summary_mod.summarize_benchmarks(
+        bench_dir,
+        datasets=("DS-800",),
+        label_mode="operational",
+    )
+    ds800 = summary["datasets"]["DS-800"]
+
+    assert ds800["latest_file"] == "20260309T081000Z.json"
+    assert ds800["latest_attempt_file"] == "failure_20260309T083000Z.json"
+    assert ds800["latest_attempt_status"] == "consistency_jobs:URLError"
+    assert ds800["latest_attempt_succeeded"] is False

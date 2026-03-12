@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -226,6 +227,177 @@ def test_judge_with_fact_index_excludes_self_fact_evidence_ids() -> None:
     assert meta["conflicting"] is False
     assert links == [("ev-setting", consistency_engine.EvidenceRole.CONTRADICT)]
 
+
+def test_filter_results_without_slot_anchor_drops_irrelevant_affiliation_hits() -> None:
+    results = [
+        _result_row("doc-a", 0.1, "chunk-a"),
+        {
+            "source": "fts",
+            "score": 0.2,
+            "evidence": {
+                "doc_id": "doc-b",
+                "snapshot_id": "snap-ref",
+                "chunk_id": "chunk-b",
+                "section_path": "body",
+                "tag_path": "",
+                "snippet_text": "사도련 명가 쪽 인물이었다.",
+                "span_start": 0,
+                "span_end": 14,
+                "fts_score": 0.2,
+                "match_type": "EXACT",
+                "confirmed": False,
+            },
+        },
+    ]
+    results[0]["evidence"]["snippet_text"] = "완전히 무관한 장면이다."
+
+    filtered, removed = consistency_engine._filter_results_without_slot_anchor(
+        results,
+        slots={"affiliation": "사도련"},
+    )
+
+    assert removed == 1
+    assert len(filtered) == 1
+    assert filtered[0]["evidence"]["doc_id"] == "doc-b"
+
+
+def test_filter_results_without_slot_anchor_keeps_extractable_title_affiliation_hit() -> None:
+    pipeline = consistency_engine.ExtractionPipeline(
+        profile={"mode": "rule_only", "allow_generic_narrative_affiliation": True},
+        mappings=[],
+        gateway=None,
+    )
+    results = [
+        {
+            "source": "fts",
+            "score": 0.2,
+            "evidence": {
+                "doc_id": "doc-b",
+                "snapshot_id": "snap-ref",
+                "chunk_id": "chunk-b",
+                "section_path": "body",
+                "tag_path": "",
+                "snippet_text": "그녀는 라인시스의 제1황녀였다.",
+                "span_start": 0,
+                "span_end": 17,
+                "fts_score": 0.2,
+                "match_type": "EXACT",
+                "confirmed": False,
+            },
+        },
+    ]
+
+    filtered, removed = consistency_engine._filter_results_without_slot_anchor(
+        results,
+        slots={"affiliation": "라인시스 제국"},
+        pipeline=pipeline,
+    )
+
+    assert removed == 0
+    assert len(filtered) == 1
+    assert filtered[0]["evidence"]["doc_id"] == "doc-b"
+
+
+def test_filter_results_without_slot_anchor_limits_rescue_to_affiliation() -> None:
+    class _CountingPipeline:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def extract(self, _snippet_text: str) -> SimpleNamespace:
+            self.calls += 1
+            return SimpleNamespace(slots={"relation": "스승"})
+
+    pipeline = _CountingPipeline()
+    results = [
+        {
+            "source": "fts",
+            "score": 0.2,
+            "evidence": {
+                "doc_id": "doc-b",
+                "snapshot_id": "snap-ref",
+                "chunk_id": "chunk-b",
+                "section_path": "body",
+                "tag_path": "",
+                "snippet_text": "두 사람은 사형제였다.",
+                "span_start": 0,
+                "span_end": 11,
+                "fts_score": 0.2,
+                "match_type": "EXACT",
+                "confirmed": False,
+            },
+        },
+    ]
+
+    filtered, removed = consistency_engine._filter_results_without_slot_anchor(
+        results,
+        slots={"relation": "스승"},
+        pipeline=pipeline,
+    )
+
+    assert removed == 1
+    assert filtered == []
+    assert pipeline.calls == 0
+
+
+def test_filter_results_without_slot_anchor_reuses_snippet_slot_cache() -> None:
+    class _CountingPipeline:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def extract(self, _snippet_text: str) -> SimpleNamespace:
+            self.calls += 1
+            return SimpleNamespace(slots={"affiliation": "라인시스"})
+
+    pipeline = _CountingPipeline()
+    results = [
+        {
+            "source": "fts",
+            "score": 0.2,
+            "evidence": {
+                "doc_id": "doc-b",
+                "snapshot_id": "snap-ref",
+                "chunk_id": "chunk-b",
+                "section_path": "body",
+                "tag_path": "",
+                "snippet_text": "그녀는 라인시스의 제1황녀였다.",
+                "span_start": 0,
+                "span_end": 17,
+                "fts_score": 0.2,
+                "match_type": "EXACT",
+                "confirmed": False,
+            },
+        },
+    ]
+    extracted_slots_cache: dict[tuple[str, int, int], dict[str, object]] = {}
+    cache_metrics: dict[str, int] = {}
+    rescue_metrics: dict[str, int] = {}
+
+    filtered, removed = consistency_engine._filter_results_without_slot_anchor(
+        results,
+        slots={"affiliation": "라인시스 제국"},
+        pipeline=pipeline,
+        extracted_slots_cache=extracted_slots_cache,
+        cache_metrics=cache_metrics,
+        rescue_metrics=rescue_metrics,
+    )
+    filtered_second, removed_second = consistency_engine._filter_results_without_slot_anchor(
+        results,
+        slots={"affiliation": "라인시스 제국"},
+        pipeline=pipeline,
+        extracted_slots_cache=extracted_slots_cache,
+        cache_metrics=cache_metrics,
+        rescue_metrics=rescue_metrics,
+    )
+
+    assert removed == 0
+    assert len(filtered) == 1
+    assert removed_second == 0
+    assert len(filtered_second) == 1
+    assert pipeline.calls == 1
+    assert cache_metrics == {"hit_count": 1, "miss_count": 1}
+    assert rescue_metrics == {"attempt_count": 2, "ok_count": 2}
+
+
 def test_judge_with_fact_index_marks_entity_unresolved_without_global_facts() -> None:
     fact_index = {
         ("job", consistency_engine._FACT_ALL_KEY): [
@@ -293,6 +465,44 @@ def test_judge_with_fact_index_marks_numeric_conflict_as_uncomparable() -> None:
     assert links == []
     assert meta["saw_uncomparable"] is True
     assert meta["numeric_conflict"] is True
+
+def test_judge_with_fact_index_prefers_entity_scoped_facts_over_global_for_entity_bound_slot() -> None:
+    fact_index = {
+        ("job", "entity-a"): [
+            _FakeFact(evidence_eid="ev-entity-a", value="마법사", entity_id="entity-a"),
+        ],
+        ("job", None): [
+            _FakeFact(evidence_eid="ev-global", value="검사", entity_id=None),
+        ],
+    }
+    verdict, links, meta = consistency_engine._judge_with_fact_index(
+        {"job": "마법사"},
+        fact_index,
+        target_entity_id="entity-a",
+    )
+    assert verdict is Verdict.OK
+    assert meta["conflicting"] is False
+    assert links == [("ev-entity-a", consistency_engine.EvidenceRole.SUPPORT)]
+
+def test_judge_with_fact_index_ignores_descriptive_support_phrase_for_relation() -> None:
+    fact_index = {
+        ("relation", consistency_engine._FACT_ALL_KEY): [
+            _FakeFact(evidence_eid="ev-support", value="주인공을 돕는 조력자"),
+            _FakeFact(evidence_eid="ev-violate", value="배신자"),
+        ],
+    }
+    verdict, links, meta = consistency_engine._judge_with_fact_index(
+        {"relation": "조력자"},
+        fact_index,
+        target_entity_id=None,
+    )
+    assert verdict is Verdict.VIOLATE
+    assert meta["conflicting"] is False
+    assert links == [("ev-violate", consistency_engine.EvidenceRole.CONTRADICT)]
+
+def test_compare_slot_allows_affiliation_prefix_entity_match() -> None:
+    judged = consistency_engine._compare_slot("affiliation", "라인시스 제국", "라인시스")
+    assert judged is Verdict.OK
 
 def test_compare_slot_does_not_allow_contains_ok_for_job() -> None:
     judged = consistency_engine._compare_slot("job", "흑마법사", "마법사")

@@ -30,6 +30,7 @@ class ExtractionProfile(TypedDict):
     use_user_mappings: bool
     model_slots: list[str]
     model_timeout_ms: int
+    allow_generic_narrative_affiliation: bool
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,7 @@ def normalize_extraction_profile(raw: Any) -> ExtractionProfile:
         "use_user_mappings": True,
         "model_slots": list(DEFAULT_MODEL_SLOTS),
         "model_timeout_ms": 1200,
+        "allow_generic_narrative_affiliation": False,
     }
     if not isinstance(raw, dict):
         return profile
@@ -107,5 +109,8 @@ def normalize_extraction_profile(raw: Any) -> ExtractionProfile:
             profile["model_timeout_ms"] = 60_000
         else:
             profile["model_timeout_ms"] = timeout_raw
-    return profile
 
+    allow_generic_affiliation = raw.get("allow_generic_narrative_affiliation")
+    if isinstance(allow_generic_affiliation, bool):
+        profile["allow_generic_narrative_affiliation"] = allow_generic_affiliation
+    return profile

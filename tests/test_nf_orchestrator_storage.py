@@ -88,6 +88,116 @@ def test_job_success_status_clears_stale_error_fields(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+def test_project_service_retries_transient_sqlite_lock_on_create_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    service = ProjectServiceImpl(db_path)
+    real_connect = storage_db.connect
+    attempts = {"count": 0}
+
+    def flaky_connect(path=None):  # noqa: ANN001
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real_connect(path)
+
+    monkeypatch.setattr(storage_db, "connect", flaky_connect)
+
+    created = service.create_project("Retry Project", {"mode": "dev"})
+
+    assert created.name == "Retry Project"
+    assert attempts["count"] >= 2
+
+
+@pytest.mark.unit
+def test_job_service_retries_transient_sqlite_lock_on_submit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_service = ProjectServiceImpl(db_path)
+    project = project_service.create_project("P1", {})
+    service = JobServiceImpl(db_path)
+    real_connect = storage_db.connect
+    attempts = {"count": 0}
+
+    def flaky_connect(path=None):  # noqa: ANN001
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise sqlite3.OperationalError("database schema is locked: main")
+        return real_connect(path)
+
+    monkeypatch.setattr(storage_db, "connect", flaky_connect)
+
+    job = service.submit(project.project_id, JobType.INDEX_FTS, {"scope": "global"}, {})
+
+    assert job.type is JobType.INDEX_FTS
+    assert attempts["count"] >= 2
+
+
+@pytest.mark.unit
+def test_job_transition_helpers_require_matching_running_owner_and_block_terminal_reversal(tmp_path: Path) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    with storage_db.connect(db_path) as conn:
+        job = job_repo.create_job(conn, "project-1", JobType.INDEX_FTS, {"scope": "global"}, {})
+        leased = job_repo.lease_next_job(conn, worker_id="worker-a", lease_seconds=30)
+
+        assert leased is not None
+        blocked_result = job_repo.set_job_result_if_matches(
+            conn,
+            job.job_id,
+            result={"ok": True},
+            expected_statuses=(JobStatus.RUNNING,),
+            expected_lease_owner="worker-b",
+        )
+        blocked_status = job_repo.update_job_status_if_matches(
+            conn,
+            job.job_id,
+            JobStatus.SUCCEEDED,
+            expected_statuses=(JobStatus.RUNNING,),
+            expected_lease_owner="worker-b",
+        )
+        still_running = job_repo.get_job(conn, job.job_id)
+
+        assert blocked_result is False
+        assert blocked_status is None
+        assert still_running is not None
+        assert still_running.status is JobStatus.RUNNING
+
+        applied_result = job_repo.set_job_result_if_matches(
+            conn,
+            job.job_id,
+            result={"ok": True},
+            expected_statuses=(JobStatus.RUNNING,),
+            expected_lease_owner="worker-a",
+        )
+        applied_status = job_repo.update_job_status_if_matches(
+            conn,
+            job.job_id,
+            JobStatus.SUCCEEDED,
+            expected_statuses=(JobStatus.RUNNING,),
+            expected_lease_owner="worker-a",
+        )
+        blocked_reversal = job_repo.update_job_status_if_matches(
+            conn,
+            job.job_id,
+            JobStatus.FAILED,
+            expected_statuses=(JobStatus.RUNNING,),
+            expected_lease_owner="worker-a",
+        )
+        final_job = job_repo.get_job(conn, job.job_id)
+
+    assert applied_result is True
+    assert applied_status is not None
+    assert applied_status.status is JobStatus.SUCCEEDED
+    assert blocked_reversal is None
+    assert final_job is not None
+    assert final_job.status is JobStatus.SUCCEEDED
+
+
+@pytest.mark.unit
 def test_db_initializer_drops_redundant_verdict_evidence_index(tmp_path: Path) -> None:
     db_path = tmp_path / "orchestrator.db"
     with sqlite3.connect(db_path) as conn:

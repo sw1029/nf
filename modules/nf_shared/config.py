@@ -14,11 +14,16 @@ class Settings:
     enable_layer3_model: bool = False
     enable_local_nli: bool = False
     enable_local_reranker: bool = False
+    enable_test_judge_local_nli: bool = False
+    enable_test_judge_remote_api: bool = False
     enable_local_generator: bool = False  # 李⑥닚??遺꾧린)
     enable_debug_web_ui: bool = False
 
     local_nli_model_id: str = 'nli-lite-v1'
     local_reranker_model_id: str = 'reranker-lite-v1'
+    test_judge_local_nli_model_id: str = 'nli-lite-v1'
+    test_judge_timeout_ms: int = 3000
+    test_judge_min_confidence: float = 0.80
 
     sync_retrieval_mode: str = "FTS_ONLY"
     vector_index_mode: str = "SHARDED"
@@ -70,8 +75,10 @@ def _load_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     if path.suffix.lower() == ".toml":
-        with path.open("rb") as fp:
-            return tomllib.load(fp)
+        raw = path.read_bytes()
+        if raw.startswith(b"\xef\xbb\xbf"):
+            raw = raw[3:]
+        return tomllib.loads(raw.decode("utf-8"))
     if path.suffix.lower() == ".json":
         with path.open("r", encoding="utf-8") as fp:
             return json.load(fp)

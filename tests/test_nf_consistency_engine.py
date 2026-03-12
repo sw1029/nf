@@ -10,6 +10,7 @@ import pytest
 
 from modules.nf_consistency import engine as consistency_engine
 from modules.nf_consistency.engine import ConsistencyEngineImpl
+from modules.nf_consistency.extractors.pipeline import ExtractionPipeline
 from modules.nf_orchestrator.storage import db, docstore
 from modules.nf_orchestrator.storage.repos import document_repo, evidence_repo, ignore_repo, schema_repo
 from modules.nf_retrieval.fts.fts_index import index_chunks
@@ -25,6 +26,44 @@ from modules.nf_shared.protocol.dtos import (
     SchemaLayer,
     Verdict,
 )
+
+
+@pytest.mark.unit
+def test_extract_claims_broadens_entity_bound_claim_span_to_full_segment() -> None:
+    pipeline = ExtractionPipeline(profile={"mode": "rule_only"}, mappings=[], gateway=None)
+    text = "재능: 천재"
+
+    claims = consistency_engine._extract_claims(text, pipeline=pipeline, stats={})
+
+    assert len(claims) == 1
+    assert claims[0]["slot_key"] == "talent"
+    assert claims[0]["claim_text"] == text
+    assert claims[0]["claim_start"] == 0
+    assert claims[0]["claim_end"] == len(text)
+
+
+@pytest.mark.unit
+def test_extract_claims_broadens_place_claim_span_to_full_segment() -> None:
+    pipeline = ExtractionPipeline(profile={"mode": "rule_only"}, mappings=[], gateway=None)
+    text = "장소는 사천성 남단 덕창(德昌)이었다."
+
+    claims = consistency_engine._extract_claims(text, pipeline=pipeline, stats={})
+
+    assert len(claims) == 1
+    assert claims[0]["slot_key"] == "place"
+    assert claims[0]["claim_text"] == text
+
+
+@pytest.mark.unit
+def test_extract_claims_keeps_time_claim_span_compact() -> None:
+    pipeline = ExtractionPipeline(profile={"mode": "rule_only"}, mappings=[], gateway=None)
+    text = "시간은 12:30이다."
+
+    claims = consistency_engine._extract_claims(text, pipeline=pipeline, stats={})
+
+    assert len(claims) == 1
+    assert claims[0]["slot_key"] == "time"
+    assert claims[0]["claim_text"] == "12:30"
 
 
 def _seed_document(
@@ -448,6 +487,68 @@ def test_consistency_engine_detects_natural_language_age_violation_and_links_sch
     )
 
 
+@pytest.mark.unit
+def test_consistency_engine_detects_natural_language_job_match_without_monkeypatch(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    setting_doc_id = "doc-setting"
+    setting_snapshot_id = "snap-setting"
+    body_doc_id = "doc-body"
+    body_snapshot_id = "snap-body"
+    schema_ver = "v1"
+    setting_text = "직업: 마법사"
+    body_text = "그의 직업은 마법사다."
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=setting_doc_id,
+            snapshot_id=setting_snapshot_id,
+            text=setting_text,
+        )
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=body_doc_id,
+            snapshot_id=body_snapshot_id,
+            text=body_text,
+        )
+        schema_repo.create_schema_version(
+            conn,
+            project_id=project_id,
+            source_snapshot_id=setting_snapshot_id,
+            schema_ver=schema_ver,
+        )
+        _seed_schema_fact(
+            conn,
+            project_id=project_id,
+            doc_id=setting_doc_id,
+            snapshot_id=setting_snapshot_id,
+            schema_ver=schema_ver,
+            tag_path="설정/인물/직업",
+            value="마법사",
+        )
+
+    engine = ConsistencyEngineImpl(db_path=db_path)
+    verdicts = engine.run(
+        {
+            "project_id": project_id,
+            "input_doc_id": body_doc_id,
+            "input_snapshot_id": body_snapshot_id,
+            "range": {"start": 0, "end": len(body_text)},
+            "schema_ver": schema_ver,
+        }
+    )
+
+    assert verdicts
+    assert any(item.verdict is Verdict.OK for item in verdicts)
+
+
 class _DummyEvidence:
     def __init__(self, eid: str) -> None:
         self.eid = eid
@@ -693,6 +794,409 @@ def test_verification_loop_breaks_on_stagnation_and_counts_stat(
     exit_reason_counts = stats.get("verification_loop_exit_reason_counts")
     assert isinstance(exit_reason_counts, dict)
     assert any(key in exit_reason_counts for key in ("no_results_fts", "no_results_after_refill", "candidate_stagnation"))
+
+
+@pytest.mark.unit
+def test_consistency_engine_treats_irrelevant_affiliation_hits_as_no_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "소속: 사도련 백전귀(百戰鬼)"
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine._extract_claims",
+        lambda *_args, **_kwargs: [
+            {
+                "segment_start": 0,
+                "segment_end": len(text),
+                "segment_text": text,
+                "claim_start": 4,
+                "claim_end": 7,
+                "claim_text": "사도련",
+                "slots": {"affiliation": "사도련"},
+                "slot_key": "affiliation",
+                "slot_confidence": 1.0,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.fts_search",
+        lambda _conn, _req: [
+            {
+                "source": "fts",
+                "score": 0.11,
+                "evidence": {
+                    "doc_id": "doc-ref-1",
+                    "snapshot_id": "snap-ref",
+                    "chunk_id": "chunk-ref-1",
+                    "section_path": "body",
+                    "tag_path": "",
+                    "snippet_text": "완전히 무관한 장면이다.",
+                    "span_start": 0,
+                    "span_end": 12,
+                    "fts_score": 0.11,
+                    "match_type": "EXACT",
+                    "confirmed": False,
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.load_config",
+        lambda: Settings(enable_layer3_model=False, vector_index_mode="DISABLED"),
+    )
+
+    engine = ConsistencyEngineImpl(db_path=db_path)
+    verdicts = engine.run(
+        {
+            "project_id": project_id,
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "schema_ver": "",
+        }
+    )
+
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict is Verdict.UNKNOWN
+    assert "NO_EVIDENCE" in verdicts[0].unknown_reasons
+    assert "CONFLICTING_EVIDENCE" not in verdicts[0].unknown_reasons
+
+
+@pytest.mark.unit
+def test_consistency_engine_accepts_explicit_affiliation_corroboration_from_retrieved_snippet(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "소속: 사도련 백전귀(百戰鬼)"
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine._extract_claims",
+        lambda *_args, **_kwargs: [
+            {
+                "segment_start": 0,
+                "segment_end": len(text),
+                "segment_text": text,
+                "claim_start": 4,
+                "claim_end": 7,
+                "claim_text": "사도련",
+                "slots": {"affiliation": "사도련"},
+                "slot_key": "affiliation",
+                "slot_confidence": 1.0,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.fts_search",
+        lambda _conn, _req: [
+            {
+                "source": "fts",
+                "score": 0.31,
+                "evidence": {
+                    "doc_id": "doc-ref-1",
+                    "snapshot_id": "snap-ref",
+                    "chunk_id": "chunk-ref-1",
+                    "section_path": "body",
+                    "tag_path": "",
+                    "snippet_text": "그는 사도련의 백전귀였다.",
+                    "span_start": 0,
+                    "span_end": 14,
+                    "fts_score": 0.31,
+                    "match_type": "EXACT",
+                    "confirmed": False,
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.load_config",
+        lambda: Settings(enable_layer3_model=False, vector_index_mode="DISABLED"),
+    )
+
+    engine = ConsistencyEngineImpl(db_path=db_path)
+    verdicts = engine.run(
+        {
+            "project_id": project_id,
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "schema_ver": "",
+        }
+    )
+
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict is Verdict.OK
+    assert verdicts[0].unknown_reasons == ()
+
+
+@pytest.mark.unit
+def test_consistency_engine_accepts_title_affiliation_corroboration_without_full_anchor_match(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "소속: 라인시스 제국 제1황녀"
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine._extract_claims",
+        lambda *_args, **_kwargs: [
+            {
+                "segment_start": 0,
+                "segment_end": len(text),
+                "segment_text": text,
+                "claim_start": 4,
+                "claim_end": 11,
+                "claim_text": "라인시스 제국",
+                "slots": {"affiliation": "라인시스 제국"},
+                "slot_key": "affiliation",
+                "slot_confidence": 1.0,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.fts_search",
+        lambda _conn, _req: [
+            {
+                "source": "fts",
+                "score": 0.31,
+                "evidence": {
+                    "doc_id": "doc-ref-1",
+                    "snapshot_id": "snap-ref",
+                    "chunk_id": "chunk-ref-1",
+                    "section_path": "body",
+                    "tag_path": "",
+                    "snippet_text": "그녀는 라인시스의 제1황녀였다.",
+                    "span_start": 0,
+                    "span_end": 17,
+                    "fts_score": 0.31,
+                    "match_type": "EXACT",
+                    "confirmed": False,
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.load_config",
+        lambda: Settings(enable_layer3_model=False, vector_index_mode="DISABLED"),
+    )
+
+    engine = ConsistencyEngineImpl(db_path=db_path)
+    verdicts = engine.run(
+        {
+            "project_id": project_id,
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "schema_ver": "",
+        }
+    )
+
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict is Verdict.OK
+    assert verdicts[0].unknown_reasons == ()
+
+
+@pytest.mark.unit
+def test_consistency_engine_excludes_same_doc_hits_for_explicit_profile_claims(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "소속: 사도련 백전귀(百戰鬼)\n사도련은 들썩거린다."
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine._extract_claims",
+        lambda *_args, **_kwargs: [
+            {
+                "segment_start": 0,
+                "segment_end": 17,
+                "segment_text": "소속: 사도련 백전귀(百戰鬼)",
+                "claim_start": 4,
+                "claim_end": 7,
+                "claim_text": "사도련",
+                "slots": {"affiliation": "사도련"},
+                "slot_key": "affiliation",
+                "slot_confidence": 1.0,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.fts_search",
+        lambda _conn, _req: [
+            {
+                "source": "fts",
+                "score": 0.11,
+                "evidence": {
+                    "doc_id": doc_id,
+                    "snapshot_id": snapshot_id,
+                    "chunk_id": "chunk-ref-1",
+                    "section_path": "body",
+                    "tag_path": "",
+                    "snippet_text": "사도련은 들썩거린다.",
+                    "span_start": 18,
+                    "span_end": len(text),
+                    "fts_score": 0.11,
+                    "match_type": "EXACT",
+                    "confirmed": False,
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.load_config",
+        lambda: Settings(enable_layer3_model=False, vector_index_mode="DISABLED"),
+    )
+
+    engine = ConsistencyEngineImpl(db_path=db_path)
+    verdicts = engine.run(
+        {
+            "project_id": project_id,
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "schema_ver": "",
+        }
+    )
+
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict is Verdict.UNKNOWN
+    assert "NO_EVIDENCE" in verdicts[0].unknown_reasons
+    assert "CONFLICTING_EVIDENCE" not in verdicts[0].unknown_reasons
+
+
+@pytest.mark.unit
+def test_consistency_engine_treats_unlinked_retrieval_hits_as_no_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "448"
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine._extract_claims",
+        lambda *_args, **_kwargs: [
+            {
+                "segment_start": 0,
+                "segment_end": len(text),
+                "segment_text": text,
+                "claim_start": 0,
+                "claim_end": len(text),
+                "claim_text": text,
+                "slots": {"age": 448},
+                "slot_key": "age",
+                "slot_confidence": 1.0,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.fts_search",
+        lambda _conn, _req: [
+            {
+                "source": "fts",
+                "score": 0.11,
+                "evidence": {
+                    "doc_id": "doc-ref-1",
+                    "snapshot_id": "snap-ref",
+                    "chunk_id": "chunk-ref-1",
+                    "section_path": "body",
+                    "tag_path": "",
+                    "snippet_text": "완전히 다른 서술이다.",
+                    "span_start": 0,
+                    "span_end": 10,
+                    "fts_score": 0.11,
+                    "match_type": "EXACT",
+                    "confirmed": False,
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "modules.nf_consistency.engine.load_config",
+        lambda: Settings(enable_layer3_model=False, vector_index_mode="DISABLED"),
+    )
+
+    engine = ConsistencyEngineImpl(db_path=db_path)
+    verdicts = engine.run(
+        {
+            "project_id": project_id,
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "schema_ver": "",
+        }
+    )
+
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict is Verdict.UNKNOWN
+    assert "NO_EVIDENCE" in verdicts[0].unknown_reasons
+    assert "CONFLICTING_EVIDENCE" not in verdicts[0].unknown_reasons
 
 
 @pytest.mark.unit

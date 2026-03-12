@@ -24,11 +24,16 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _resolve_db_path(repo_root: Path, db_path_raw: str) -> Path | None:
-    db_path_raw = db_path_raw.strip()
-    if not db_path_raw:
-        return None
-    path = Path(db_path_raw).expanduser()
+def _default_stack_state_root(repo_root: Path, host: str, port: int) -> Path:
+    safe_host = "".join(ch if ch.isalnum() else "_" for ch in str(host or "127.0.0.1"))
+    return repo_root / "verify" / "local_stack" / f"{safe_host}_{int(port)}"
+
+
+def _resolve_storage_path(repo_root: Path, path_raw: str, *, default_path: Path) -> Path:
+    path_raw = path_raw.strip()
+    if not path_raw:
+        return default_path
+    path = Path(path_raw).expanduser()
     if not path.is_absolute():
         path = repo_root / path
     return path
@@ -61,18 +66,31 @@ def main() -> int:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-    db_path = _resolve_db_path(repo_root, args.db_path)
-    docstore_path = _resolve_db_path(repo_root, args.docstore_path)
-    vector_path = _resolve_db_path(repo_root, args.vector_path)
-    export_path = _resolve_db_path(repo_root, args.export_path)
-    if db_path is not None:
-        os.environ["NF_ORCH_DB_PATH"] = str(db_path)
-    if docstore_path is not None:
-        os.environ["NF_DOCSTORE_PATH"] = str(docstore_path)
-    if vector_path is not None:
-        os.environ["NF_VECTOR_PATH"] = str(vector_path)
-    if export_path is not None:
-        os.environ["NF_EXPORT_PATH"] = str(export_path)
+    stack_state_root = _default_stack_state_root(repo_root, args.host, args.port)
+    db_path = _resolve_storage_path(
+        repo_root,
+        args.db_path,
+        default_path=stack_state_root / "nf_orchestrator.sqlite3",
+    )
+    docstore_path = _resolve_storage_path(
+        repo_root,
+        args.docstore_path,
+        default_path=stack_state_root / "docstore",
+    )
+    vector_path = _resolve_storage_path(
+        repo_root,
+        args.vector_path,
+        default_path=stack_state_root / "vector",
+    )
+    export_path = _resolve_storage_path(
+        repo_root,
+        args.export_path,
+        default_path=stack_state_root / "exports",
+    )
+    os.environ["NF_ORCH_DB_PATH"] = str(db_path)
+    os.environ["NF_DOCSTORE_PATH"] = str(docstore_path)
+    os.environ["NF_VECTOR_PATH"] = str(vector_path)
+    os.environ["NF_EXPORT_PATH"] = str(export_path)
     if args.api_token.strip():
         os.environ["NF_ORCHESTRATOR_TOKEN"] = args.api_token.strip()
     else:
@@ -91,14 +109,10 @@ def main() -> int:
     try:
         print("nf local stack")
         print(f"- Orchestrator: http://{args.host}:{args.port}")
-        if db_path is not None:
-            print(f"- DB: {db_path}")
-        if docstore_path is not None:
-            print(f"- Docstore: {docstore_path}")
-        if vector_path is not None:
-            print(f"- Vector: {vector_path}")
-        if export_path is not None:
-            print(f"- Export: {export_path}")
+        print(f"- DB: {db_path}")
+        print(f"- Docstore: {docstore_path}")
+        print(f"- Vector: {vector_path}")
+        print(f"- Export: {export_path}")
         if worker_procs:
             print(f"- Worker Procs: {len(worker_procs)}")
             for idx, worker_proc in enumerate(worker_procs, start=1):

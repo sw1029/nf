@@ -1,0 +1,28 @@
+{
+  "source_policy_registry_version": "20260307-r1",
+  "sources": [
+    {
+      "source_id": "SRC-2e0ba0a8ee12",
+      "content_sha256": "2e0ba0a8ee121f01eba72aae03d43390a2dfc17112205b7b67ad60406b7c145b",
+      "segmentation_policy": "source_override_pattern",
+      "allowed_patterns": [
+        "prologue_header",
+        "chapter_jang"
+      ],
+      "policy_decision_source": "registry_override",
+      "policy_confidence": 1.0,
+      "reason": "validated_source_specific_pattern_override"
+    },
+    {
+      "source_id": "SRC-4acdce6d77d8",
+      "content_sha256": "4acdce6d77d87e0153cb002cf5f5529feb2900f72cee986ae648573078b53703",
+      "segmentation_policy": "source_override_pattern",
+      "allowed_patterns": [
+        "standalone_number"
+      ],
+      "policy_decision_source": "registry_override",
+      "policy_confidence": 1.0,
+      "reason": "validated_source_specific_pattern_override"
+    }
+  ]
+}

@@ -19,6 +19,7 @@ _LABEL_FILTER_PRESETS: dict[str, dict[str, Any]] = {
     _LABEL_MODE_OPERATIONAL: {
         "prefixes": ("operational-main:", "operational-diversity-main:"),
         "strict_label_filter": True,
+        "preferred_artifact_cohort": "operational_closeout",
         "description": "Only operational mainline/diversity-main artifacts are eligible for trend baselines.",
     }
 }
@@ -175,6 +176,252 @@ def _artifact_execution_failed(payload: dict[str, Any]) -> bool:
     return False
 
 
+def _artifact_attempt_status(payload: dict[str, Any]) -> str:
+    status = payload.get("status")
+    if not isinstance(status, dict):
+        stage = str(payload.get("attempt_stage") or "").strip()
+        error_class = str(payload.get("error_class") or "").strip()
+        if stage and error_class:
+            return f"{stage}:{error_class}"
+        if stage:
+            return stage
+        if error_class:
+            return error_class
+        return "UNKNOWN"
+    failures: list[str] = []
+    index_fts = str(status.get("index_fts") or "").strip().upper()
+    if index_fts and index_fts != "SUCCEEDED":
+        failures.append(f"index_fts:{index_fts}")
+    index_vec = str(status.get("index_vec") or "").strip().upper()
+    if index_vec and index_vec != "SUCCEEDED":
+        failures.append(f"index_vec:{index_vec}")
+    for key in ("ingest_failures", "consistency_failures", "retrieve_vec_failures"):
+        if key not in status:
+            continue
+        try:
+            parsed = int(status.get(key) or 0)
+        except (TypeError, ValueError):
+            failures.append(f"{key}:INVALID")
+            continue
+        if parsed != 0:
+            failures.append(f"{key}:{parsed}")
+    if not failures:
+        return "SUCCEEDED"
+    return ",".join(failures)
+
+
+def _artifact_cohort(payload: dict[str, Any]) -> str:
+    return str(payload.get("artifact_cohort") or "").strip()
+
+
+def _extract_dataset_profile_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    semantic = payload.get("semantic")
+    if not isinstance(semantic, dict):
+        return {}
+    dataset_profile = semantic.get("dataset_profile")
+    if not isinstance(dataset_profile, dict):
+        return {}
+    manifest_entry = dataset_profile.get("dataset_manifest_entry")
+    if not isinstance(manifest_entry, dict):
+        manifest_entry = {}
+    corroboration_filter = dataset_profile.get("consistency_corroboration_filter")
+    if not isinstance(corroboration_filter, dict):
+        corroboration_filter = {}
+    target_selection = semantic.get("consistency_target_selection")
+    if not isinstance(target_selection, dict):
+        target_selection = {}
+    corroboration_policy_counts = dataset_profile.get("consistency_corroboration_policy_counts")
+    if not isinstance(corroboration_policy_counts, dict):
+        corroboration_policy_counts = manifest_entry.get("consistency_corroboration_policy_counts")
+    if not isinstance(corroboration_policy_counts, dict):
+        corroboration_policy_counts = {}
+
+    local_profile_only_record_count = dataset_profile.get("local_profile_only_record_count")
+    try:
+        if local_profile_only_record_count is None:
+            local_profile_only_record_count = int(manifest_entry.get("local_profile_only_record_count") or 0)
+        else:
+            local_profile_only_record_count = int(local_profile_only_record_count)
+    except (TypeError, ValueError):
+        local_profile_only_record_count = 0
+
+    lane = ""
+    filter_mode = str(corroboration_filter.get("filter_mode") or "")
+    if filter_mode == "only_local_profile_only":
+        lane = "shadow_local_profile_only"
+    else:
+        try:
+            local_profile_only_docs_total = int(target_selection.get("local_profile_only_docs_total") or 0)
+            skipped_local_profile_only_docs = int(target_selection.get("skipped_local_profile_only_docs") or 0)
+        except (TypeError, ValueError):
+            local_profile_only_docs_total = 0
+            skipped_local_profile_only_docs = 0
+        if local_profile_only_docs_total > 0 and skipped_local_profile_only_docs > 0:
+            lane = "mainline_excludes_local_profile_only"
+        elif local_profile_only_record_count > 0:
+            lane = "dataset_contains_local_profile_only"
+
+    return {
+        "dataset_generation_version": str(manifest_entry.get("dataset_generation_version") or ""),
+        "composite_source_policy": str(manifest_entry.get("composite_source_policy") or ""),
+        "source_policy_registry_version": str(manifest_entry.get("source_policy_registry_version") or ""),
+        "manual_review_source_count": int(manifest_entry.get("manual_review_source_count") or 0),
+        "local_profile_only_record_count": local_profile_only_record_count,
+        "consistency_corroboration_policy_counts": {
+            str(key): int(value)
+            for key, value in corroboration_policy_counts.items()
+            if isinstance(key, str)
+        },
+        "consistency_corroboration_filter": dict(corroboration_filter),
+        "consistency_target_selection": dict(target_selection),
+        "corroboration_lane": lane,
+    }
+
+
+def _extract_consistency_runtime_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    runtime = payload.get("consistency_runtime")
+    if not isinstance(runtime, dict):
+        semantic = payload.get("semantic")
+        if isinstance(semantic, dict):
+            runtime = semantic.get("consistency_runtime")
+    if not isinstance(runtime, dict):
+        runtime = {}
+    unknown_reason_counts = runtime.get("unknown_reason_counts")
+    if not isinstance(unknown_reason_counts, dict):
+        unknown_reason_counts = {}
+    claim_slot_counts = runtime.get("claim_slot_counts")
+    if not isinstance(claim_slot_counts, dict):
+        claim_slot_counts = {}
+    unknown_slot_counts = runtime.get("unknown_slot_counts")
+    if not isinstance(unknown_slot_counts, dict):
+        unknown_slot_counts = {}
+    no_evidence_slot_counts = runtime.get("no_evidence_slot_counts")
+    if not isinstance(no_evidence_slot_counts, dict):
+        no_evidence_slot_counts = {}
+    anchor_filtered_slot_counts = runtime.get("anchor_filtered_slot_counts")
+    if not isinstance(anchor_filtered_slot_counts, dict):
+        anchor_filtered_slot_counts = {}
+    return {
+        "claim_count_total": int(runtime.get("claim_count_total") or 0),
+        "unknown_count_total": int(runtime.get("unknown_count_total") or 0),
+        "violate_count_total": int(runtime.get("violate_count_total") or 0),
+        "unknown_rate": float(runtime.get("unknown_rate") or 0.0),
+        "violate_rate": float(runtime.get("violate_rate") or 0.0),
+        "slot_detection_rate": float(runtime.get("slot_detection_rate") or 0.0),
+        "claims_skipped_low_confidence_rate": float(runtime.get("claims_skipped_low_confidence_rate") or 0.0),
+        "triage_selection_rate": float(runtime.get("triage_selection_rate") or 0.0),
+        "jobs_with_claims_total": int(runtime.get("jobs_with_claims_total") or 0),
+        "slot_diagnostics_schema_status": str(runtime.get("slot_diagnostics_schema_status") or ""),
+        "slot_diagnostics_present_jobs": int(runtime.get("slot_diagnostics_present_jobs") or 0),
+        "slot_diagnostics_partial_jobs": int(runtime.get("slot_diagnostics_partial_jobs") or 0),
+        "slot_diagnostics_missing_jobs": int(runtime.get("slot_diagnostics_missing_jobs") or 0),
+        "slot_diagnostics_missing_with_claims_jobs": int(
+            runtime.get("slot_diagnostics_missing_with_claims_jobs") or 0
+        ),
+        "slot_diagnostics_complete_job_rate": float(runtime.get("slot_diagnostics_complete_job_rate") or 0.0),
+        "slot_diagnostics_missing_with_claims_rate": float(
+            runtime.get("slot_diagnostics_missing_with_claims_rate") or 0.0
+        ),
+        "claim_slot_counts": {str(key): int(value) for key, value in claim_slot_counts.items() if isinstance(key, str)},
+        "unknown_slot_counts": {
+            str(key): int(value) for key, value in unknown_slot_counts.items() if isinstance(key, str)
+        },
+        "no_evidence_slot_counts": {
+            str(key): int(value) for key, value in no_evidence_slot_counts.items() if isinstance(key, str)
+        },
+        "anchor_filtered_slot_counts": {
+            str(key): int(value) for key, value in anchor_filtered_slot_counts.items() if isinstance(key, str)
+        },
+        "unknown_reason_counts": {
+            str(key): int(value)
+            for key, value in unknown_reason_counts.items()
+            if isinstance(key, str)
+        },
+    }
+
+
+def _is_shadow_artifact(payload: dict[str, Any]) -> bool:
+    bench_label = str(payload.get("bench_label") or "").strip()
+    if bench_label.startswith("operational-shadow:"):
+        return True
+    dataset_profile_meta = _extract_dataset_profile_metadata(payload)
+    return str(dataset_profile_meta.get("corroboration_lane") or "") == "shadow_local_profile_only"
+
+
+def _shadow_reference(row: dict[str, Any] | None) -> dict[str, Any]:
+    if row is None:
+        return {
+            "run_utc": None,
+            "file": None,
+            "bench_label": None,
+            "corroboration_lane": None,
+            "consistency_runtime": {
+                "claim_count_total": 0,
+                "unknown_count_total": 0,
+                "violate_count_total": 0,
+                "unknown_rate": 0.0,
+                "violate_rate": 0.0,
+                "slot_detection_rate": 0.0,
+                "claims_skipped_low_confidence_rate": 0.0,
+                "triage_selection_rate": 0.0,
+                "jobs_with_claims_total": 0,
+                "slot_diagnostics_schema_status": "",
+                "slot_diagnostics_present_jobs": 0,
+                "slot_diagnostics_partial_jobs": 0,
+                "slot_diagnostics_missing_jobs": 0,
+                "slot_diagnostics_missing_with_claims_jobs": 0,
+                "slot_diagnostics_complete_job_rate": 0.0,
+                "slot_diagnostics_missing_with_claims_rate": 0.0,
+                "claim_slot_counts": {},
+                "unknown_slot_counts": {},
+                "no_evidence_slot_counts": {},
+                "anchor_filtered_slot_counts": {},
+                "unknown_reason_counts": {},
+            },
+        }
+    dataset_profile_meta = _extract_dataset_profile_metadata(row["payload"])
+    return {
+        "run_utc": row["event_time"].strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "file": row["path"].name,
+        "bench_label": str(row.get("bench_label") or ""),
+        "corroboration_lane": dataset_profile_meta.get("corroboration_lane") or None,
+        "consistency_runtime": _extract_consistency_runtime_summary(row["payload"]),
+    }
+
+
+def _classify_actionability(
+    *,
+    latest_runtime: dict[str, Any],
+    latest_corroboration_lane: str,
+    shadow_reference: dict[str, Any],
+) -> tuple[str, str]:
+    claim_count_total = int(latest_runtime.get("claim_count_total") or 0)
+    unknown_count_total = int(latest_runtime.get("unknown_count_total") or 0)
+    violate_count_total = int(latest_runtime.get("violate_count_total") or 0)
+    shadow_runtime = shadow_reference.get("consistency_runtime") or {}
+    shadow_claim_count_total = int(shadow_runtime.get("claim_count_total") or 0)
+    shadow_lane = str(shadow_reference.get("corroboration_lane") or "")
+
+    if claim_count_total > 0:
+        if unknown_count_total >= claim_count_total and violate_count_total == 0:
+            return (
+                "MAINLINE_ALL_UNKNOWN",
+                "mainline claims are present but still unresolved; investigate unknown_reason_counts before treating the lane as actionable",
+            )
+        return ("MAINLINE_ACTIVE", "mainline actionable claims are present")
+    if latest_corroboration_lane == "mainline_excludes_local_profile_only":
+        if shadow_claim_count_total > 0 and shadow_lane == "shadow_local_profile_only":
+            return (
+                "SEPARATED_TO_SHADOW",
+                "mainline excludes local-profile-only claims; the secondary shadow lane carries the corroboration-only workload",
+            )
+        return (
+            "MAINLINE_EMPTY_AFTER_SEPARATION",
+            "mainline excludes local-profile-only claims and no shadow corroboration workload was observed in the latest shadow reference",
+        )
+    return ("NO_MAINLINE_CLAIMS", "mainline produced no actionable claims")
+
+
 def _resolve_label_filter(
     *,
     label_mode: str | None,
@@ -187,12 +434,14 @@ def _resolve_label_filter(
     resolved_strict = bool(strict_label_filter)
     mode = _LABEL_MODE_CUSTOM if (resolved_prefixes or resolved_strict) else _LABEL_MODE_ALL
     note = "Includes all benchmark artifacts matching the dataset selection."
+    preferred_artifact_cohort = ""
     if preset is not None:
         if not resolved_prefixes:
             resolved_prefixes = tuple(str(item) for item in preset.get("prefixes") or ())
         resolved_strict = bool(resolved_strict or preset.get("strict_label_filter", False))
         mode = normalized_mode
         note = str(preset.get("description") or note)
+        preferred_artifact_cohort = str(preset.get("preferred_artifact_cohort") or "")
     elif mode == _LABEL_MODE_CUSTOM:
         note = "Uses caller-specified label prefixes and/or strict unlabeled exclusion."
     return {
@@ -200,15 +449,48 @@ def _resolve_label_filter(
         "note": note,
         "prefixes": resolved_prefixes,
         "strict_label_filter": resolved_strict,
+        "preferred_artifact_cohort": preferred_artifact_cohort,
     }
 
 
-def _dataset_summary(dataset_key: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
-    ordered = sorted(rows, key=lambda item: item["event_time"], reverse=True)
-    latest = ordered[0] if ordered else None
-    previous = ordered[1] if len(ordered) > 1 else None
+def _prefer_artifact_cohort(
+    rows: list[dict[str, Any]],
+    *,
+    preferred_artifact_cohort: str,
+) -> tuple[list[dict[str, Any]], int, bool]:
+    token = str(preferred_artifact_cohort or "").strip()
+    if not token or not rows:
+        return list(rows), 0, False
+    ordered_rows = sorted(rows, key=lambda item: item["event_time"], reverse=True)
+    matching = [row for row in ordered_rows if str(row.get("artifact_cohort") or "") == token]
+    if not matching:
+        return list(rows), 0, False
+    latest_matching_time = matching[0]["event_time"]
+    kept = [
+        row
+        for row in ordered_rows
+        if str(row.get("artifact_cohort") or "") == token or row["event_time"] < latest_matching_time
+    ]
+    excluded = len(rows) - len(kept)
+    return kept, excluded, True
 
-    if latest is None:
+
+def _dataset_summary(
+    dataset_key: str,
+    successful_rows: list[dict[str, Any]],
+    attempt_rows: list[dict[str, Any]],
+    shadow_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    ordered_successful = sorted(successful_rows, key=lambda item: item["event_time"], reverse=True)
+    ordered_attempts = sorted(attempt_rows, key=lambda item: item["event_time"], reverse=True)
+    ordered_shadow = sorted(shadow_rows, key=lambda item: item["event_time"], reverse=True)
+    latest_successful = ordered_successful[0] if ordered_successful else None
+    previous_successful = ordered_successful[1] if len(ordered_successful) > 1 else None
+    latest_attempt = ordered_attempts[0] if ordered_attempts else None
+    latest_shadow = ordered_shadow[0] if ordered_shadow else None
+
+    if latest_successful is None:
+        shadow_reference = _shadow_reference(latest_shadow)
         return {
             "dataset": dataset_key,
             "status": "MISSING",
@@ -224,11 +506,37 @@ def _dataset_summary(dataset_key: str, rows: list[dict[str, Any]]) -> dict[str, 
             "absolute_metric_status": {metric: "N/A" for metric in TARGET_METRICS},
             "absolute_thresholds": {metric: None for metric in TARGET_METRICS},
             "improved_or_same_metric_count": 0,
+            "latest_successful_run_utc": None,
+            "latest_successful_file": None,
+            "latest_successful_bench_label": None,
+            "latest_attempt_run_utc": None
+            if latest_attempt is None
+            else latest_attempt["event_time"].strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "latest_attempt_file": None if latest_attempt is None else latest_attempt["path"].name,
+            "latest_attempt_bench_label": None if latest_attempt is None else str(latest_attempt.get("bench_label") or ""),
+            "latest_attempt_status": None
+            if latest_attempt is None
+            else str(latest_attempt.get("attempt_status") or "UNKNOWN"),
+            "latest_attempt_succeeded": None
+            if latest_attempt is None
+            else bool(latest_attempt.get("attempt_status") == "SUCCEEDED"),
+            "latest_consistency_runtime": shadow_reference["consistency_runtime"],
+            "latest_shadow_reference": shadow_reference,
+            "latest_actionability_status": "NO_MAINLINE_DATA",
+            "latest_actionability_note": "no mainline successful artifact is available for actionability classification",
         }
 
-    latest_metrics = latest["metrics"]
-    latest_doc_count = latest.get("doc_count")
-    previous_metrics = previous["metrics"] if previous is not None else {}
+    latest_metrics = latest_successful["metrics"]
+    latest_doc_count = latest_successful.get("doc_count")
+    dataset_profile_meta = _extract_dataset_profile_metadata(latest_successful["payload"])
+    latest_runtime = _extract_consistency_runtime_summary(latest_successful["payload"])
+    shadow_reference = _shadow_reference(latest_shadow)
+    actionability_status, actionability_note = _classify_actionability(
+        latest_runtime=latest_runtime,
+        latest_corroboration_lane=str(dataset_profile_meta.get("corroboration_lane") or ""),
+        shadow_reference=shadow_reference,
+    )
+    previous_metrics = previous_successful["metrics"] if previous_successful is not None else {}
     delta_pct: dict[str, float | None] = {}
     metric_status: dict[str, str] = {}
     improved_or_same = 0
@@ -249,7 +557,7 @@ def _dataset_summary(dataset_key: str, rows: list[dict[str, Any]]) -> dict[str, 
         status = "FAIL"
     elif any(state == "SOFT_WARNING" for state in metric_status.values()):
         status = "WARN"
-    elif previous is None:
+    elif previous_successful is None:
         status = "NO_BASELINE"
 
     absolute_thresholds = _absolute_thresholds(latest_doc_count)
@@ -263,19 +571,52 @@ def _dataset_summary(dataset_key: str, rows: list[dict[str, Any]]) -> dict[str, 
         "dataset": dataset_key,
         "status": status,
         "absolute_status": absolute_status,
-        "latest_run_utc": latest["event_time"].strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "latest_file": latest["path"].name,
-        "latest_bench_label": str(latest.get("bench_label") or ""),
+        "latest_run_utc": latest_successful["event_time"].strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "latest_file": latest_successful["path"].name,
+        "latest_bench_label": str(latest_successful.get("bench_label") or ""),
         "latest_doc_count": latest_doc_count,
         "latest_metrics": latest_metrics,
-        "previous_run_utc": None if previous is None else previous["event_time"].strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "previous_file": None if previous is None else previous["path"].name,
-        "previous_bench_label": None if previous is None else str(previous.get("bench_label") or ""),
+        "latest_dataset_generation_version": dataset_profile_meta.get("dataset_generation_version") or None,
+        "latest_composite_source_policy": dataset_profile_meta.get("composite_source_policy") or None,
+        "latest_source_policy_registry_version": dataset_profile_meta.get("source_policy_registry_version") or None,
+        "latest_manual_review_source_count": int(dataset_profile_meta.get("manual_review_source_count") or 0),
+        "latest_local_profile_only_record_count": int(dataset_profile_meta.get("local_profile_only_record_count") or 0),
+        "latest_consistency_corroboration_policy_counts": dict(
+            dataset_profile_meta.get("consistency_corroboration_policy_counts") or {}
+        ),
+        "latest_consistency_corroboration_filter": dict(
+            dataset_profile_meta.get("consistency_corroboration_filter") or {}
+        ),
+        "latest_consistency_target_selection": dict(
+            dataset_profile_meta.get("consistency_target_selection") or {}
+        ),
+        "latest_corroboration_lane": dataset_profile_meta.get("corroboration_lane") or None,
+        "latest_consistency_runtime": latest_runtime,
+        "latest_shadow_reference": shadow_reference,
+        "latest_actionability_status": actionability_status,
+        "latest_actionability_note": actionability_note,
+        "previous_run_utc": None
+        if previous_successful is None
+        else previous_successful["event_time"].strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "previous_file": None if previous_successful is None else previous_successful["path"].name,
+        "previous_bench_label": None
+        if previous_successful is None
+        else str(previous_successful.get("bench_label") or ""),
         "delta_pct": delta_pct,
         "metric_status": metric_status,
         "absolute_metric_status": absolute_metric_status,
         "absolute_thresholds": absolute_thresholds,
         "improved_or_same_metric_count": improved_or_same,
+        "latest_successful_run_utc": latest_successful["event_time"].strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "latest_successful_file": latest_successful["path"].name,
+        "latest_successful_bench_label": str(latest_successful.get("bench_label") or ""),
+        "latest_attempt_run_utc": None
+        if latest_attempt is None
+        else latest_attempt["event_time"].strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "latest_attempt_file": None if latest_attempt is None else latest_attempt["path"].name,
+        "latest_attempt_bench_label": None if latest_attempt is None else str(latest_attempt.get("bench_label") or ""),
+        "latest_attempt_status": None if latest_attempt is None else str(latest_attempt.get("attempt_status") or "UNKNOWN"),
+        "latest_attempt_succeeded": None if latest_attempt is None else bool(latest_attempt.get("attempt_status") == "SUCCEEDED"),
     }
 
 
@@ -294,9 +635,13 @@ def summarize_benchmarks(
     )
     resolved_prefixes = tuple(str(item) for item in resolved_label_filter["prefixes"])
     resolved_strict = bool(resolved_label_filter["strict_label_filter"])
-    rows_by_dataset: dict[str, list[dict[str, Any]]] = {dataset: [] for dataset in datasets}
+    preferred_artifact_cohort = str(resolved_label_filter.get("preferred_artifact_cohort") or "")
+    successful_rows_by_dataset: dict[str, list[dict[str, Any]]] = {dataset: [] for dataset in datasets}
+    attempt_rows_by_dataset: dict[str, list[dict[str, Any]]] = {dataset: [] for dataset in datasets}
+    shadow_rows_by_dataset: dict[str, list[dict[str, Any]]] = {dataset: [] for dataset in datasets}
     scanned_count = 0
     considered_count = 0
+    considered_attempt_count = 0
     excluded_unlabeled = 0
     excluded_prefix_mismatch = 0
     excluded_unsuccessful_status = 0
@@ -307,40 +652,91 @@ def summarize_benchmarks(
         if payload is None:
             continue
         scanned_count += 1
-        if not isinstance(payload.get("timings_ms"), dict):
-            continue
         bench_label = str(payload.get("bench_label") or "").strip()
+        dataset_key = _infer_dataset_key(payload)
+        if dataset_key in successful_rows_by_dataset and _is_shadow_artifact(payload):
+            timings = payload.get("timings_ms") or {}
+            shadow_rows_by_dataset[dataset_key].append(
+                {
+                    "path": path,
+                    "payload": payload,
+                    "event_time": _event_time(payload, path),
+                    "metrics": {
+                        "consistency_p95": _as_float(timings.get("consistency_p95")),
+                        "retrieval_fts_p95": _as_float(timings.get("retrieval_fts_p95")),
+                    },
+                    "doc_count": int(payload.get("doc_count") or 0),
+                    "bench_label": bench_label,
+                    "artifact_cohort": _artifact_cohort(payload),
+                    "attempt_status": _artifact_attempt_status(payload),
+                }
+            )
         if resolved_strict and not bench_label:
             excluded_unlabeled += 1
             continue
         if not _label_matches(bench_label, resolved_prefixes):
             excluded_prefix_mismatch += 1
             continue
+        if dataset_key not in successful_rows_by_dataset:
+            continue
+        attempt_status = _artifact_attempt_status(payload)
+        timings = payload.get("timings_ms") or {}
+        attempt_row = {
+            "path": path,
+            "payload": payload,
+            "event_time": _event_time(payload, path),
+            "metrics": {
+                "consistency_p95": _as_float(timings.get("consistency_p95")),
+                "retrieval_fts_p95": _as_float(timings.get("retrieval_fts_p95")),
+            },
+            "doc_count": int(payload.get("doc_count") or 0),
+            "bench_label": bench_label,
+            "artifact_cohort": _artifact_cohort(payload),
+            "attempt_status": attempt_status,
+        }
+        attempt_rows_by_dataset[dataset_key].append(attempt_row)
+        considered_attempt_count += 1
+        if not isinstance(payload.get("timings_ms"), dict):
+            continue
         if _artifact_execution_failed(payload):
             excluded_unsuccessful_status += 1
             continue
         considered_count += 1
-        dataset_key = _infer_dataset_key(payload)
-        if dataset_key not in rows_by_dataset:
-            continue
-        timings = payload.get("timings_ms") or {}
         metrics = {
             "consistency_p95": _as_float(timings.get("consistency_p95")),
             "retrieval_fts_p95": _as_float(timings.get("retrieval_fts_p95")),
         }
-        rows_by_dataset[dataset_key].append(
+        successful_rows_by_dataset[dataset_key].append(
             {
                 "path": path,
                 "payload": payload,
-                "event_time": _event_time(payload, path),
+                "event_time": attempt_row["event_time"],
                 "metrics": metrics,
                 "doc_count": int(payload.get("doc_count") or 0),
                 "bench_label": bench_label,
+                "artifact_cohort": _artifact_cohort(payload),
             }
         )
 
+    excluded_artifact_cohort_mismatch = 0
+    artifact_cohort_filter_applied_datasets: list[str] = []
+    for dataset in datasets:
+        filtered_successful, excluded_successful, successful_applied = _prefer_artifact_cohort(
+            successful_rows_by_dataset.get(dataset, []),
+            preferred_artifact_cohort=preferred_artifact_cohort,
+        )
+        successful_rows_by_dataset[dataset] = filtered_successful
+        excluded_artifact_cohort_mismatch += excluded_successful
+        if successful_applied:
+            artifact_cohort_filter_applied_datasets.append(dataset)
+
     dataset_summaries = {
-        dataset: _dataset_summary(dataset, rows_by_dataset.get(dataset, []))
+        dataset: _dataset_summary(
+            dataset,
+            successful_rows_by_dataset.get(dataset, []),
+            attempt_rows_by_dataset.get(dataset, []),
+            shadow_rows_by_dataset.get(dataset, []),
+        )
         for dataset in datasets
     }
 
@@ -387,11 +783,15 @@ def summarize_benchmarks(
             "note": str(resolved_label_filter["note"]),
             "prefixes": list(resolved_prefixes),
             "strict_label_filter": bool(resolved_strict),
+            "preferred_artifact_cohort": preferred_artifact_cohort or None,
             "scanned_artifacts": scanned_count,
+            "considered_attempt_artifacts": considered_attempt_count,
             "considered_artifacts": considered_count,
             "excluded_unlabeled": excluded_unlabeled,
             "excluded_prefix_mismatch": excluded_prefix_mismatch,
             "excluded_unsuccessful_status": excluded_unsuccessful_status,
+            "excluded_artifact_cohort_mismatch": excluded_artifact_cohort_mismatch,
+            "artifact_cohort_filter_applied_datasets": artifact_cohort_filter_applied_datasets,
         },
         "rule_evaluation": {
             "hard_fail": hard_fail,
@@ -437,8 +837,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
         f"- status_semantics: `{summary.get('status_semantics')}`",
         f"- label_filter: `{summary.get('label_filter')}`",
         "",
-        "| dataset | latest_run_utc | consistency_p95(ms) | retrieval_fts_p95(ms) | delta_consistency | delta_retrieval_fts | trend_status | absolute_status |",
-        "|---|---|---:|---:|---:|---:|---|---|",
+        "| dataset | latest_successful_run_utc | latest_attempt | consistency_p95(ms) | retrieval_fts_p95(ms) | delta_consistency | delta_retrieval_fts | trend_status | absolute_status |",
+        "|---|---|---|---:|---:|---:|---:|---|---|",
     ]
     datasets = summary.get("datasets") or {}
     dataset_order = summary.get("dataset_order") or list(DEFAULT_DATASETS)
@@ -447,9 +847,12 @@ def render_markdown(summary: dict[str, Any]) -> str:
         latest_metrics = row.get("latest_metrics") or {}
         delta_pct = row.get("delta_pct") or {}
         lines.append(
-            "| {dataset} | {run} | {cons} | {retr} | {d_cons} | {d_retr} | {trend_status} | {absolute_status} |".format(
+            "| {dataset} | {run} | {attempt} | {cons} | {retr} | {d_cons} | {d_retr} | {trend_status} | {absolute_status} |".format(
                 dataset=dataset_key,
                 run=row.get("latest_run_utc") or "-",
+                attempt="-"
+                if not row.get("latest_attempt_file")
+                else f"{row.get('latest_attempt_file')} ({row.get('latest_attempt_status')})",
                 cons=_format_metric(_as_float(latest_metrics.get("consistency_p95"))),
                 retr=_format_metric(_as_float(latest_metrics.get("retrieval_fts_p95"))),
                 d_cons=_format_delta(_as_float(delta_pct.get("consistency_p95"))),
@@ -458,6 +861,50 @@ def render_markdown(summary: dict[str, Any]) -> str:
                 absolute_status=row.get("absolute_status") or "MISSING",
             )
         )
+    lane_rows = []
+    for dataset_key in dataset_order:
+        row = datasets.get(dataset_key) or {}
+        local_profile_count = int(row.get("latest_local_profile_only_record_count") or 0)
+        lane = str(row.get("latest_corroboration_lane") or "")
+        generation = str(row.get("latest_dataset_generation_version") or "")
+        if not local_profile_count and not lane and not generation:
+            continue
+        lane_rows.append(
+            "- {dataset}: generation=`{generation}`, lane=`{lane}`, local_profile_only=`{count}`, filter=`{filter}`".format(
+                dataset=dataset_key,
+                generation=generation or "-",
+                lane=lane or "-",
+                count=local_profile_count,
+                filter=(row.get("latest_consistency_corroboration_filter") or {}).get("filter_mode") or "-",
+            )
+        )
+    if lane_rows:
+        lines.extend(["", "## Corroboration Lane", *lane_rows])
+    actionability_rows = []
+    for dataset_key in dataset_order:
+        row = datasets.get(dataset_key) or {}
+        runtime = row.get("latest_consistency_runtime") or {}
+        shadow_reference = row.get("latest_shadow_reference") or {}
+        shadow_runtime = shadow_reference.get("consistency_runtime") or {}
+        actionability_status = str(row.get("latest_actionability_status") or "")
+        actionability_note = str(row.get("latest_actionability_note") or "")
+        if not actionability_status:
+            continue
+        actionability_rows.append(
+            "- {dataset}: status=`{status}`, mainline_claims=`{main_claims}`, mainline_unknown=`{main_unknown}`, lane=`{lane}`, slot_diag=`{slot_diag}`, shadow_claims=`{shadow_claims}`, shadow_unknown_rate=`{shadow_unknown_rate}`, note=`{note}`".format(
+                dataset=dataset_key,
+                status=actionability_status,
+                main_claims=int(runtime.get("claim_count_total") or 0),
+                main_unknown=int(runtime.get("unknown_count_total") or 0),
+                lane=str(row.get("latest_corroboration_lane") or "-"),
+                slot_diag=str(runtime.get("slot_diagnostics_schema_status") or "-"),
+                shadow_claims=int(shadow_runtime.get("claim_count_total") or 0),
+                shadow_unknown_rate=f"{float(shadow_runtime.get('unknown_rate') or 0.0):.4f}",
+                note=actionability_note or "-",
+            )
+        )
+    if actionability_rows:
+        lines.extend(["", "## Actionability View", *actionability_rows])
     return "\n".join(lines) + "\n"
 
 

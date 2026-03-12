@@ -87,6 +87,9 @@ _HASHED_EMBEDDING_DIM = 96
 
 _STRING_SLOT_KEYS = {"time", "place", "relation", "affiliation", "job", "talent"}
 _ENTITY_BOUND_SLOT_KEYS = {"age", "death", "relation", "affiliation", "job", "talent"}
+_RETRIEVAL_ANCHOR_SLOT_KEYS = {"relation", "affiliation", "job", "talent"}
+_RETRIEVAL_ANCHOR_RESCUE_SLOT_KEYS = {"affiliation"}
+_DOC_SCOPE_SELF_EVIDENCE_SLOT_KEYS = {"age", "death", "relation", "affiliation", "job", "talent"}
 _SLOT_KEYWORDS: dict[str, tuple[str, ...]] = {
     "age": ("\ub098\uc774", "\uc5f0\ub839", "age"),
     "time": ("\uc2dc\uac04", "\uc2dc\uc810", "\ub0a0\uc9dc", "\uc77c\uc2dc", "time", "date"),
@@ -104,6 +107,9 @@ _SCHEMA_TYPE_SLOT_KEYS: dict[str, str] = {
     "rel": "relation",
     "bool": "death",
 }
+_EXPLICIT_SELF_EVIDENCE_LINE_RE = re.compile(
+    r"^\s*(?:[\-\*\u2022]\s*)?(?:나이|연령|소속|직업|클래스|관계|재능|사망|생존)\s*[:은는]"
+)
 _SENTENCE_END_CHAR_SET = set(SENTENCE_END_CHARS)
 _SENTENCE_TAIL_CHAR_SET = set(SENTENCE_TAIL_CHARS)
 _STRING_EQUIVALENTS = {
@@ -156,10 +162,52 @@ _KO_PLACE_SUFFIXES = (
     "\uba74",
     "\ub3d9",
 )
+_AFFILIATION_ENTITY_SUFFIXES = (
+    "제국",
+    "왕국",
+    "황궁",
+    "길드",
+    "협회",
+    "연맹",
+    "문파",
+    "기사단",
+    "경비대",
+    "사단",
+    "여단",
+    "세가",
+    "교",
+    "단",
+    "문",
+    "련",
+    "회",
+    "파",
+    "궁",
+    "관",
+    "당",
+    "각",
+)
 _SLOT_OK_SIMILARITY_THRESHOLD = 0.85
 _SLOT_VIOLATE_SIMILARITY_THRESHOLD = 0.25
 _CONFIRMED_EVIDENCE_MIN_OVERLAP_CHARS = 3
 _CONFIRMED_EVIDENCE_MIN_OVERLAP_RATIO = 0.20
+_HEAD_TOKEN_SLOT_KEYS = {"relation", "affiliation", "job", "talent"}
+_BROAD_CLAIM_SPAN_SLOT_KEYS = {"age", "death", "place", "relation", "affiliation", "job", "talent"}
+_DESCRIPTIVE_SLOT_TOKEN_SUFFIXES = (
+    "는",
+    "하는",
+    "되는",
+    "했던",
+    "하던",
+    "하다",
+    "했다",
+    "하며",
+    "하고",
+    "해서",
+    "같은",
+    "있는",
+    "없는",
+    "중인",
+)
 
 
 def _fingerprint(text: str) -> str:
@@ -181,6 +229,16 @@ def _trimmed_span(text: str, start: int, end: int) -> tuple[int, int, str] | Non
     if right <= left:
         return None
     return left, right, text[left:right]
+
+
+def _should_expand_claim_to_segment(*, slot_key: str, claim_text: str, segment_text: str) -> bool:
+    if slot_key not in _BROAD_CLAIM_SPAN_SLOT_KEYS:
+        return False
+    claim_compact = str(claim_text or "").strip()
+    segment_compact = str(segment_text or "").strip()
+    if not claim_compact or not segment_compact:
+        return False
+    return claim_compact != segment_compact
 
 
 def _segment_text(text: str) -> list[tuple[int, int, str]]:
@@ -234,7 +292,10 @@ def _extract_claims(
     stats: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     claims: list[dict[str, Any]] = []
-    for segment_start, segment_end, segment_text in _segment_text(text):
+    segments = _segment_text(text)
+    if stats is not None:
+        stats["segment_count"] = int(stats.get("segment_count", 0)) + len(segments)
+    for segment_start, segment_end, segment_text in segments:
         if pipeline is None:
             slots: dict[str, object] = {}
             candidates: list[Any] = []
@@ -253,6 +314,8 @@ def _extract_claims(
             stats["slot_candidate_count"] = int(stats.get("slot_candidate_count", 0)) + len(candidates)
         if not slots:
             continue
+        if stats is not None:
+            stats["segments_with_claims_count"] = int(stats.get("segments_with_claims_count", 0)) + 1
 
         best_by_slot: dict[str, Any] = {}
         for candidate in candidates:
@@ -293,6 +356,14 @@ def _extract_claims(
                 claim_text = segment_text
             else:
                 claim_start, claim_end, claim_text = claim_piece
+            if _should_expand_claim_to_segment(
+                slot_key=slot_key,
+                claim_text=claim_text,
+                segment_text=segment_text,
+            ):
+                segment_piece = _trimmed_span(text, segment_start, segment_end)
+                if segment_piece is not None:
+                    claim_start, claim_end, claim_text = segment_piece
 
             claims.append(
                 {
@@ -310,6 +381,8 @@ def _extract_claims(
             if stats is not None:
                 stats["slot_candidate_selected"] = int(stats.get("slot_candidate_selected", 0)) + 1
                 stats["slot_candidate_conf_sum"] = float(stats.get("slot_candidate_conf_sum", 0.0)) + confidence
+                stats["claim_count"] = int(stats.get("claim_count", 0)) + 1
+                _increment_stat_counter(stats, "claim_slot_counts", slot_key)
     return claims
 
 
@@ -411,6 +484,17 @@ def _norm_text(value: object) -> str:
     return unicodedata.normalize("NFKC", str(value)).strip().lower()
 
 
+def _compact_anchor_text(value: object) -> str:
+    text = _norm_text(value)
+    if not text:
+        return ""
+    compact = re.sub(r"\s+", "", text)
+    compact = compact.replace("'", "").replace('"', "")
+    for src, dst in _STRING_EQUIVALENTS.items():
+        compact = compact.replace(src, dst)
+    return compact
+
+
 def _strip_trailing_suffix_once(text: str, suffixes: tuple[str, ...]) -> str:
     for suffix in sorted(suffixes, key=len, reverse=True):
         if not suffix:
@@ -435,11 +519,30 @@ def _normalize_slot_text(value: object, *, slot_key: str | None = None) -> str:
 
 
 def _tokenize_slot_text(value: object, *, slot_key: str | None = None) -> set[str]:
+    return set(_split_slot_text_tokens(value, slot_key=slot_key))
+
+
+def _split_raw_slot_text_tokens(value: object) -> list[str]:
     text = _norm_text(value)
     if not text:
-        return set()
+        return []
     tokens = re.split(r"[\s,./;:()\[\]{}<>|]+", text)
-    cleaned: set[str] = set()
+    cleaned: list[str] = []
+    for token in tokens:
+        if not token:
+            continue
+        reduced = re.sub(r"[^0-9a-zA-Z\uac00-\ud7a3]+", "", token)
+        if reduced:
+            cleaned.append(reduced)
+    return cleaned
+
+
+def _split_slot_text_tokens(value: object, *, slot_key: str | None = None) -> list[str]:
+    text = _norm_text(value)
+    if not text:
+        return []
+    tokens = re.split(r"[\s,./;:()\[\]{}<>|]+", text)
+    cleaned: list[str] = []
     for token in tokens:
         if not token:
             continue
@@ -448,8 +551,47 @@ def _tokenize_slot_text(value: object, *, slot_key: str | None = None) -> set[st
         if slot_key == "place":
             reduced = _strip_trailing_suffix_once(reduced, _KO_PLACE_SUFFIXES)
         if reduced:
-            cleaned.add(reduced)
+            cleaned.append(reduced)
     return cleaned
+
+
+def _looks_descriptive_slot_token(token: str) -> bool:
+    if not token or token.endswith("의"):
+        return False
+    return any(token.endswith(suffix) for suffix in _DESCRIPTIVE_SLOT_TOKEN_SUFFIXES)
+
+
+def _allows_head_token_match(
+    slot_key: str,
+    left_tokens: list[str],
+    right_tokens: list[str],
+    *,
+    left_raw_tokens: list[str] | None = None,
+    right_raw_tokens: list[str] | None = None,
+) -> bool:
+    if slot_key not in _HEAD_TOKEN_SLOT_KEYS:
+        return False
+    if len(left_tokens) == 1 and len(right_tokens) >= 2:
+        shorter_tokens = left_tokens
+        longer_tokens = right_tokens
+        longer_raw_tokens = right_raw_tokens or right_tokens
+    elif len(right_tokens) == 1 and len(left_tokens) >= 2:
+        shorter_tokens = right_tokens
+        longer_tokens = left_tokens
+        longer_raw_tokens = left_raw_tokens or left_tokens
+    else:
+        return False
+    if len(longer_tokens) > 3:
+        return False
+    if (
+        slot_key == "affiliation"
+        and longer_tokens[0] == shorter_tokens[0]
+        and any(longer_tokens[-1].endswith(suffix) for suffix in _AFFILIATION_ENTITY_SUFFIXES)
+    ):
+        return True
+    if longer_tokens[-1] != shorter_tokens[0]:
+        return False
+    return all(not _looks_descriptive_slot_token(token) for token in longer_raw_tokens[:-1])
 
 
 def _token_overlap_similarity(left: set[str], right: set[str]) -> float:
@@ -542,8 +684,31 @@ def _compare_slot(slot_key: str, claimed_value: object, fact_value: object) -> V
         if slot_key in {"time", "place"} and (claimed in expected or expected in claimed):
             return Verdict.OK
 
-        claimed_tokens = _tokenize_slot_text(claimed_value, slot_key=slot_key)
-        expected_tokens = _tokenize_slot_text(fact_value, slot_key=slot_key)
+        claimed_raw_tokens = _split_raw_slot_text_tokens(claimed_value)
+        expected_raw_tokens = _split_raw_slot_text_tokens(fact_value)
+        claimed_tokens_list = _split_slot_text_tokens(claimed_value, slot_key=slot_key)
+        expected_tokens_list = _split_slot_text_tokens(fact_value, slot_key=slot_key)
+        claimed_tokens = set(claimed_tokens_list)
+        expected_tokens = set(expected_tokens_list)
+        if (
+            slot_key in _HEAD_TOKEN_SLOT_KEYS
+            and claimed_tokens.intersection(expected_tokens)
+            and (
+                (len(claimed_tokens_list) == 1 and len(expected_tokens_list) >= 2)
+                or (len(expected_tokens_list) == 1 and len(claimed_tokens_list) >= 2)
+            )
+        ):
+            return (
+                Verdict.OK
+                if _allows_head_token_match(
+                    slot_key,
+                    claimed_tokens_list,
+                    expected_tokens_list,
+                    left_raw_tokens=claimed_raw_tokens,
+                    right_raw_tokens=expected_raw_tokens,
+                )
+                else None
+            )
         similarity = _token_overlap_similarity(claimed_tokens, expected_tokens)
         if similarity >= _SLOT_OK_SIMILARITY_THRESHOLD:
             return Verdict.OK
@@ -1003,10 +1168,12 @@ def _judge_with_fact_index(
                 meta["entity_unresolved"] = True
                 continue
         else:
-            candidates = [
-                *fact_index.get((slot_key, target_entity_id), []),
-                *fact_index.get((slot_key, None), []),
-            ]
+            scoped_candidates = list(fact_index.get((slot_key, target_entity_id), []))
+            global_candidates = list(fact_index.get((slot_key, None), []))
+            if slot_key in _ENTITY_BOUND_SLOT_KEYS and scoped_candidates:
+                candidates = scoped_candidates
+            else:
+                candidates = [*scoped_candidates, *global_candidates]
         if not candidates:
             continue
         for fact in candidates:
@@ -1049,6 +1216,94 @@ def _judge_with_fact_index(
     return None, [], meta
 
 
+def _judge_with_snippet_corroboration(
+    slots: dict[str, object],
+    results: list[dict[str, Any]],
+    *,
+    pipeline: ExtractionPipeline | None,
+    comparison_cache: dict[tuple[str, str, str], Verdict | None] | None = None,
+    extracted_slots_cache: dict[tuple[str, int, int], dict[str, object]] | None = None,
+    cache_metrics: dict[str, int] | None = None,
+) -> tuple[bool, dict[str, int]]:
+    if not slots or not results or pipeline is None:
+        return False, {"support_rows": 0, "contradict_rows": 0}
+
+    support_rows = 0
+    contradict_rows = 0
+    seen_support_rows: set[tuple[str, int, int]] = set()
+    seen_contradict_rows: set[tuple[str, int, int]] = set()
+    for row in results:
+        evidence = row.get("evidence") or {}
+        snippet_text = str(evidence.get("snippet_text") or "")
+        if not snippet_text.strip():
+            continue
+        doc_id = str(evidence.get("doc_id") or "")
+        try:
+            span_start = int(evidence.get("span_start", 0))
+        except (TypeError, ValueError):
+            span_start = 0
+        try:
+            span_end = int(evidence.get("span_end", 0))
+        except (TypeError, ValueError):
+            span_end = 0
+        row_key = (doc_id, span_start, span_end)
+        snippet_result_slots = _get_cached_snippet_slots(
+            row_key=row_key,
+            snippet_text=snippet_text,
+            pipeline=pipeline,
+            extracted_slots_cache=extracted_slots_cache,
+            cache_metrics=cache_metrics,
+        )
+        if not snippet_result_slots:
+            continue
+        for slot_key, claimed_value in slots.items():
+            if slot_key not in snippet_result_slots:
+                continue
+            cache_key = (slot_key, repr(claimed_value), repr(snippet_result_slots[slot_key]))
+            if comparison_cache is None:
+                judged = _compare_slot(slot_key, claimed_value, snippet_result_slots[slot_key])
+            else:
+                if cache_key not in comparison_cache:
+                    comparison_cache[cache_key] = _compare_slot(slot_key, claimed_value, snippet_result_slots[slot_key])
+                judged = comparison_cache[cache_key]
+            if judged is Verdict.OK and row_key not in seen_support_rows:
+                seen_support_rows.add(row_key)
+                support_rows += 1
+            elif judged is Verdict.VIOLATE and row_key not in seen_contradict_rows:
+                seen_contradict_rows.add(row_key)
+                contradict_rows += 1
+    return support_rows > 0 and contradict_rows == 0, {
+        "support_rows": support_rows,
+        "contradict_rows": contradict_rows,
+    }
+
+
+def _get_cached_snippet_slots(
+    *,
+    row_key: tuple[str, int, int],
+    snippet_text: str,
+    pipeline: ExtractionPipeline | None,
+    extracted_slots_cache: dict[tuple[str, int, int], dict[str, object]] | None = None,
+    cache_metrics: dict[str, int] | None = None,
+) -> dict[str, object]:
+    if pipeline is None:
+        return {}
+    if extracted_slots_cache is not None and row_key in extracted_slots_cache:
+        if cache_metrics is not None:
+            cache_metrics["hit_count"] = int(cache_metrics.get("hit_count", 0)) + 1
+        return extracted_slots_cache[row_key]
+    extracted_slots = dict(pipeline.extract(snippet_text).slots)
+    if extracted_slots_cache is not None:
+        extracted_slots_cache[row_key] = extracted_slots
+    if cache_metrics is not None:
+        cache_metrics["miss_count"] = int(cache_metrics.get("miss_count", 0)) + 1
+    return extracted_slots
+
+
+def _supports_retrieval_anchor_rescue(slot_key: str) -> bool:
+    return slot_key in _RETRIEVAL_ANCHOR_RESCUE_SLOT_KEYS
+
+
 def _claim_cache_key(text: str, *, filters: dict[str, object] | None = None) -> str:
     normalized = unicodedata.normalize("NFKC", text or "")
     normalized = re.sub(r"\s+", " ", normalized).strip().lower()
@@ -1082,6 +1337,18 @@ def _resolve_self_evidence_options(req: ConsistencyRequest) -> tuple[bool, str]:
     if scope not in {"claim", "range", "doc"}:
         scope = _DEFAULT_SELF_EVIDENCE_SCOPE
     return exclude, scope
+
+
+def _claim_self_evidence_scope(default_scope: str, *, segment_text: str, slots: dict[str, object]) -> str:
+    if default_scope == "doc":
+        return "doc"
+    if not isinstance(segment_text, str) or not segment_text.strip():
+        return default_scope
+    if not any(slot_key in slots for slot_key in _DOC_SCOPE_SELF_EVIDENCE_SLOT_KEYS):
+        return default_scope
+    if _EXPLICIT_SELF_EVIDENCE_LINE_RE.match(segment_text):
+        return "doc"
+    return default_scope
 
 
 def _resolve_graph_expand_options(req: ConsistencyRequest) -> tuple[bool, int, int]:
@@ -1592,6 +1859,97 @@ def _filter_self_evidence_results(
     return filtered, removed
 
 
+def _filter_results_without_slot_anchor(
+    results: list[dict[str, Any]],
+    *,
+    slots: dict[str, object],
+    pipeline: ExtractionPipeline | None = None,
+    comparison_cache: dict[tuple[str, str, str], Verdict | None] | None = None,
+    extracted_slots_cache: dict[tuple[str, int, int], dict[str, object]] | None = None,
+    cache_metrics: dict[str, int] | None = None,
+    rescue_metrics: dict[str, int] | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    if not results:
+        return [], 0
+    anchor_specs: list[tuple[str, str, set[str]]] = []
+    for slot_key in _RETRIEVAL_ANCHOR_SLOT_KEYS:
+        if slot_key not in slots:
+            continue
+        normalized = _normalize_slot_text(slots.get(slot_key), slot_key=slot_key)
+        tokens = _tokenize_slot_text(slots.get(slot_key), slot_key=slot_key)
+        if not normalized and not tokens:
+            continue
+        anchor_specs.append((slot_key, normalized, tokens))
+    if not anchor_specs:
+        return list(results), 0
+
+    filtered: list[dict[str, Any]] = []
+    removed = 0
+    for row in results:
+        evidence = row.get("evidence") or {}
+        snippet_text = evidence.get("snippet_text")
+        if not isinstance(snippet_text, str) or not snippet_text.strip():
+            filtered.append(row)
+            continue
+        doc_id = str(evidence.get("doc_id") or "")
+        try:
+            span_start = int(evidence.get("span_start", 0))
+        except (TypeError, ValueError):
+            span_start = 0
+        try:
+            span_end = int(evidence.get("span_end", 0))
+        except (TypeError, ValueError):
+            span_end = 0
+        row_key = (doc_id, span_start, span_end)
+        snippet_compact = _compact_anchor_text(snippet_text)
+        keep = False
+        for slot_key, normalized, tokens in anchor_specs:
+            if normalized and normalized in snippet_compact:
+                keep = True
+                break
+            if not tokens:
+                continue
+            snippet_tokens = _tokenize_slot_text(snippet_text, slot_key=slot_key)
+            overlap = tokens.intersection(snippet_tokens)
+            if len(tokens) <= 1 and overlap:
+                keep = True
+                break
+            if len(tokens) >= 2 and len(overlap) >= min(2, len(tokens)):
+                keep = True
+                break
+            if pipeline is None or not _supports_retrieval_anchor_rescue(slot_key):
+                continue
+            if rescue_metrics is not None:
+                rescue_metrics["attempt_count"] = int(rescue_metrics.get("attempt_count", 0)) + 1
+            extracted_slots = _get_cached_snippet_slots(
+                row_key=row_key,
+                snippet_text=snippet_text,
+                pipeline=pipeline,
+                extracted_slots_cache=extracted_slots_cache,
+                cache_metrics=cache_metrics,
+            )
+            extracted_value = extracted_slots.get(slot_key)
+            if extracted_value is None:
+                continue
+            cache_key = (slot_key, repr(slots.get(slot_key)), repr(extracted_value))
+            if comparison_cache is None:
+                judged = _compare_slot(slot_key, slots.get(slot_key), extracted_value)
+            else:
+                if cache_key not in comparison_cache:
+                    comparison_cache[cache_key] = _compare_slot(slot_key, slots.get(slot_key), extracted_value)
+                judged = comparison_cache[cache_key]
+            if judged is Verdict.OK:
+                if rescue_metrics is not None:
+                    rescue_metrics["ok_count"] = int(rescue_metrics.get("ok_count", 0)) + 1
+                keep = True
+                break
+        if keep:
+            filtered.append(row)
+        else:
+            removed += 1
+    return filtered, removed
+
+
 def _has_any_overlap(span_start: int, span_end: int, spans: list[tuple[int, int]]) -> bool:
     for other_start, other_end in spans:
         if span_start < other_end and other_start < span_end:
@@ -1958,6 +2316,10 @@ class ConsistencyEngineImpl:
         stats_raw = req.get("stats")
         req_stats = stats_raw if isinstance(stats_raw, dict) else None
         if req_stats is not None:
+            req_stats.setdefault("segment_count", 0)
+            req_stats.setdefault("segments_with_claims_count", 0)
+            req_stats.setdefault("claim_count", 0)
+            req_stats.setdefault("claim_slot_counts", {})
             req_stats.setdefault("claims_processed", 0)
             req_stats.setdefault("chunks_processed", 0)
             req_stats.setdefault("rows_scanned", 0)
@@ -1969,12 +2331,16 @@ class ConsistencyEngineImpl:
             req_stats.setdefault("slot_candidate_selected", 0)
             req_stats.setdefault("slot_candidate_conf_sum", 0.0)
             req_stats.setdefault("self_evidence_filtered_count", 0)
+            req_stats.setdefault("retrieval_anchor_filtered_count", 0)
+            req_stats.setdefault("anchor_filtered_slot_counts", {})
             req_stats.setdefault("graph_expand_applied_count", 0)
             req_stats.setdefault("graph_expand_candidate_docs", 0)
             req_stats.setdefault("graph_expand_refill_results", 0)
             req_stats.setdefault("graph_auto_trigger_count", 0)
             req_stats.setdefault("graph_auto_skip_count", 0)
             req_stats.setdefault("unknown_reason_counts", {})
+            req_stats.setdefault("unknown_slot_counts", {})
+            req_stats.setdefault("no_evidence_slot_counts", {})
             req_stats.setdefault("evidence_confidence_sum", 0.0)
             req_stats.setdefault("decision_confidence_sum", 0.0)
             req_stats.setdefault("layer3_promoted_ok_count", 0)
@@ -2098,6 +2464,11 @@ class ConsistencyEngineImpl:
                 mappings=extraction_mappings,
                 gateway=gateway,
             )
+            snippet_corroboration_pipeline = ExtractionPipeline(
+                profile={"mode": "rule_only", "allow_generic_narrative_affiliation": True},
+                mappings=extraction_mappings,
+                gateway=None,
+            )
             if req_stats is not None:
                 req_stats["extractor_profile"] = extractor_pipeline.profile["mode"]
                 req_stats["extractor_version"] = extractor_pipeline.version
@@ -2142,6 +2513,9 @@ class ConsistencyEngineImpl:
             )
             retrieval_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
             slot_compare_cache: dict[tuple[str, str, str], Verdict | None] = {}
+            snippet_slot_cache: dict[tuple[str, int, int], dict[str, object]] = {}
+            snippet_slot_cache_metrics = {"hit_count": 0, "miss_count": 0}
+            anchor_rescue_metrics = {"attempt_count": 0, "ok_count": 0}
             user_tag_span_cache: dict[tuple[str, str], list[tuple[int, int]]] = {}
             approved_evidence_span_cache: dict[tuple[str, str], list[tuple[int, int]]] = {}
 
@@ -2152,6 +2526,12 @@ class ConsistencyEngineImpl:
                 claim_start = int(claim["claim_start"])
                 claim_end = int(claim["claim_end"])
                 slots = dict(claim.get("slots") or {})
+                primary_slot_key = str(claim.get("slot_key") or "")
+                claim_self_evidence_scope = _claim_self_evidence_scope(
+                    self_evidence_scope,
+                    segment_text=segment_text,
+                    slots=slots,
+                )
                 slot_confidence = float(claim.get("slot_confidence", 0.0) or 0.0)
                 if req_stats is not None:
                     req_stats["claims_processed"] = int(req_stats.get("claims_processed", 0)) + 1
@@ -2312,7 +2692,7 @@ class ConsistencyEngineImpl:
                     candidate_results, filtered_count = _filter_self_evidence_results(
                         candidate_results,
                         input_doc_id=doc_id,
-                        scope=self_evidence_scope,
+                        scope=claim_self_evidence_scope,
                         claim_abs_start=claim_abs_start,
                         claim_abs_end=claim_abs_end,
                         range_start=range_start,
@@ -2322,6 +2702,26 @@ class ConsistencyEngineImpl:
                         req_stats["self_evidence_filtered_count"] = int(
                             req_stats.get("self_evidence_filtered_count", 0)
                         ) + filtered_count
+                candidate_results, anchor_filtered_count = _filter_results_without_slot_anchor(
+                    candidate_results,
+                    slots=slots,
+                    pipeline=snippet_corroboration_pipeline,
+                    comparison_cache=slot_compare_cache,
+                    extracted_slots_cache=snippet_slot_cache,
+                    cache_metrics=snippet_slot_cache_metrics,
+                    rescue_metrics=anchor_rescue_metrics,
+                )
+                if req_stats is not None and anchor_filtered_count > 0:
+                    req_stats["retrieval_anchor_filtered_count"] = int(
+                        req_stats.get("retrieval_anchor_filtered_count", 0)
+                    ) + anchor_filtered_count
+                    if primary_slot_key:
+                        _increment_stat_counter(
+                            req_stats,
+                            "anchor_filtered_slot_counts",
+                            primary_slot_key,
+                            anchor_filtered_count,
+                        )
                 rejected_overlap_count = _promote_confirmed_evidence(
                     conn,
                     project_id=project_id,
@@ -2436,6 +2836,27 @@ class ConsistencyEngineImpl:
                         verdict = Verdict.UNKNOWN
                         unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
 
+                    snippet_corroborated = False
+                    if (
+                        verdict is Verdict.UNKNOWN
+                        and not fact_links
+                        and not ambiguous
+                        and not judge_meta.get("entity_unresolved")
+                        and not judge_meta.get("numeric_conflict")
+                        and current_results
+                    ):
+                        snippet_corroborated, _snippet_meta = _judge_with_snippet_corroboration(
+                            slots,
+                            current_results,
+                            pipeline=snippet_corroboration_pipeline,
+                            comparison_cache=slot_compare_cache,
+                            extracted_slots_cache=snippet_slot_cache,
+                            cache_metrics=snippet_slot_cache_metrics,
+                        )
+                        if snippet_corroborated:
+                            verdict = Verdict.OK
+                            unknown_reasons.clear()
+
                     fts_strength = _base_retrieval_score(current_results[0]) if current_results else 0.0
                     promotion_fts_strength = fts_strength
                     model_score = (
@@ -2497,7 +2918,7 @@ class ConsistencyEngineImpl:
                         promoted = True
 
                     if verdict is Verdict.UNKNOWN and not unknown_reasons:
-                        if current_results:
+                        if fact_links:
                             unknown_reasons.add(_UNKNOWN_REASON_CONFLICTING_EVIDENCE)
                         else:
                             unknown_reasons.add(_UNKNOWN_REASON_NO_EVIDENCE)
@@ -2515,6 +2936,7 @@ class ConsistencyEngineImpl:
                         "contradict_score": contradict_score,
                         "confirmed_evidence_count": confirmed_evidence_count,
                         "promoted": promoted,
+                        "snippet_corroborated": snippet_corroborated,
                     }
 
                 _accumulate_metrics(retrieval_stats, rerank_meta)
@@ -2663,7 +3085,7 @@ class ConsistencyEngineImpl:
                             candidate_results, filtered_count = _filter_self_evidence_results(
                                 candidate_results,
                                 input_doc_id=doc_id,
-                                scope=self_evidence_scope,
+                                scope=claim_self_evidence_scope,
                                 claim_abs_start=claim_abs_start,
                                 claim_abs_end=claim_abs_end,
                                 range_start=range_start,
@@ -2673,6 +3095,21 @@ class ConsistencyEngineImpl:
                                 req_stats["self_evidence_filtered_count"] = int(
                                     req_stats.get("self_evidence_filtered_count", 0)
                                 ) + filtered_count
+                        candidate_results, anchor_filtered_count = _filter_results_without_slot_anchor(
+                            candidate_results,
+                            slots=slots,
+                        )
+                        if req_stats is not None and anchor_filtered_count > 0:
+                            req_stats["retrieval_anchor_filtered_count"] = int(
+                                req_stats.get("retrieval_anchor_filtered_count", 0)
+                            ) + anchor_filtered_count
+                            if primary_slot_key:
+                                _increment_stat_counter(
+                                    req_stats,
+                                    "anchor_filtered_slot_counts",
+                                    primary_slot_key,
+                                    anchor_filtered_count,
+                                )
                         rejected_overlap_count = _promote_confirmed_evidence(
                             conn,
                             project_id=project_id,
@@ -2733,6 +3170,8 @@ class ConsistencyEngineImpl:
                 confirmed_evidence_count = int(evaluation["confirmed_evidence_count"])
                 if bool(evaluation["promoted"]) and req_stats is not None:
                     req_stats["layer3_promoted_ok_count"] = int(req_stats.get("layer3_promoted_ok_count", 0)) + 1
+                if bool(evaluation["snippet_corroborated"]) and req_stats is not None:
+                    req_stats["snippet_corroborated_count"] = int(req_stats.get("snippet_corroborated_count", 0)) + 1
                 if req_stats is not None and _UNKNOWN_REASON_ENTITY_UNRESOLVED in unknown_reasons:
                     req_stats["entity_unresolved_skip_count"] = int(
                         req_stats.get("entity_unresolved_skip_count", 0)
@@ -2741,6 +3180,10 @@ class ConsistencyEngineImpl:
                     req_stats["numeric_conflict_unknown_count"] = int(
                         req_stats.get("numeric_conflict_unknown_count", 0)
                     ) + 1
+                if req_stats is not None and verdict is Verdict.UNKNOWN and primary_slot_key:
+                    _increment_stat_counter(req_stats, "unknown_slot_counts", primary_slot_key)
+                    if _UNKNOWN_REASON_NO_EVIDENCE in unknown_reasons:
+                        _increment_stat_counter(req_stats, "no_evidence_slot_counts", primary_slot_key)
                 _add_unknown_reasons(req_stats, unknown_reasons)
 
                 evidences = []
@@ -2810,6 +3253,11 @@ class ConsistencyEngineImpl:
                 )
                 evidence_repo.create_verdict_links(conn, links, commit=False)
                 verdicts.append(verdict_log)
+            if req_stats is not None:
+                req_stats["snippet_slot_cache_hit_count"] = int(snippet_slot_cache_metrics.get("hit_count", 0))
+                req_stats["snippet_slot_cache_miss_count"] = int(snippet_slot_cache_metrics.get("miss_count", 0))
+                req_stats["anchor_rescue_attempt_count"] = int(anchor_rescue_metrics.get("attempt_count", 0))
+                req_stats["anchor_rescue_ok_count"] = int(anchor_rescue_metrics.get("ok_count", 0))
             conn.commit()
 
         return verdicts
