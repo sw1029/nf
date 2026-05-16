@@ -600,6 +600,14 @@ _GRAPH_ENTITY_ALIAS_RE = re.compile(
     r"[가-힣]{2,5}\s*(?:님|군|씨|공|왕|황제|대공|공작|후작|백작|영애|아가씨|공주|황녀|전하|폐하)"
 )
 _GRAPH_QUERY_SAMPLE_LIMIT = 8
+_GRAPH_STAGE_TIMING_KEYS = (
+    "graph_load_ms",
+    "graph_build_ms",
+    "graph_seed_scan_ms",
+    "graph_expand_ms",
+    "graph_sort_ms",
+    "graph_rerank_ms",
+)
 _CONSISTENCY_SLOT_DIAGNOSTIC_KEYS = (
     "claim_slot_counts",
     "anchor_filtered_slot_counts",
@@ -803,6 +811,10 @@ def _extract_index_fts_graph_runtime(events: list[tuple[int, dict[str, Any]]]) -
             "entity_mentions_created": _as_int(payload.get("entity_mentions_created"), 0),
             "time_anchors_created": _as_int(payload.get("time_anchors_created"), 0),
             "timeline_events_created": _as_int(payload.get("timeline_events_created"), 0),
+            "kg_build_id": payload.get("kg_build_id"),
+            "kg_source_health": dict(payload.get("kg_source_health")) if isinstance(payload.get("kg_source_health"), dict) else {},
+            "kg_node_counts": dict(payload.get("kg_node_counts")) if isinstance(payload.get("kg_node_counts"), dict) else {},
+            "kg_edge_counts": dict(payload.get("kg_edge_counts")) if isinstance(payload.get("kg_edge_counts"), dict) else {},
             "graph_index": dict(graph_index) if isinstance(graph_index, dict) else {},
             "graph": dict(graph_info) if isinstance(graph_info, dict) else {},
         }
@@ -811,6 +823,10 @@ def _extract_index_fts_graph_runtime(events: list[tuple[int, dict[str, Any]]]) -
         "entity_mentions_created": 0,
         "time_anchors_created": 0,
         "timeline_events_created": 0,
+        "kg_build_id": None,
+        "kg_source_health": {},
+        "kg_node_counts": {},
+        "kg_edge_counts": {},
         "graph_index": {},
         "graph": {},
     }
@@ -976,6 +992,16 @@ def _new_consistency_runtime(*, graph_mode: str) -> dict[str, Any]:
         "graph_expand_applied_count": 0,
         "graph_auto_trigger_count": 0,
         "graph_auto_skip_count": 0,
+        "kg_build_id": None,
+        "kg_source_health_snapshot": {},
+        "graph_auto_skip_reason_counts": {},
+        "graph_expand_seed_source_counts": {},
+        "graph_expand_slot_counts": {},
+        "graph_refill_gain_total": 0,
+        "graph_refill_gain_samples": [],
+        "graph_verdict_influence_counts": {},
+        "graph_edge_type_counts": {},
+        "kg_sparse_reason_counts": {},
         "layer3_rerank_applied_count": 0,
         "layer3_model_fallback_count": 0,
         "layer3_model_enabled_jobs": 0,
@@ -1097,6 +1123,31 @@ def _accumulate_consistency_runtime(runtime: dict[str, Any], payload: dict[str, 
     runtime["graph_auto_skip_count"] = _as_int(runtime.get("graph_auto_skip_count"), 0) + _as_int(
         payload.get("graph_auto_skip_count")
     )
+    if isinstance(payload.get("kg_build_id"), str) and payload.get("kg_build_id"):
+        runtime["kg_build_id"] = payload.get("kg_build_id")
+    if isinstance(payload.get("kg_source_health_snapshot"), dict):
+        runtime["kg_source_health_snapshot"] = dict(payload.get("kg_source_health_snapshot") or {})
+    for runtime_key, payload_key in (
+        ("graph_auto_skip_reason_counts", "graph_auto_skip_reason_counts"),
+        ("graph_expand_seed_source_counts", "graph_expand_seed_source_counts"),
+        ("graph_expand_slot_counts", "graph_expand_slot_counts"),
+        ("graph_verdict_influence_counts", "graph_verdict_influence_counts"),
+        ("graph_edge_type_counts", "graph_edge_type_counts"),
+        ("kg_sparse_reason_counts", "kg_sparse_reason_counts"),
+    ):
+        bucket = runtime.get(runtime_key)
+        if not isinstance(bucket, dict):
+            bucket = {}
+            runtime[runtime_key] = bucket
+        _accumulate_unknown_reason_counts(bucket, payload.get(payload_key))
+    runtime["graph_refill_gain_total"] = _as_int(runtime.get("graph_refill_gain_total"), 0) + _as_int(
+        payload.get("graph_refill_gain_total")
+    )
+    refill_samples = runtime.get("graph_refill_gain_samples")
+    if not isinstance(refill_samples, list):
+        refill_samples = []
+        runtime["graph_refill_gain_samples"] = refill_samples
+    _accumulate_numeric_samples(refill_samples, payload.get("graph_refill_gain_samples"))
     runtime["layer3_rerank_applied_count"] = _as_int(runtime.get("layer3_rerank_applied_count"), 0) + _as_int(
         payload.get("layer3_rerank_applied_count")
     )
@@ -1295,6 +1346,25 @@ def _finalize_consistency_runtime(runtime: dict[str, Any]) -> dict[str, Any]:
         else 0.0
     )
     jobs_with_claims_total = max(0, _as_int(runtime_out.get("jobs_with_claims_total"), 0))
+    graph_auto_total = max(
+        0,
+        _as_int(runtime_out.get("graph_auto_trigger_count"), 0)
+        + _as_int(runtime_out.get("graph_auto_skip_count"), 0),
+    )
+    graph_refill_samples = runtime_out.get("graph_refill_gain_samples")
+    if not isinstance(graph_refill_samples, list):
+        graph_refill_samples = []
+    runtime_out["consistency_graph_expand_apply_rate"] = (
+        float(_as_int(runtime_out.get("graph_expand_applied_count"), 0)) / float(graph_auto_total)
+        if graph_auto_total > 0
+        else 0.0
+    )
+    runtime_out["graph_refill_gain_avg"] = (
+        sum(_as_float(item, 0.0) for item in graph_refill_samples) / float(len(graph_refill_samples))
+        if graph_refill_samples
+        else 0.0
+    )
+    runtime_out["kg_ready"] = bool(runtime_out.get("kg_build_id"))
     runtime_out["slot_diagnostics_missing_with_claims_rate"] = (
         float(_as_int(runtime_out.get("slot_diagnostics_missing_with_claims_jobs"), 0)) / float(jobs_with_claims_total)
         if jobs_with_claims_total > 0
@@ -1368,6 +1438,10 @@ def _new_graph_runtime(*, index_runtime: dict[str, Any] | None = None) -> dict[s
         "skipped_queries_sample": [],
         "skipped_reason_counts": {},
         "seed_signal_type_counts": {},
+        "stage_ms_sum": {key: 0.0 for key in _GRAPH_STAGE_TIMING_KEYS},
+        "stage_ms_max": {key: 0.0 for key in _GRAPH_STAGE_TIMING_KEYS},
+        "payload_doc_count_total": 0,
+        "payload_doc_count_max": 0,
     }
 
 
@@ -1394,11 +1468,15 @@ def _append_graph_query_sample(
         "reason": str(graph_payload.get("reason") or ""),
         "seed_doc_count": _as_int(graph_payload.get("seed_doc_count"), 0),
         "expanded_doc_count": _as_int(graph_payload.get("expanded_doc_count"), 0),
+        "expanded_doc_sample_count": _as_int(graph_payload.get("expanded_doc_sample_count"), 0),
+        "graph_payload_doc_count": _as_int(graph_payload.get("graph_payload_doc_count"), 0),
         "boosted_result_count": _as_int(
             graph_payload.get("boosted_result_count", graph_payload.get("boosted_results")),
             0,
         ),
     }
+    for key in _GRAPH_STAGE_TIMING_KEYS:
+        sample[key] = round(_as_float(graph_payload.get(key), 0.0), 3)
     target.append(sample)
 
 
@@ -1409,6 +1487,21 @@ def _accumulate_graph_runtime(
     graph_payload: dict[str, Any],
 ) -> None:
     runtime["sampled_jobs"] = _as_int(runtime.get("sampled_jobs"), 0) + 1
+    stage_sum = runtime.get("stage_ms_sum")
+    if not isinstance(stage_sum, dict):
+        stage_sum = {key: 0.0 for key in _GRAPH_STAGE_TIMING_KEYS}
+        runtime["stage_ms_sum"] = stage_sum
+    stage_max = runtime.get("stage_ms_max")
+    if not isinstance(stage_max, dict):
+        stage_max = {key: 0.0 for key in _GRAPH_STAGE_TIMING_KEYS}
+        runtime["stage_ms_max"] = stage_max
+    for key in _GRAPH_STAGE_TIMING_KEYS:
+        value = _as_float(graph_payload.get(key), 0.0)
+        stage_sum[key] = float(stage_sum.get(key, 0.0)) + value
+        stage_max[key] = max(float(stage_max.get(key, 0.0)), value)
+    payload_doc_count = _as_int(graph_payload.get("graph_payload_doc_count"), 0)
+    runtime["payload_doc_count_total"] = _as_int(runtime.get("payload_doc_count_total"), 0) + payload_doc_count
+    runtime["payload_doc_count_max"] = max(_as_int(runtime.get("payload_doc_count_max"), 0), payload_doc_count)
     signal_type_counts = runtime.get("seed_signal_type_counts")
     if not isinstance(signal_type_counts, dict):
         signal_type_counts = {}
@@ -1795,6 +1888,10 @@ def _top_level_output_fields(run: BenchRunResult) -> dict[str, Any]:
             "skipped_queries_sample": list((graph.get("skipped_queries_sample") or [])) if isinstance(graph, dict) else [],
             "skipped_reason_counts": dict((graph.get("skipped_reason_counts") or {})) if isinstance(graph, dict) else {},
             "seed_signal_type_counts": dict((graph.get("seed_signal_type_counts") or {})) if isinstance(graph, dict) else {},
+            "stage_ms_sum": dict((graph.get("stage_ms_sum") or {})) if isinstance(graph, dict) else {},
+            "stage_ms_max": dict((graph.get("stage_ms_max") or {})) if isinstance(graph, dict) else {},
+            "payload_doc_count_total": int((graph.get("payload_doc_count_total") or 0)) if isinstance(graph, dict) else 0,
+            "payload_doc_count_max": int((graph.get("payload_doc_count_max") or 0)) if isinstance(graph, dict) else 0,
         },
         "consistency_runtime": dict(consistency_runtime) if isinstance(consistency_runtime, dict) else {},
     }

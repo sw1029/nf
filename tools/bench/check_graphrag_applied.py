@@ -104,6 +104,70 @@ def _collect_grouping_counts(db_path: Path, project_id: str) -> dict[str, int]:
         conn.close()
 
 
+def _collect_kg_readiness(db_path: Path, project_id: str) -> dict[str, Any]:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        try:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM kg_build
+                WHERE project_id = ? AND status = 'SUCCEEDED'
+                ORDER BY built_at DESC
+                LIMIT 1
+                """,
+                (project_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return {
+                "kg_ready": False,
+                "kg_build_id": None,
+                "kg_status": "UNAVAILABLE",
+                "kg_source_health": {},
+                "kg_node_counts": {},
+                "kg_edge_counts": {},
+                "reason": "kg_tables_missing",
+            }
+        if row is None:
+            return {
+                "kg_ready": False,
+                "kg_build_id": None,
+                "kg_status": "MISSING",
+                "kg_source_health": {},
+                "kg_node_counts": {},
+                "kg_edge_counts": {},
+                "reason": "kg_build_missing",
+            }
+        try:
+            source_health = json.loads(row["source_health_json"] or "{}")
+        except json.JSONDecodeError:
+            source_health = {}
+        try:
+            stats = json.loads(row["stats_json"] or "{}")
+        except json.JSONDecodeError:
+            stats = {}
+        node_counts = stats.get("node_counts") if isinstance(stats, dict) else {}
+        edge_counts = stats.get("edge_counts") if isinstance(stats, dict) else {}
+        if not isinstance(node_counts, dict):
+            node_counts = {}
+        if not isinstance(edge_counts, dict):
+            edge_counts = {}
+        node_total = sum(int(value or 0) for value in node_counts.values() if isinstance(value, (int, float)))
+        kg_ready = str(row["status"]) == "SUCCEEDED" and node_total > 0
+        return {
+            "kg_ready": bool(kg_ready),
+            "kg_build_id": row["build_id"],
+            "kg_status": row["status"],
+            "kg_source_health": source_health if isinstance(source_health, dict) else {},
+            "kg_node_counts": dict(node_counts),
+            "kg_edge_counts": dict(edge_counts),
+            "reason": "ready" if kg_ready else "kg_empty",
+        }
+    finally:
+        conn.close()
+
+
 def _load_project_id_from_artifact(path: Path) -> str:
     payload = json.loads(path.read_text(encoding="utf-8"))
     project_id = payload.get("project_id")
@@ -238,11 +302,23 @@ def _summarize_probe_context(
     probe_count: int,
     applied_count: int,
     require_applied: bool,
+    kg_readiness: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     bootstrap_used = bootstrap is not None
     bootstrap_status = str((bootstrap or {}).get("status") or "")
     bootstrap_succeeded = bootstrap_status == "SUCCEEDED"
     normal_path_ready = initial_filters_count > 0
+    filter_ready = final_filters_count > 0
+    kg_ready = bool((kg_readiness or {}).get("kg_ready"))
+    retrieval_ready = bool(filter_ready and kg_ready)
+    if retrieval_ready:
+        retrieval_readiness_reason = "ready"
+    elif not filter_ready:
+        retrieval_readiness_reason = "no_filters"
+    elif not kg_ready:
+        retrieval_readiness_reason = str((kg_readiness or {}).get("reason") or "kg_unavailable")
+    else:
+        retrieval_readiness_reason = "unknown"
     if normal_path_ready:
         validation_mode = "normal_path"
     elif bootstrap_used and bootstrap_succeeded and final_filters_count > 0:
@@ -256,6 +332,10 @@ def _summarize_probe_context(
         "normal_path_filter_count": int(initial_filters_count),
         "final_filter_count": int(final_filters_count),
         "normal_path_ready": bool(normal_path_ready),
+        "filter_ready": bool(filter_ready),
+        "kg_ready": bool(kg_ready),
+        "retrieval_ready": bool(retrieval_ready),
+        "retrieval_readiness_reason": retrieval_readiness_reason,
         "bootstrap_used": bool(bootstrap_used),
         "bootstrap_status": bootstrap_status,
         "bootstrap_succeeded": bool(bootstrap_succeeded),
@@ -419,7 +499,9 @@ def main() -> int:
     filters_list = _discover_filters(db_path, project_id, max_filters=args.max_probes)
     initial_filters_count = len(filters_list)
     initial_counts = _collect_grouping_counts(db_path, project_id)
+    initial_kg_readiness = _collect_kg_readiness(db_path, project_id)
     final_counts = dict(initial_counts)
+    final_kg_readiness = dict(initial_kg_readiness)
     if not filters_list and args.bootstrap_grouping_if_empty:
         try:
             bootstrap = _bootstrap_grouping(client=ApiClient(args.base_url), project_id=project_id)
@@ -432,6 +514,7 @@ def main() -> int:
                 db_path=db_path,
             )
         final_counts = _collect_grouping_counts(db_path, project_id)
+        final_kg_readiness = _collect_kg_readiness(db_path, project_id)
         filters_list = _discover_filters(db_path, project_id, max_filters=args.max_probes)
     if not filters_list:
         summary = _summarize_probe_context(
@@ -441,6 +524,7 @@ def main() -> int:
             probe_count=0,
             applied_count=0,
             require_applied=bool(args.require_applied),
+            kg_readiness=final_kg_readiness,
         )
         result = {
             "ok": False,
@@ -448,6 +532,7 @@ def main() -> int:
             "reason": "no_filters_discovered",
             "bootstrap": bootstrap,
             "counts": {"before": initial_counts, "after": final_counts},
+            "kg": {"before": initial_kg_readiness, "after": final_kg_readiness},
             "probes": [],
             "summary": summary,
         }
@@ -535,6 +620,7 @@ def main() -> int:
         probe_count=len(probes),
         applied_count=applied_count,
         require_applied=bool(args.require_applied),
+        kg_readiness=final_kg_readiness,
     )
     result = {
         "ok": applied_count > 0,
@@ -544,6 +630,7 @@ def main() -> int:
         "project_id": project_id,
         "bootstrap": bootstrap,
         "counts": {"before": initial_counts, "after": final_counts},
+        "kg": {"before": initial_kg_readiness, "after": final_kg_readiness},
         "summary": summary,
         "probes": probes,
     }
@@ -557,12 +644,18 @@ def main() -> int:
         f"- require_applied: `{bool(args.require_applied)}`",
         f"- validation_mode: `{summary['validation_mode']}`",
         f"- normal_path_ready: `{summary['normal_path_ready']}`",
+        f"- filter_ready: `{summary['filter_ready']}`",
+        f"- kg_ready: `{summary['kg_ready']}`",
+        f"- retrieval_ready: `{summary['retrieval_ready']}`",
+        f"- retrieval_readiness_reason: `{summary['retrieval_readiness_reason']}`",
         f"- normal_path_filter_count: `{summary['normal_path_filter_count']}`",
         f"- final_filter_count: `{summary['final_filter_count']}`",
         f"- bootstrap_used: `{summary['bootstrap_used']}`",
         f"- bootstrap_status: `{summary['bootstrap_status']}`",
         f"- counts(before): `{initial_counts}`",
         f"- counts(after): `{final_counts}`",
+        f"- kg(before): `{initial_kg_readiness}`",
+        f"- kg(after): `{final_kg_readiness}`",
         f"- bootstrap: `{bootstrap}`",
         f"- result: `{'PASS' if applied_count > 0 else 'FAIL'}`",
         "",

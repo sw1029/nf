@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib
 import sys
@@ -291,6 +291,54 @@ def test_pipeline_report_surfaces_slot_diagnostic_schema_status() -> None:
     assert "pipeline_slot_diagnostics_schema_status: `MIXED`" in rendered
     assert "pipeline_slot_diagnostics_missing_jobs: `40`" in rendered
     assert "pipeline_slot_diagnostics_missing_with_claims_jobs: `6`" in rendered
+
+
+@pytest.mark.unit
+def test_pipeline_report_distinguishes_kg_readiness_and_graph_effectiveness() -> None:
+    mod = _import_module()
+    payload = {
+        "doc_count": 200,
+        "status": {
+            "index_fts": "SUCCEEDED",
+            "index_vec": "SUCCEEDED",
+            "ingest_failures": 0,
+            "consistency_failures": 0,
+            "retrieve_vec_failures": 0,
+        },
+        "timings_ms": {
+            "index_fts": 10.0,
+            "index_vec": 20.0,
+            "consistency_p95": 1200.0,
+            "retrieval_fts_p95": 40.0,
+        },
+        "graph": {"enabled": True},
+        "graph_index_runtime": {
+            "kg_build_id": "kg-1",
+            "kg_source_health": {"timeline_available": False, "timeline_doc_id": None},
+        },
+        "graph_runtime": {"sampled_jobs": 3, "applied_count": 1},
+        "consistency_runtime": {
+            "graph_mode": "auto",
+            "graph_expand_applied_count": 1,
+            "graph_auto_trigger_count": 1,
+            "graph_auto_skip_count": 9,
+            "graph_refill_gain_total": 2,
+            "violate_count_total": 0,
+        },
+    }
+
+    execution_ok, goal_ok, lines = mod._pipeline_report(payload)
+    rendered = "\n".join(lines)
+
+    assert execution_ok is True
+    assert goal_ok is True
+    assert "pipeline_graph_kg_ready: `PASS`" in rendered
+    assert "pipeline_graph_kg_build_id: `kg-1`" in rendered
+    assert "pipeline_graph_timeline_available: `False`" in rendered
+    assert "pipeline_graph_retrieval_applied_count: `1`" in rendered
+    assert "pipeline_graph_consistency_effective: `PASS`" in rendered
+    assert "graph_kg_ready_when_enabled: `PASS`" in rendered
+    assert "graph_timeline_health_reported_when_enabled: `PASS`" in rendered
 
 
 @pytest.mark.unit

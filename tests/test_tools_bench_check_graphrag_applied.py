@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib
 import sys
@@ -68,3 +68,35 @@ def test_probe_summary_marks_no_grouping_when_bootstrap_does_not_produce_filters
     assert summary["validation_mode"] == "no_grouping"
     assert summary["normal_path_ready"] is False
     assert summary["bootstrap_used"] is True
+
+
+@pytest.mark.unit
+def test_probe_summary_reports_retrieval_readiness_from_filters_and_kg() -> None:
+    mod = _import_module()
+    ready = mod._summarize_probe_context(
+        initial_filters_count=1,
+        final_filters_count=1,
+        bootstrap=None,
+        probe_count=1,
+        applied_count=1,
+        require_applied=True,
+        kg_readiness={"kg_ready": True, "reason": "ready"},
+    )
+    missing_kg = mod._summarize_probe_context(
+        initial_filters_count=1,
+        final_filters_count=1,
+        bootstrap=None,
+        probe_count=1,
+        applied_count=0,
+        require_applied=False,
+        kg_readiness={"kg_ready": False, "reason": "kg_build_missing"},
+    )
+
+    assert ready["filter_ready"] is True
+    assert ready["kg_ready"] is True
+    assert ready["retrieval_ready"] is True
+    assert ready["retrieval_readiness_reason"] == "ready"
+    assert missing_kg["filter_ready"] is True
+    assert missing_kg["kg_ready"] is False
+    assert missing_kg["retrieval_ready"] is False
+    assert missing_kg["retrieval_readiness_reason"] == "kg_build_missing"

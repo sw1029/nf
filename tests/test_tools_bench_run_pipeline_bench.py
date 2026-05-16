@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib
 import json
@@ -569,6 +569,11 @@ def test_graph_runtime_tracks_samples_skip_reasons_and_signal_counts() -> None:
             "applied": True,
             "seed_doc_count": 2,
             "expanded_doc_count": 4,
+            "expanded_doc_sample_count": 4,
+            "graph_seed_scan_ms": 1.25,
+            "graph_expand_ms": 2.5,
+            "graph_sort_ms": 0.5,
+            "graph_payload_doc_count": 4,
             "boosted_result_count": 3,
         },
     )
@@ -585,6 +590,8 @@ def test_graph_runtime_tracks_samples_skip_reasons_and_signal_counts() -> None:
             "reason": "no_seeds",
             "seed_doc_count": 0,
             "expanded_doc_count": 0,
+            "graph_seed_scan_ms": 0.75,
+            "graph_payload_doc_count": 0,
             "boosted_result_count": 0,
         },
     )
@@ -596,7 +603,13 @@ def test_graph_runtime_tracks_samples_skip_reasons_and_signal_counts() -> None:
     assert int(runtime["seed_signal_type_counts"]["entity_alias"]) == 1
     assert int(runtime["seed_signal_type_counts"]["timeline_signal"]) == 1
     assert int(runtime["seed_signal_type_counts"]["time_anchor"]) == 1
+    assert runtime["stage_ms_sum"]["graph_seed_scan_ms"] == pytest.approx(2.0)
+    assert runtime["stage_ms_max"]["graph_expand_ms"] == pytest.approx(2.5)
+    assert int(runtime["payload_doc_count_total"]) == 4
+    assert int(runtime["payload_doc_count_max"]) == 4
     assert runtime["applied_queries_sample"][0]["applied"] is True
+    assert runtime["applied_queries_sample"][0]["graph_seed_scan_ms"] == pytest.approx(1.25)
+    assert runtime["applied_queries_sample"][0]["graph_payload_doc_count"] == 4
     assert runtime["skipped_queries_sample"][0]["reason"] == "no_seeds"
 
 
@@ -682,6 +695,10 @@ def test_top_level_output_fields_expose_semantic_and_guard_paths() -> None:
                 "skipped_queries_sample": [{"query": "sample skipped"}],
                 "skipped_reason_counts": {"no_seeds": 2},
                 "seed_signal_type_counts": {"time_anchor": 3},
+                "stage_ms_sum": {"graph_seed_scan_ms": 12.5},
+                "stage_ms_max": {"graph_seed_scan_ms": 4.5},
+                "payload_doc_count_total": 9,
+                "payload_doc_count_max": 5,
             },
             "consistency_runtime": {"unknown_rate": 0.25},
         },
@@ -701,6 +718,10 @@ def test_top_level_output_fields_expose_semantic_and_guard_paths() -> None:
     assert output_fields["graph_runtime"]["applied_queries_sample"][0]["query"] == "sample applied"
     assert int(output_fields["graph_runtime"]["skipped_reason_counts"]["no_seeds"]) == 2
     assert int(output_fields["graph_runtime"]["seed_signal_type_counts"]["time_anchor"]) == 3
+    assert output_fields["graph_runtime"]["stage_ms_sum"]["graph_seed_scan_ms"] == pytest.approx(12.5)
+    assert output_fields["graph_runtime"]["stage_ms_max"]["graph_seed_scan_ms"] == pytest.approx(4.5)
+    assert int(output_fields["graph_runtime"]["payload_doc_count_total"]) == 9
+    assert int(output_fields["graph_runtime"]["payload_doc_count_max"]) == 5
     assert output_fields["consistency_runtime"]["unknown_rate"] == pytest.approx(0.25)
 
 

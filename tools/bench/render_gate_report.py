@@ -272,6 +272,26 @@ def _pipeline_report(
     graph_auto_skip_count = _as_int(consistency_runtime.get("graph_auto_skip_count"), 0)
     auto_total = graph_auto_trigger_count + graph_auto_skip_count
     auto_apply_rate = _safe_ratio(float(graph_auto_trigger_count), float(auto_total))
+    graph_payload = payload.get("graph") if isinstance(payload.get("graph"), dict) else {}
+    graph_runtime = payload.get("graph_runtime") if isinstance(payload.get("graph_runtime"), dict) else {}
+    graph_index_runtime = payload.get("graph_index_runtime")
+    if not isinstance(graph_index_runtime, dict):
+        graph_index_runtime = graph_payload.get("index_runtime") if isinstance(graph_payload, dict) else {}
+    if not isinstance(graph_index_runtime, dict):
+        graph_index_runtime = {}
+    graph_enabled = bool(graph_payload.get("enabled"))
+    kg_source_health = graph_index_runtime.get("kg_source_health")
+    if not isinstance(kg_source_health, dict):
+        kg_source_health = consistency_runtime.get("kg_source_health_snapshot")
+    if not isinstance(kg_source_health, dict):
+        kg_source_health = {}
+    kg_build_id = graph_index_runtime.get("kg_build_id") or consistency_runtime.get("kg_build_id")
+    kg_ready = bool(kg_build_id)
+    timeline_health_reported = "timeline_available" in kg_source_health
+    retrieval_graph_sampled = _as_int(graph_runtime.get("sampled_jobs"), 0) > 0
+    retrieval_graph_applied_count = _as_int(graph_runtime.get("applied_count"), 0)
+    graph_refill_gain_total = _as_int(consistency_runtime.get("graph_refill_gain_total"), 0)
+    consistency_graph_effective = graph_expand_applied_count > 0 or graph_refill_gain_total > 0
     corroboration = _extract_corroboration_summary(payload)
     runtime_summary = _extract_consistency_runtime_summary(payload)
     actionability = _build_actionability_summary(payload, pipeline_shadow)
@@ -287,6 +307,8 @@ def _pipeline_report(
         "retrieval_fts_p95_regression_le_10pct": retrieval_regressed_ok,
         "graph_off_applied_zero": graph_mode != "off" or graph_expand_applied_count == 0,
         "graph_auto_apply_rate_le_30pct": graph_mode != "auto" or auto_apply_rate <= 0.30,
+        "graph_kg_ready_when_enabled": not graph_enabled or kg_ready,
+        "graph_timeline_health_reported_when_enabled": not graph_enabled or timeline_health_reported,
     }
     goal_achieved = all(goal_checks.values())
 
@@ -302,6 +324,14 @@ def _pipeline_report(
         f"- pipeline_graph: `{payload.get('graph')}`",
         f"- pipeline_graph_runtime: `{payload.get('graph_runtime')}`",
         f"- pipeline_consistency_runtime: `{consistency_runtime}`",
+        f"- pipeline_graph_kg_ready: `{_render_bool(kg_ready)}`",
+        f"- pipeline_graph_kg_build_id: `{kg_build_id}`",
+        f"- pipeline_graph_timeline_available: `{kg_source_health.get('timeline_available')}`",
+        f"- pipeline_graph_retrieval_sampled: `{_render_bool(retrieval_graph_sampled)}`",
+        f"- pipeline_graph_retrieval_applied_count: `{retrieval_graph_applied_count}`",
+        f"- pipeline_graph_consistency_effective: `{_render_bool(consistency_graph_effective)}`",
+        f"- pipeline_graph_refill_gain_total: `{graph_refill_gain_total}`",
+        f"- pipeline_graph_quality_violate_count_total: `{_as_int(consistency_runtime.get('violate_count_total'), 0)}`",
         f"- consistency_graph_mode: `{graph_mode}`",
         f"- consistency_graph_auto_apply_rate: `{auto_apply_rate:.4f}`",
         "- pipeline_actionability_secondary_only: `true`",
