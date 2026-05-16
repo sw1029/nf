@@ -131,7 +131,9 @@ def test_user_ui_wait_for_job_prefers_sse_and_falls_back_to_polling() -> None:
 @pytest.mark.unit
 def test_user_ui_assets_and_inline_handler_exports_exist() -> None:
     html = _user_ui_html_text()
+    state_js = Path("modules/nf_orchestrator/assets/user_ui.state.js").read_text(encoding="utf-8")
     assert '/assets/user_ui.styles.css' in html
+    assert "var state = {" in state_js
     for name in (
         "state",
         "api",
@@ -146,9 +148,16 @@ def test_user_ui_assets_and_inline_handler_exports_exist() -> None:
     bootstrap = Path("modules/nf_orchestrator/assets/user_ui.bootstrap.js").read_text(encoding="utf-8")
     for handler in (
         "window.closeExportModal",
+        "window.closeLeftSidebar",
+        "window.cancelDocDialog",
         "window.createNewDoc",
         "window.handleInput",
+        "window.handleTimelineDrop",
+        "window.handleTimelinePointerDown",
+        "window.moveTimelineDoc",
+        "window.moveTimelineDocToPosition",
         "window.runAssistantAction",
+        "window.submitDocDialog",
         "window.toggleJobsPanel",
     ):
         assert handler in bootstrap
@@ -203,6 +212,7 @@ def test_user_ui_load_doc_updates_status_and_page_guides() -> None:
     assert "loadMemosFromMetadata(loadedMeta.ui_memos || [])" in docs_tree
     assert "updateStatusBar()" in docs_tree
     assert "schedulePageGuideRender()" in docs_tree
+    assert 'if (typeof updateStatusBar === "function") updateStatusBar();' in editor
     assert "function renderPageGuides()" in editor
 
 
@@ -228,8 +238,11 @@ def test_user_ui_paged_editor_and_overlay_sidebar_contract() -> None:
     assert ".page-editor {" in css
     assert ".page-gap {" in css
     assert ".sidebar.right.is-open {" in css
+    assert ".sidebar.mobile-open {" in css
+    assert "z-index: 55;" in css
+    assert "z-index: 110;" in css
     assert "scrollbar-gutter: stable both-edges;" in css
-    assert "classList.toggle(\"is-open\")" in api
+    assert "classList.toggle(\"is-open\", open)" in api
     assert "layoutMemoSidebar()" in api
     assert "renderMemos()" in api
     assert "schedulePageGuideRender()" in api
@@ -246,11 +259,147 @@ def test_user_ui_sidebar_and_tab_handlers_use_explicit_event_and_open_close_cont
     assert "switchAssistTab(event, 'CHECK')" in html
     assert 'onclick="openRightSidebar()"' in html
     assert 'onclick="closeRightSidebar()"' in html
+    assert 'id="assistant-sidebar" aria-hidden="true" inert' in html
     assert "function switchNavTab(eventOrType, maybeType)" in docs_tree
     assert "function switchAssistTab(eventOrMode, maybeMode)" in assistant
+    assert "eventObj.payload && typeof eventObj.payload === \"object\"" in assistant
+    assert "function _setRightSidebarOpen(open)" in api
+    assert "sb.setAttribute(\"aria-hidden\", open ? \"false\" : \"true\")" in api
+    assert "sb.inert = !open;" in api
     assert "function openRightSidebar()" in api
     assert "function closeRightSidebar()" in api
     assert 'if (event.key !== "Escape") return;' in api
+
+
+@pytest.mark.unit
+def test_user_ui_mobile_doc_selection_closes_sidebar_and_caps_timeline_render() -> None:
+    docs_tree = Path("modules/nf_orchestrator/assets/user_ui.docs_tree.js").read_text(encoding="utf-8")
+    css = Path("modules/nf_orchestrator/assets/user_ui.styles.css").read_text(encoding="utf-8")
+    html = Path("modules/nf_orchestrator/user_ui.html").read_text(encoding="utf-8")
+    jobs = Path("modules/nf_orchestrator/assets/user_ui.jobs.js").read_text(encoding="utf-8")
+
+    assert "const TIMELINE_RENDER_LIMIT = 200;" in docs_tree
+    assert "displayDocs.slice(0, TIMELINE_RENDER_LIMIT)" in docs_tree
+    assert "timeline-overflow-note" in docs_tree
+    assert "function showDocDialog({" in docs_tree
+    assert "closeMobileLeftSidebarIfOpen();" in docs_tree
+    assert "function submitDocDialog(event)" in docs_tree
+    assert "function cancelDocDialog()" in docs_tree
+    assert "function hideCtxMenu()" in docs_tree
+    assert "e.target.closest?.(\".menu-btn\")" in docs_tree
+    assert "menu.dataset.owner = ownerKey;" in docs_tree
+    assert "const ownerKey = `doc:${docId}`;" in docs_tree
+    assert "const ownerKey = `group:${groupName}`;" in docs_tree
+    assert "menu.dataset.owner === ownerKey" in docs_tree
+    assert "getBoundingClientRect()" in docs_tree
+    assert "window.innerWidth - rect.width - 8" in docs_tree
+    assert "showCtxMenu(triggerRect.right + 6, triggerRect.top, options, ownerKey)" in docs_tree
+    assert "prompt(" not in docs_tree
+    assert "confirm(" not in docs_tree
+    assert "await showDocDialog({" in docs_tree
+    assert "title: \"새 챕터\"" in docs_tree
+    assert "title: \"이름 변경\"" in docs_tree
+    assert "title: \"챕터 이동\"" in docs_tree
+    assert "title: \"회차 번호 설정\"" in docs_tree
+    assert "title: \"챕터 이름 변경\"" in docs_tree
+    assert "title: \"문서 삭제\"" in docs_tree
+    assert "function closeMobileLeftSidebarIfOpen()" in docs_tree
+    assert "function setEditorDocumentActive(active)" in docs_tree
+    assert "main.classList.toggle(\"has-active-doc\", isActive)" in docs_tree
+    assert "toolbar.inert = !isActive;" in docs_tree
+    assert "toolbar.setAttribute(\"aria-hidden\", isActive ? \"false\" : \"true\")" in docs_tree
+    assert "setEditorDocumentActive(false);" in docs_tree
+    assert "setEditorDocumentActive(true);" in docs_tree
+    assert "function closeLeftSidebar(event)" in jobs
+    assert "function _setMainContentBlockedByLeftSidebar(open)" in jobs
+    assert "closeButton.focus({ preventScroll: true });" in jobs
+    assert "main.setAttribute(\"aria-hidden\", \"true\")" in jobs
+    assert "main.inert = blocked;" in jobs
+    assert "window.addEventListener(\"resize\"" in jobs
+    assert "closeLeftSidebar();" in docs_tree
+    assert "event.stopPropagation();" in jobs
+    assert "sidebar.classList.remove(\"mobile-open\")" in docs_tree
+    assert 'class="mobile-sidebar-close"' in html
+    assert 'onpointerdown="closeLeftSidebar(event)"' in html
+    assert "closeMobileLeftSidebarIfOpen();" in docs_tree
+    assert "await loadDoc(res.document.doc_id);" in docs_tree
+    assert "height: 100vh;" in css
+    assert "transform: translateX(-100%);" in css
+    assert "transition: transform 0.3s ease;" in css
+    assert "z-index: 160;" in css
+    assert "z-index: 110;" in css
+    assert ".main-content.has-active-doc .editor-toolbar" in css
+    assert ".main-content:not(.has-active-doc) .editor-toolbar" in css
+    assert "/* Editor Docked Toolbar */" in css
+    assert "align-self: center;" in css
+    assert "flex: 0 0 auto;" in css
+    assert "max-width: min(90%, 640px);" in css
+    assert "pointer-events: none;" in css
+    assert "pointer-events: auto;" in css
+    assert "max-width: calc(100% - 20px);" in css
+    assert "display: none;" in css
+    assert ".doc-action-modal" in css
+    assert ".doc-action-dialog-input" in css
+    assert ".sidebar.mobile-open ~ .main-content" in css
+    assert "background: rgba(249, 249, 248, 0.96);" in css
+    assert "z-index: 120;" in css
+    assert "isolation: isolate;" in css
+    assert "visibility: hidden !important;" in css
+    assert ".mobile-sidebar-close:hover ~ .sidebar-title" in css
+    assert ".sidebar.mobile-open .sidebar-header" in css
+    assert "display: grid;" in css
+    assert "grid-template-columns: minmax(0, 1fr) 32px;" in css
+    assert "grid-column: 2;" in css
+    assert "transform: translateX(-3px);" in css
+    assert "@media (max-width: 420px) and (orientation: portrait)" in css
+    assert "width: min(88vw, 300px);" in css
+    assert ".sidebar.mobile-open {\n          transform: translateX(0);" in css
+    assert "grid-template-columns: minmax(0, 1fr) 30px;" in css
+    assert "padding: 16px 10px 14px 16px;" in css
+    assert "sidebar-title-portrait-settle" in css
+    assert "font-size: clamp(1rem, 4.8vw, 1.12rem);" in css
+    assert "touch-action: manipulation;" in css
+    assert ".timeline-overflow-note" in css
+    assert ".mobile-sidebar-close" in css
+    assert 'id="editor-toolbar" class="editor-toolbar" aria-hidden="true" inert' in html
+    assert 'id="doc-action-dialog" class="overlay" aria-hidden="true"' in html
+    assert 'onsubmit="submitDocDialog(event)"' in html
+    assert 'onclick="cancelDocDialog()"' in html
+
+
+@pytest.mark.unit
+def test_user_ui_timeline_order_controls_patch_timeline_index() -> None:
+    docs_tree = Path("modules/nf_orchestrator/assets/user_ui.docs_tree.js").read_text(encoding="utf-8")
+    css = Path("modules/nf_orchestrator/assets/user_ui.styles.css").read_text(encoding="utf-8")
+    bootstrap = Path("modules/nf_orchestrator/assets/user_ui.bootstrap.js").read_text(encoding="utf-8")
+
+    assert "function moveTimelineDoc(event, docId, direction)" in docs_tree
+    assert "function moveTimelineDocToPosition(event, docId, rawPosition)" in docs_tree
+    assert "function handleTimelineDragStart(event, docId)" in docs_tree
+    assert "function handleTimelineDrop(event, targetDocId)" in docs_tree
+    assert "function handleTimelinePointerDown(event, docId)" in docs_tree
+    assert "function handleTimelineItemClick(event, docId)" in docs_tree
+    assert "elementFromPoint(event.clientX, event.clientY)" in docs_tree
+    assert "function _getTimelineDisplayDocs()" in docs_tree
+    assert "function _buildTimelineMoveUpdates(displayDocs, currentIdx, targetIdx)" in docs_tree
+    assert "timeline_idx: update.timeline_idx" in docs_tree
+    assert 'draggable="true"' in docs_tree
+    assert "onpointerdown=\"handleTimelinePointerDown(event, '${doc.doc_id}')\"" in docs_tree
+    assert 'class="timeline-position-input"' in docs_tree
+    assert 'class="timeline-jump-btn"' in docs_tree
+    assert "this.previousElementSibling.value" in docs_tree
+    assert "moveTimelineDoc(event, '${doc.doc_id}', -1)" in docs_tree
+    assert "moveTimelineDoc(event, '${doc.doc_id}', 1)" in docs_tree
+    assert "timeline-order-btn" in docs_tree
+    assert "timeline-drag-handle" in docs_tree
+    assert ".timeline-title-row" in css
+    assert ".timeline-order-btn" in css
+    assert ".timeline-drag-handle" in css
+    assert ".timeline-position-input" in css
+    assert ".timeline-jump-btn" in css
+    assert "window.moveTimelineDoc = moveTimelineDoc;" in bootstrap
+    assert "window.moveTimelineDocToPosition = moveTimelineDocToPosition;" in bootstrap
+    assert "window.handleTimelinePointerDown = handleTimelinePointerDown;" in bootstrap
 
 
 @pytest.mark.unit

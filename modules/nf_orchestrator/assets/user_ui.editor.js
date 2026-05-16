@@ -461,6 +461,7 @@ async function _repaginateFromDom(requestId) {
     if (Number.isInteger(offset)) restoreSelectionGlobalOffset(offset);
     _scheduleMemoRender();
     renderPageGuides();
+    if (typeof updateStatusBar === "function") updateStatusBar();
   };
 
   const useWorkerPath =

@@ -11,7 +11,7 @@
     href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Noto+Serif+KR:wght@300;400;600&display=swap"
     rel="stylesheet" />
   <script src="https://unpkg.com/lucide@latest"></script>
-  <link rel="stylesheet" href="/assets/user_ui.styles.css" />
+  <link rel="stylesheet" href="/assets/user_ui.styles.css?v=20260505-toolbar-dock3" />
 
 </head>
 
@@ -87,6 +87,8 @@
     <!-- Left Sidebar: Navigation -->
     <aside class="sidebar" id="nav-sidebar">
       <div class="sidebar-header">
+        <button class="mobile-sidebar-close" type="button" onpointerdown="closeLeftSidebar(event)"
+          onclick="closeLeftSidebar(event)" aria-label="사이드바 닫기" title="사이드바 닫기">&times;</button>
         <div class="sidebar-title">NF Studio</div>
         <div style="font-size: 0.8rem; color: #888" id="current-project-label">
           -
@@ -307,8 +309,21 @@
         </div>
       </div>
 
+      <!-- Sidebar Action Dialog -->
+      <div id="doc-action-dialog" class="overlay" aria-hidden="true">
+        <form class="modal doc-action-modal" onsubmit="submitDocDialog(event)">
+          <h3 id="doc-action-dialog-title" style="margin-top: 0">문서 작업</h3>
+          <p id="doc-action-dialog-message" class="doc-action-dialog-message"></p>
+          <input id="doc-action-dialog-input" class="doc-action-dialog-input" />
+          <div class="doc-action-dialog-actions">
+            <button class="btn btn-secondary" type="button" onclick="cancelDocDialog()">취소</button>
+            <button class="btn btn-primary" type="submit" id="doc-action-dialog-confirm">확인</button>
+          </div>
+        </form>
+      </div>
+
       <!-- Editor Toolbar -->
-      <div id="editor-toolbar" class="editor-toolbar">
+      <div id="editor-toolbar" class="editor-toolbar" aria-hidden="true" inert>
         <button onclick="execCmd('bold')" title="굵게"><i data-lucide="bold"
             style="width:16px; height:16px;"></i></button>
         <button onclick="execCmd('italic')" title="기울임"><i data-lucide="italic"
@@ -399,7 +414,7 @@
     </main>
 
     <!-- Right Sidebar: Assistant -->
-    <aside class="sidebar right" id="assistant-sidebar">
+    <aside class="sidebar right" id="assistant-sidebar" aria-hidden="true" inert>
       <div class="sidebar-header" style="justify-content: space-between; align-items: center; display: flex;">
         <div class="sidebar-title">작가 도우미</div>
         <button class="btn btn-icon" onclick="closeRightSidebar()" title="닫기" style="padding: 4px; margin-left: auto;">
@@ -555,13 +570,13 @@
     </div>
   </div>
 
-  <script src="/assets/user_ui.state.js"></script>
-  <script src="/assets/user_ui.api.js"></script>
-  <script src="/assets/user_ui.editor.js"></script>
-  <script src="/assets/user_ui.docs_tree.js"></script>
-  <script src="/assets/user_ui.assistant.js"></script>
-  <script src="/assets/user_ui.jobs.js"></script>
-  <script src="/assets/user_ui.bootstrap.js"></script>
+  <script src="/assets/user_ui.state.js?v=20260505-toolbar-dock3"></script>
+  <script src="/assets/user_ui.api.js?v=20260505-toolbar-dock3"></script>
+  <script src="/assets/user_ui.editor.js?v=20260505-toolbar-dock3"></script>
+  <script src="/assets/user_ui.docs_tree.js?v=20260505-toolbar-dock3"></script>
+  <script src="/assets/user_ui.assistant.js?v=20260505-toolbar-dock3"></script>
+  <script src="/assets/user_ui.jobs.js?v=20260505-toolbar-dock3"></script>
+  <script src="/assets/user_ui.bootstrap.js?v=20260505-toolbar-dock3"></script>
 
 </body>
 

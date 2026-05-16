@@ -58,7 +58,7 @@ function _eventStatusText(eventObj) {
   const level = String(eventObj.level || "").toUpperCase();
   const message = String(eventObj.message || "").trim();
   const payload =
-    eventObj && typeof eventObj.payload === "object"
+    eventObj.payload && typeof eventObj.payload === "object"
       ? eventObj.payload
       : {};
   const reasonCode = String(payload.reason_code || "").trim();

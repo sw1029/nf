@@ -1,5 +1,5 @@
 ﻿// --- State ---
-let state = {
+var state = {
   projectId: null,
   projectName: "",
   currentDocId: null,

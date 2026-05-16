@@ -1,4 +1,11 @@
 ﻿// --- Project Management ---
+const TIMELINE_RENDER_LIMIT = 200;
+let timelineDragDocId = null;
+let timelinePointerDrag = null;
+let timelineSuppressNextClick = false;
+let docDialogResolve = null;
+let docDialogMode = "input";
+
 async function init() {
   loadEditorConfig();
   if (typeof loadSegmentRulesFromServer === "function") {
@@ -87,6 +94,8 @@ async function handleLoadProject() {
 function loadProject(pid, name) {
   state.projectId = pid;
   state.projectName = name;
+  state.currentDocId = null;
+  setEditorDocumentActive(false);
   document.getElementById("current-project-label").textContent = name;
   localStorage.setItem("last_project_id", pid);
   localStorage.setItem("last_project_name", name);
@@ -190,53 +199,465 @@ function switchNavTab(eventOrType, maybeType) {
   }
 }
 
+function closeMobileLeftSidebarIfOpen() {
+  const sidebar = document.getElementById("nav-sidebar");
+  if (sidebar && sidebar.classList.contains("mobile-open")) {
+    if (typeof closeLeftSidebar === "function") {
+      closeLeftSidebar();
+    } else {
+      sidebar.classList.remove("mobile-open");
+    }
+  }
+}
+
+function setEditorDocumentActive(active) {
+  const main = document.querySelector(".main-content");
+  const toolbar = document.getElementById("editor-toolbar");
+  const isActive = Boolean(active);
+  if (main) main.classList.toggle("has-active-doc", isActive);
+  if (!toolbar) return;
+  toolbar.classList.remove("active");
+  toolbar.inert = !isActive;
+  toolbar.setAttribute("aria-hidden", isActive ? "false" : "true");
+}
+
+function showDocDialog({ title, message, value = "", mode = "input", inputMode = "text" }) {
+  closeMobileLeftSidebarIfOpen();
+  const overlay = document.getElementById("doc-action-dialog");
+  const titleEl = document.getElementById("doc-action-dialog-title");
+  const messageEl = document.getElementById("doc-action-dialog-message");
+  const input = document.getElementById("doc-action-dialog-input");
+  const confirmBtn = document.getElementById("doc-action-dialog-confirm");
+  if (!overlay || !titleEl || !messageEl || !input || !confirmBtn) {
+    return Promise.resolve(mode === "confirm" ? false : null);
+  }
+
+  docDialogMode = mode;
+  titleEl.innerText = title;
+  messageEl.innerText = message || "";
+  input.value = value || "";
+  input.inputMode = inputMode || "text";
+  input.style.display = mode === "confirm" ? "none" : "block";
+  confirmBtn.innerText = mode === "confirm" ? "삭제" : "확인";
+  overlay.classList.add("active");
+  overlay.setAttribute("aria-hidden", "false");
+
+  return new Promise((resolve) => {
+    docDialogResolve = resolve;
+    requestAnimationFrame(() => {
+      if (mode !== "confirm") {
+        input.focus();
+        input.select();
+      } else {
+        confirmBtn.focus();
+      }
+    });
+  });
+}
+
+function closeDocDialog(result) {
+  const overlay = document.getElementById("doc-action-dialog");
+  if (overlay) {
+    overlay.classList.remove("active");
+    overlay.setAttribute("aria-hidden", "true");
+  }
+  const resolve = docDialogResolve;
+  docDialogResolve = null;
+  if (resolve) resolve(result);
+}
+
+function submitDocDialog(event) {
+  if (event) event.preventDefault();
+  if (docDialogMode === "confirm") {
+    closeDocDialog(true);
+    return;
+  }
+  const input = document.getElementById("doc-action-dialog-input");
+  closeDocDialog(input ? input.value : "");
+}
+
+function cancelDocDialog() {
+  closeDocDialog(docDialogMode === "confirm" ? false : null);
+}
+
+document.addEventListener("keydown", (event) => {
+  const overlay = document.getElementById("doc-action-dialog");
+  if (!overlay || !overlay.classList.contains("active")) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    cancelDocDialog();
+  }
+});
+
+function _numericMetaValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function _getTimelineDisplayDocs() {
+  const allDocs = Object.values(state.docs);
+  const docs = allDocs.filter((d) => {
+    return (
+      d.metadata &&
+      (d.metadata.time_key != null || d.metadata.timeline_idx != null)
+    );
+  });
+  const displayDocs =
+    docs.length > 0 ? docs : allDocs.filter((d) => d.type === "EPISODE");
+
+  return displayDocs.slice().sort((a, b) => {
+    const idxA = _numericMetaValue(a.metadata?.timeline_idx) ?? 9999;
+    const idxB = _numericMetaValue(b.metadata?.timeline_idx) ?? 9999;
+    if (idxA !== idxB) return idxA - idxB;
+
+    const ordA = _numericMetaValue(a.metadata?.order) ?? 9999;
+    const ordB = _numericMetaValue(b.metadata?.order) ?? 9999;
+    if (ordA !== ordB) return ordA - ordB;
+
+    return new Date(a.created_at) - new Date(b.created_at);
+  });
+}
+
+function _timelineOrderValue(doc, fallbackIndex) {
+  return (
+    _numericMetaValue(doc.metadata?.timeline_idx) ??
+    _numericMetaValue(doc.metadata?.order) ??
+    fallbackIndex + 1
+  );
+}
+
+function _buildTimelineMoveUpdates(displayDocs, currentIdx, targetIdx) {
+  if (currentIdx === targetIdx) return [];
+
+  const originalValues = displayDocs.map((doc, idx) =>
+    _timelineOrderValue(doc, idx),
+  );
+  const canReuseExistingValues =
+    originalValues.every((value) => value !== null) &&
+    new Set(originalValues).size === originalValues.length;
+
+  const reordered = displayDocs.slice();
+  const [movedDoc] = reordered.splice(currentIdx, 1);
+  reordered.splice(targetIdx, 0, movedDoc);
+
+  return reordered
+    .map((doc, idx) => ({
+      doc_id: doc.doc_id,
+      timeline_idx: canReuseExistingValues ? originalValues[idx] : idx + 1,
+    }))
+    .filter((update) => {
+      const doc = state.docs[update.doc_id];
+      return _numericMetaValue(doc?.metadata?.timeline_idx) !== update.timeline_idx;
+    });
+}
+
+async function _applyTimelineMove(event, docId, targetIdx) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  const displayDocs = _getTimelineDisplayDocs();
+  const currentIdx = displayDocs.findIndex((doc) => doc.doc_id === docId);
+  const renderedLimit = Math.min(displayDocs.length, TIMELINE_RENDER_LIMIT);
+  if (
+    currentIdx < 0 ||
+    targetIdx < 0 ||
+    targetIdx >= renderedLimit ||
+    currentIdx === targetIdx
+  ) {
+    return;
+  }
+  const updates = _buildTimelineMoveUpdates(displayDocs, currentIdx, targetIdx);
+  if (updates.length === 0) return;
+
+  if (typeof showLoading === "function") {
+    showLoading("타임라인 순서 저장 중...");
+  }
+  try {
+    await Promise.all(
+      updates.map((update) =>
+        api(
+          `/projects/${state.projectId}/documents/${update.doc_id}`,
+          "PATCH",
+          {
+            metadata: {
+              timeline_idx: update.timeline_idx,
+            },
+          },
+        ),
+      ),
+    );
+    updates.forEach((update) => {
+      const doc = state.docs[update.doc_id];
+      if (!doc) return;
+      doc.metadata = {
+        ...(doc.metadata || {}),
+        timeline_idx: update.timeline_idx,
+      };
+    });
+    renderTimelineView();
+  } catch (err) {
+    alert("타임라인 순서 변경에 실패했습니다.");
+    console.error(err);
+  } finally {
+    if (typeof hideLoading === "function") hideLoading();
+  }
+}
+
+async function moveTimelineDoc(event, docId, direction) {
+  const displayDocs = _getTimelineDisplayDocs();
+  const currentIdx = displayDocs.findIndex((doc) => doc.doc_id === docId);
+  const step = Number(direction) < 0 ? -1 : 1;
+  await _applyTimelineMove(event, docId, currentIdx + step);
+}
+
+async function moveTimelineDocToPosition(event, docId, rawPosition) {
+  const displayDocs = _getTimelineDisplayDocs();
+  const renderedLimit = Math.min(displayDocs.length, TIMELINE_RENDER_LIMIT);
+  const position = Math.trunc(Number(rawPosition));
+  if (!Number.isFinite(position)) {
+    renderTimelineView();
+    return;
+  }
+  const targetIdx = Math.min(Math.max(position, 1), renderedLimit) - 1;
+  await _applyTimelineMove(event, docId, targetIdx);
+}
+
+function handleTimelinePositionKey(event, docId) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    renderTimelineView();
+    return;
+  }
+  if (event.key !== "Enter") return;
+  moveTimelineDocToPosition(event, docId, event.currentTarget.value);
+}
+
+function _timelineItemFromEvent(event) {
+  return event?.currentTarget?.closest?.(".timeline-item") || event?.currentTarget;
+}
+
+function _clearTimelineDragState() {
+  document
+    .querySelectorAll(".timeline-item.dragging, .timeline-item.drag-over")
+    .forEach((item) => item.classList.remove("dragging", "drag-over"));
+}
+
+function _timelineDragTargetFromPoint(event) {
+  return document
+    .elementFromPoint(event.clientX, event.clientY)
+    ?.closest?.(".timeline-item");
+}
+
+function _timelineDocIdFromItem(item) {
+  return item?.dataset?.docId || "";
+}
+
+function _isTimelineControlTarget(target) {
+  return Boolean(target?.closest?.("input, select, textarea, button, a"));
+}
+
+function handleTimelineItemClick(event, docId) {
+  if (timelineSuppressNextClick) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  loadDoc(docId);
+}
+
+function handleTimelineDragStart(event, docId) {
+  event.stopPropagation();
+  timelineDragDocId = docId;
+  const item = _timelineItemFromEvent(event);
+  item?.classList.add("dragging");
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", docId);
+  }
+}
+
+function handleTimelineDragOver(event, targetDocId) {
+  if (!timelineDragDocId || timelineDragDocId === targetDocId) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const item = _timelineItemFromEvent(event);
+  item?.classList.add("drag-over");
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+}
+
+function handleTimelineDragLeave(event) {
+  _timelineItemFromEvent(event)?.classList.remove("drag-over");
+}
+
+async function handleTimelineDrop(event, targetDocId) {
+  event.preventDefault();
+  event.stopPropagation();
+  const draggedDocId =
+    timelineDragDocId || event.dataTransfer?.getData("text/plain") || "";
+  timelineDragDocId = null;
+  _clearTimelineDragState();
+  if (!draggedDocId || draggedDocId === targetDocId) return;
+
+  const displayDocs = _getTimelineDisplayDocs();
+  const targetIdx = displayDocs.findIndex((doc) => doc.doc_id === targetDocId);
+  await _applyTimelineMove(event, draggedDocId, targetIdx);
+}
+
+function handleTimelineDragEnd(event) {
+  event.stopPropagation();
+  timelineDragDocId = null;
+  _clearTimelineDragState();
+}
+
+function handleTimelinePointerDown(event, docId) {
+  if (event.button !== undefined && event.button !== 0) return;
+  if (
+    _isTimelineControlTarget(event.target) &&
+    !event.target.closest?.(".timeline-drag-handle")
+  ) {
+    return;
+  }
+
+  timelinePointerDrag = {
+    active: false,
+    docId,
+    startX: event.clientX,
+    startY: event.clientY,
+  };
+  document.addEventListener("pointermove", _handleTimelinePointerMove);
+  document.addEventListener("pointerup", _handleTimelinePointerUp, {
+    once: true,
+  });
+  document.addEventListener("pointercancel", _handleTimelinePointerCancel, {
+    once: true,
+  });
+}
+
+function _handleTimelinePointerMove(event) {
+  if (!timelinePointerDrag) return;
+  const deltaX = Math.abs(event.clientX - timelinePointerDrag.startX);
+  const deltaY = Math.abs(event.clientY - timelinePointerDrag.startY);
+  if (!timelinePointerDrag.active && deltaX + deltaY < 6) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+  timelinePointerDrag.active = true;
+  document
+    .querySelector(
+      `.timeline-item[data-doc-id="${timelinePointerDrag.docId}"]`,
+    )
+    ?.classList.add("dragging");
+
+  document
+    .querySelectorAll(".timeline-item.drag-over")
+    .forEach((item) => item.classList.remove("drag-over"));
+  const targetItem = _timelineDragTargetFromPoint(event);
+  if (
+    targetItem &&
+    _timelineDocIdFromItem(targetItem) !== timelinePointerDrag.docId
+  ) {
+    targetItem.classList.add("drag-over");
+  }
+}
+
+async function _handleTimelinePointerUp(event) {
+  if (!timelinePointerDrag) return;
+  const dragState = timelinePointerDrag;
+  timelinePointerDrag = null;
+  document.removeEventListener("pointermove", _handleTimelinePointerMove);
+  document.removeEventListener("pointercancel", _handleTimelinePointerCancel);
+
+  if (!dragState.active) {
+    _clearTimelineDragState();
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  timelineSuppressNextClick = true;
+  setTimeout(() => {
+    timelineSuppressNextClick = false;
+  }, 120);
+
+  const targetDocId = _timelineDocIdFromItem(_timelineDragTargetFromPoint(event));
+  _clearTimelineDragState();
+  if (!targetDocId || targetDocId === dragState.docId) return;
+
+  const displayDocs = _getTimelineDisplayDocs();
+  const targetIdx = displayDocs.findIndex((doc) => doc.doc_id === targetDocId);
+  await _applyTimelineMove(event, dragState.docId, targetIdx);
+}
+
+function _handleTimelinePointerCancel() {
+  timelinePointerDrag = null;
+  document.removeEventListener("pointermove", _handleTimelinePointerMove);
+  document.removeEventListener("pointerup", _handleTimelinePointerUp);
+  _clearTimelineDragState();
+}
+
 async function renderTimelineView() {
   const container = document.getElementById("timeline-view");
   container.innerHTML = "";
 
-  // get instances of EPISODE, SETTING, or PLOT that have timeline info
-  const docs = Object.values(state.docs).filter((d) => {
-    return d.metadata && (d.metadata.time_key != null || d.metadata.timeline_idx != null);
-  });
-
-  // if there's no docs with timeline meta, fallback to showing EPISODEs in order
-  let displayDocs = docs.length > 0 ? docs : Object.values(state.docs).filter(d => d.type === "EPISODE");
+  const displayDocs = _getTimelineDisplayDocs();
 
   if (displayDocs.length === 0) {
     container.innerHTML = '<div style="text-align:center; padding:20px 15px; color:#94a3b8; font-size:0.9rem; background:#f8fafc; border-radius:8px; margin-top:10px;">작품 내 주요 사건들을 시간순으로 기록하는 타임라인 뷰입니다. 문서에 시간/인덱스 메타데이터를 추가해보세요.</div>';
     return;
   }
 
-  // Sort by timeline_idx first, then order, then created_at
-  displayDocs.sort((a, b) => {
-    const idxA = a.metadata?.timeline_idx ?? 9999;
-    const idxB = b.metadata?.timeline_idx ?? 9999;
-    if (idxA !== idxB) return idxA - idxB;
+  const totalDocs = displayDocs.length;
+  const docsToRender = displayDocs.slice(0, TIMELINE_RENDER_LIMIT);
 
-    const ordA = a.metadata?.order ?? 9999;
-    const ordB = b.metadata?.order ?? 9999;
-    if (ordA !== ordB) return ordA - ordB;
-
-    return new Date(a.created_at) - new Date(b.created_at);
-  });
-
-  const timelineHtml = displayDocs.map(doc => {
+  const timelineHtml = docsToRender.map((doc, idx) => {
     const timeLabel = doc.metadata?.time_key || (doc.metadata?.timeline_idx !== undefined ? `Index: ${doc.metadata.timeline_idx}` : "시점 미정");
     const isActive = state.currentDocId === doc.doc_id ? "active" : "";
+    const canMoveUp = idx > 0;
+    const canMoveDown = idx < docsToRender.length - 1;
 
     return `
-            <div class="timeline-item ${isActive}" onclick="loadDoc('${doc.doc_id}')">
+            <div class="timeline-item ${isActive}" data-doc-id="${doc.doc_id}" onclick="handleTimelineItemClick(event, '${doc.doc_id}')"
+              onpointerdown="handleTimelinePointerDown(event, '${doc.doc_id}')"
+              ondragover="handleTimelineDragOver(event, '${doc.doc_id}')"
+              ondragleave="handleTimelineDragLeave(event)"
+              ondrop="handleTimelineDrop(event, '${doc.doc_id}')">
               <div class="timeline-node"></div>
               <div class="timeline-content">
                 <div class="timeline-time">${timeLabel}</div>
-                <div class="timeline-title">${doc.title}</div>
+                <div class="timeline-title-row">
+                  <div class="timeline-title">${doc.title}</div>
+                  <div class="timeline-actions" aria-label="타임라인 순서 변경">
+                    <button type="button" class="timeline-drag-handle" draggable="true" title="끌어서 순서 변경" aria-label="끌어서 순서 변경"
+                      onclick="event.preventDefault(); event.stopPropagation()"
+                      onpointerdown="handleTimelinePointerDown(event, '${doc.doc_id}')"
+                      ondragstart="handleTimelineDragStart(event, '${doc.doc_id}')"
+                      ondragend="handleTimelineDragEnd(event)">↕</button>
+                    <input class="timeline-position-input" type="number" min="1" max="${docsToRender.length}" value="${idx + 1}"
+                      title="위치 번호 입력 후 Enter 또는 이동 버튼" aria-label="타임라인 위치"
+                      onclick="event.stopPropagation()"
+                      onkeydown="handleTimelinePositionKey(event, '${doc.doc_id}')"
+                      onchange="moveTimelineDocToPosition(event, '${doc.doc_id}', this.value)" />
+                    <button type="button" class="timeline-jump-btn" title="입력 위치로 이동" aria-label="입력 위치로 이동"
+                      onclick="moveTimelineDocToPosition(event, '${doc.doc_id}', this.previousElementSibling.value)">↵</button>
+                    <button type="button" class="timeline-order-btn" title="위로 이동" aria-label="위로 이동" onclick="moveTimelineDoc(event, '${doc.doc_id}', -1)" ${canMoveUp ? "" : "disabled"}>↑</button>
+                    <button type="button" class="timeline-order-btn" title="아래로 이동" aria-label="아래로 이동" onclick="moveTimelineDoc(event, '${doc.doc_id}', 1)" ${canMoveDown ? "" : "disabled"}>↓</button>
+                  </div>
+                </div>
                 <div style="font-size: 0.7rem; color: #94a3b8; margin-top: 4px;">${doc.type}</div>
               </div>
             </div>
           `;
   }).join("");
 
-  container.innerHTML = `<div class="timeline-container">${timelineHtml}</div>`;
+  const overflowHtml =
+    totalDocs > docsToRender.length
+      ? `<div class="timeline-overflow-note">최근 표시 ${docsToRender.length} / 전체 ${totalDocs}</div>`
+      : "";
+
+  container.innerHTML = `<div class="timeline-container">${timelineHtml}${overflowHtml}</div>`;
 }
 
 function renderDocList() {
@@ -552,11 +973,12 @@ function getCtxMenuEl() {
     el.style.minWidth = "150px";
     document.body.appendChild(el);
 
-    // Close on outside click is handled by global click listener usually, but simple way here:
+    // Close on outside click while letting trigger buttons handle toggling.
     document.addEventListener(
       "click",
       (e) => {
-        if (!el.contains(e.target)) el.style.display = "none";
+        if (e.target.closest?.(".menu-btn")) return;
+        if (!el.contains(e.target)) hideCtxMenu();
       },
       { capture: true },
     );
@@ -564,9 +986,17 @@ function getCtxMenuEl() {
   return el;
 }
 
-function showCtxMenu(x, y, options) {
+function hideCtxMenu() {
+  const menu = document.getElementById("ctx-menu");
+  if (!menu) return;
+  menu.style.display = "none";
+  menu.dataset.owner = "";
+}
+
+function showCtxMenu(x, y, options, ownerKey = "") {
   const menu = getCtxMenuEl();
   menu.innerHTML = "";
+  menu.dataset.owner = ownerKey;
   menu.style.left = x + "px";
   menu.style.top = y + "px";
   menu.style.display = "block";
@@ -582,17 +1012,35 @@ function showCtxMenu(x, y, options) {
     item.onmouseout = () => (item.style.background = "white");
     item.onclick = (e) => {
       e.stopPropagation(); // prevent document click closing immediately if needed?
-      menu.style.display = "none";
+      hideCtxMenu();
       opt.action();
     };
     menu.appendChild(item);
   });
+
+  const rect = menu.getBoundingClientRect();
+  const clampedLeft = Math.max(
+    8,
+    Math.min(x, window.innerWidth - rect.width - 8),
+  );
+  const clampedTop = Math.max(
+    8,
+    Math.min(y, window.innerHeight - rect.height - 8),
+  );
+  menu.style.left = clampedLeft + "px";
+  menu.style.top = clampedTop + "px";
 }
 
 // Updated Context Menu Logic
 function openDocCtxMenu(e, docId) {
   e.stopPropagation();
   e.preventDefault();
+  const ownerKey = `doc:${docId}`;
+  const menu = getCtxMenuEl();
+  if (menu.style.display === "block" && menu.dataset.owner === ownerKey) {
+    hideCtxMenu();
+    return;
+  }
 
   const options = [
     { label: "이름 변경", action: () => promptRenameDoc(docId) },
@@ -605,12 +1053,17 @@ function openDocCtxMenu(e, docId) {
     },
   ];
 
-  showCtxMenu(e.clientX, e.clientY, options);
+  const triggerRect = e.currentTarget.getBoundingClientRect();
+  showCtxMenu(triggerRect.right + 6, triggerRect.top, options, ownerKey);
 }
 
-function promptRenameDoc(docId) {
+async function promptRenameDoc(docId) {
   const doc = state.docs[docId];
-  const newTitle = prompt("새 제목을 입력하세요:", doc.title);
+  const newTitle = await showDocDialog({
+    title: "이름 변경",
+    message: "새 제목을 입력하세요.",
+    value: doc.title,
+  });
   if (newTitle && newTitle !== doc.title) {
     // Optimistic Update
     state.docs[docId].title = newTitle;
@@ -632,13 +1085,14 @@ function promptRenameDoc(docId) {
   }
 }
 
-function promptMoveGroup(docId) {
+async function promptMoveGroup(docId) {
   const doc = state.docs[docId];
   const currentGroup = (doc.metadata && doc.metadata.group) || "";
-  const newGroup = prompt(
-    "이동할 챕터 이름을 입력하세요 (비워 두면 '미분류'):",
-    currentGroup,
-  );
+  const newGroup = await showDocDialog({
+    title: "챕터 이동",
+    message: "이동할 챕터 이름을 입력하세요. 비워 두면 '미분류'로 표시됩니다.",
+    value: currentGroup,
+  });
   if (newGroup !== null) {
     const meta = doc.metadata || {};
     meta.group = newGroup;
@@ -651,10 +1105,15 @@ function promptMoveGroup(docId) {
   }
 }
 
-function promptEpisodeNo(docId) {
+async function promptEpisodeNo(docId) {
   const doc = state.docs[docId];
   const currentNo = (doc.metadata && doc.metadata.episode_no) || "";
-  const num = prompt("회차 번호를 입력하세요 (숫자만):", currentNo);
+  const num = await showDocDialog({
+    title: "회차 번호 설정",
+    message: "회차 번호를 숫자로 입력하세요.",
+    value: currentNo,
+    inputMode: "numeric",
+  });
   if (num !== null) {
     const intNum = parseInt(num, 10);
     if (isNaN(intNum)) return alert("유효한 숫자를 입력해주세요.");
@@ -670,19 +1129,27 @@ function promptEpisodeNo(docId) {
   }
 }
 
-function confirmDeleteDoc(docId) {
-  if (confirm("정말 이 문서를 삭제하시겠습니까?")) {
+async function confirmDeleteDoc(docId) {
+  if (
+    await showDocDialog({
+      title: "문서 삭제",
+      message: "정말 이 문서를 삭제하시겠습니까?",
+      mode: "confirm",
+    })
+  ) {
     api(`/projects/${state.projectId}/documents/${docId}`, "DELETE").then(
       () => {
         delete state.docs[docId];
         if (state.currentDocId === docId) {
           state.currentDocId = null;
+          setEditorDocumentActive(false);
           if (typeof setEditorText === "function") {
             setEditorText("", { preserveCaret: false });
           } else {
             document.getElementById("editor").innerText = "";
           }
           document.getElementById("doc-title-input").value = "";
+          document.getElementById("empty-state").style.display = "flex";
           state.isDirty = false;
           state.memoDirty = false;
           if (typeof resetMemoStateForDoc === "function") {
@@ -703,6 +1170,12 @@ function confirmDeleteDoc(docId) {
 function openGroupCtxMenu(e, groupName) {
   e.stopPropagation();
   e.preventDefault();
+  const ownerKey = `group:${groupName}`;
+  const menu = getCtxMenuEl();
+  if (menu.style.display === "block" && menu.dataset.owner === ownerKey) {
+    hideCtxMenu();
+    return;
+  }
 
   const options = [
     {
@@ -711,11 +1184,15 @@ function openGroupCtxMenu(e, groupName) {
     },
   ];
 
-  showCtxMenu(e.clientX, e.clientY, options);
+  showCtxMenu(e.clientX, e.clientY, options, ownerKey);
 }
 
 async function promptRenameGroup(oldName) {
-  const newName = prompt("새 챕터 이름을 입력하세요:", oldName);
+  const newName = await showDocDialog({
+    title: "챕터 이름 변경",
+    message: "새 챕터 이름을 입력하세요.",
+    value: oldName,
+  });
   if (newName && newName !== oldName) {
     showLoading("챕터 이름 변경 중...");
 
@@ -778,7 +1255,7 @@ async function createNewDoc() {
     );
     hideLoading();
     await refreshDocList();
-    loadDoc(res.document.doc_id);
+    await loadDoc(res.document.doc_id);
   } catch (e) {
     hideLoading();
     alert("문서 생성에 실패했습니다.");
@@ -804,6 +1281,7 @@ async function loadDoc(did) {
 
   // UI Feedback
   document.getElementById("empty-state").style.display = "none";
+  setEditorDocumentActive(true);
   if (
     document
       .getElementById("loading-overlay")
@@ -892,6 +1370,7 @@ async function loadDoc(did) {
     if (typeof renderMemos === "function") renderMemos();
 
     renderDocList();
+    closeMobileLeftSidebarIfOpen();
     // hideLoading();
   } catch (e) {
     console.error("Load Doc Error", e);
@@ -959,7 +1438,10 @@ async function handleJobExport() {
 window.handleJobExport = handleJobExport;
 
 async function createNewChapter() {
-  const chapterName = prompt("새 챕터(그룹) 이름을 입력하세요");
+  const chapterName = await showDocDialog({
+    title: "새 챕터",
+    message: "새 챕터 이름을 입력하세요.",
+  });
   if (!chapterName) return;
 
   showLoading("챕터 생성 중...");
@@ -994,6 +1476,7 @@ async function exitProject() {
   state.projectId = null;
   state.projectName = "";
   state.currentDocId = null;
+  setEditorDocumentActive(false);
   state.docs = {};
   state.isDirty = false;
   state.memoDirty = false;

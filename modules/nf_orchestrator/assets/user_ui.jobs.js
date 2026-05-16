@@ -1,12 +1,50 @@
 ﻿// --- UI/Widget Toggles ---
 function toggleLeftSidebar() {
-  document.getElementById("nav-sidebar").classList.toggle("mobile-open");
+  const sidebar = document.getElementById("nav-sidebar");
+  const open = sidebar.classList.toggle("mobile-open");
+  _setMainContentBlockedByLeftSidebar(open);
   if (typeof _notifyLayoutDependents === "function") {
     _notifyLayoutDependents();
   } else {
     window.dispatchEvent(new Event("nf:layout-changed"));
   }
 }
+
+function _setMainContentBlockedByLeftSidebar(open) {
+  const main = document.querySelector(".main-content");
+  if (!main) return;
+  const mobileMode = window.matchMedia("(max-width: 1100px)").matches;
+  const blocked = open && mobileMode;
+  if (blocked) {
+    const closeButton = document.querySelector(".mobile-sidebar-close");
+    if (closeButton && main.contains(document.activeElement)) {
+      closeButton.focus({ preventScroll: true });
+    }
+    main.setAttribute("aria-hidden", "true");
+  } else {
+    main.removeAttribute("aria-hidden");
+  }
+  main.inert = blocked;
+}
+
+function closeLeftSidebar(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  document.getElementById("nav-sidebar").classList.remove("mobile-open");
+  _setMainContentBlockedByLeftSidebar(false);
+  if (typeof _notifyLayoutDependents === "function") {
+    _notifyLayoutDependents();
+  } else {
+    window.dispatchEvent(new Event("nf:layout-changed"));
+  }
+}
+
+window.addEventListener("resize", () => {
+  const sidebar = document.getElementById("nav-sidebar");
+  _setMainContentBlockedByLeftSidebar(Boolean(sidebar && sidebar.classList.contains("mobile-open")));
+});
 
 function toggleJobsPanel() {
   const panel = document.getElementById("jobs-panel");

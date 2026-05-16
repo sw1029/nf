@@ -198,25 +198,27 @@ function positionPopoverInMainContent(popover, anchorRect, opts = {}) {
   return true;
 }
 
-function openRightSidebar() {
+function _setRightSidebarOpen(open) {
   const sb = document.getElementById("assistant-sidebar");
   if (!sb) return;
-  if (!sb.classList.contains("is-open")) sb.classList.add("is-open");
+  sb.classList.toggle("is-open", open);
+  sb.setAttribute("aria-hidden", open ? "false" : "true");
+  sb.inert = !open;
   _notifyLayoutDependents();
 }
 
+function openRightSidebar() {
+  _setRightSidebarOpen(true);
+}
+
 function closeRightSidebar() {
-  const sb = document.getElementById("assistant-sidebar");
-  if (!sb) return;
-  if (sb.classList.contains("is-open")) sb.classList.remove("is-open");
-  _notifyLayoutDependents();
+  _setRightSidebarOpen(false);
 }
 
 function toggleRightSidebar() {
   const sb = document.getElementById("assistant-sidebar");
   if (!sb) return;
-  sb.classList.toggle("is-open");
-  _notifyLayoutDependents();
+  _setRightSidebarOpen(!sb.classList.contains("is-open"));
 }
 
 document.addEventListener("keydown", (event) => {
