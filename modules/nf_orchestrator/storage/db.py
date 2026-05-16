@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable, Iterable, TypeVar
 
 DEFAULT_DB_PATH = Path(os.environ.get("NF_ORCH_DB_PATH", "nf_orchestrator.sqlite3"))
-_SCHEMA_USER_VERSION = 1
+_SCHEMA_USER_VERSION = 2
 _SQLITE_CONNECT_TIMEOUT_SEC = 30.0
 _SQLITE_BUSY_TIMEOUT_MS = 30000
 _SQLITE_LOCK_RETRY_ATTEMPTS = 4
@@ -439,6 +439,46 @@ def _apply_schema(conn: sqlite3.Connection) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS kg_build (
+            build_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            built_at TEXT NOT NULL,
+            source_checksum TEXT NOT NULL,
+            source_health_json TEXT NOT NULL,
+            stats_json TEXT NOT NULL,
+            status TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS kg_node (
+            node_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            build_id TEXT NOT NULL,
+            node_type TEXT NOT NULL,
+            source_table TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            label TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 1.0
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS kg_edge (
+            edge_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            build_id TEXT NOT NULL,
+            src_node_id TEXT NOT NULL,
+            dst_node_id TEXT NOT NULL,
+            edge_type TEXT NOT NULL,
+            source_table TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 1.0
+        )
+        """,
+        """
         CREATE VIRTUAL TABLE IF NOT EXISTS fts_docs USING fts5(
             content,
             chunk_id UNINDEXED,
@@ -485,6 +525,10 @@ def _ensure_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_verdict_log_project_doc_created ON verdict_log(project_id, input_doc_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_entity_mention_lookup ON entity_mention_span(project_id, doc_id, entity_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_time_anchor_lookup ON time_anchor(project_id, doc_id, time_key, timeline_idx, status)",
+        "CREATE INDEX IF NOT EXISTS idx_kg_build_project_built ON kg_build(project_id, built_at)",
+        "CREATE INDEX IF NOT EXISTS idx_kg_node_lookup ON kg_node(project_id, build_id, node_type, source_table, source_id)",
+        "CREATE INDEX IF NOT EXISTS idx_kg_edge_src ON kg_edge(project_id, build_id, src_node_id, edge_type)",
+        "CREATE INDEX IF NOT EXISTS idx_kg_edge_dst ON kg_edge(project_id, build_id, dst_node_id, edge_type)",
         "CREATE INDEX IF NOT EXISTS idx_whitelist_lookup ON whitelist_item(project_id, claim_fingerprint, scope)",
         "CREATE INDEX IF NOT EXISTS idx_whitelist_annotation_lookup ON whitelist_annotation(project_id, claim_fingerprint, scope, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_ignore_lookup ON ignore_item(project_id, claim_fingerprint, scope, kind)",

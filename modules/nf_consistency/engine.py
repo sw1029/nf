@@ -25,6 +25,7 @@ from modules.nf_orchestrator.storage.repos import (
     whitelist_repo,
 )
 from modules.nf_retrieval.fts.fts_index import fts_search
+from modules.nf_retrieval.graph.materialized import build_project_graph, load_project_graph
 from modules.nf_retrieval.graph.rerank import expand_candidate_docs_with_graph
 from modules.nf_retrieval.vector.manifest import vector_search
 from modules.nf_schema.identity import build_alias_index, find_entity_candidates
@@ -73,6 +74,14 @@ _DEFAULT_GRAPH_MODE = "off"
 _DEFAULT_EPISODE_SCOPE_WINDOW = 10
 _CANDIDATE_K = 12
 _FINAL_K = 3
+_GRAPH_RUNTIME_MS_KEYS = (
+    "graph_load_ms",
+    "graph_build_ms",
+    "graph_seed_scan_ms",
+    "graph_expand_ms",
+    "graph_sort_ms",
+    "graph_rerank_ms",
+)
 _VECTOR_REFILL_MIN = 6
 _LAYER3_RERANK_TOP_N = 12
 _LAYER3_NLI_TOP_K = 3
@@ -87,6 +96,8 @@ _HASHED_EMBEDDING_DIM = 96
 
 _STRING_SLOT_KEYS = {"time", "place", "relation", "affiliation", "job", "talent"}
 _ENTITY_BOUND_SLOT_KEYS = {"age", "death", "relation", "affiliation", "job", "talent"}
+_GRAPH_AUTO_SLOT_KEYS = {"time", "place", "relation", "affiliation", "job", "talent"}
+_GRAPH_CONSERVATIVE_SLOT_KEYS = {"age", "death"}
 _RETRIEVAL_ANCHOR_SLOT_KEYS = {"relation", "affiliation", "job", "talent"}
 _RETRIEVAL_ANCHOR_RESCUE_SLOT_KEYS = {"affiliation"}
 _DOC_SCOPE_SELF_EVIDENCE_SLOT_KEYS = {"age", "death", "relation", "affiliation", "job", "talent"}
@@ -1381,7 +1392,9 @@ def _has_graph_seed_signal(*, filters: dict[str, object], slots: dict[str, objec
     if any(filters.get(key) is not None for key in ("entity_id", "time_key", "timeline_idx")):
         return True
     for slot_key in slots:
-        if slot_key in {"time", "relation"}:
+        if slot_key in _GRAPH_AUTO_SLOT_KEYS:
+            return True
+        if slot_key in _GRAPH_CONSERVATIVE_SLOT_KEYS and filters.get("entity_id") is not None:
             return True
     return False
 
@@ -2240,6 +2253,59 @@ def _append_stat_sample(
     req_stats[key] = bucket_raw
 
 
+def _accumulate_graph_runtime_stats(req_stats: dict[str, Any] | None, graph_meta: dict[str, Any]) -> None:
+    if req_stats is None:
+        return
+    for key in _GRAPH_RUNTIME_MS_KEYS:
+        value = graph_meta.get(key)
+        if isinstance(value, (int, float)):
+            req_stats[key] = float(req_stats.get(key, 0.0)) + float(value)
+    payload_count = graph_meta.get("graph_payload_doc_count")
+    if isinstance(payload_count, (int, float)):
+        req_stats["graph_payload_doc_count"] = int(req_stats.get("graph_payload_doc_count", 0)) + int(payload_count)
+    source = graph_meta.get("graph_source")
+    if isinstance(source, str) and source:
+        _increment_stat_counter(req_stats, "graph_source_counts", source)
+    kg_build_id = graph_meta.get("kg_build_id")
+    if isinstance(kg_build_id, str) and kg_build_id:
+        req_stats["kg_build_id"] = kg_build_id
+    source_health = graph_meta.get("kg_source_health_snapshot")
+    if isinstance(source_health, dict):
+        req_stats["kg_source_health_snapshot"] = dict(source_health)
+        sparse_reasons = source_health.get("sparse_reason_counts")
+        if isinstance(sparse_reasons, dict):
+            for reason, amount in sparse_reasons.items():
+                try:
+                    amount_int = int(amount)
+                except (TypeError, ValueError):
+                    amount_int = 1
+                _increment_stat_counter(req_stats, "kg_sparse_reason_counts", str(reason), amount_int)
+    seed_counts = graph_meta.get("seed_source_counts")
+    if isinstance(seed_counts, dict):
+        for key, amount in seed_counts.items():
+            try:
+                amount_int = int(amount)
+            except (TypeError, ValueError):
+                amount_int = 1
+            _increment_stat_counter(req_stats, "graph_expand_seed_source_counts", str(key), amount_int)
+    skip_counts = graph_meta.get("skip_reason_counts")
+    if isinstance(skip_counts, dict):
+        for key, amount in skip_counts.items():
+            try:
+                amount_int = int(amount)
+            except (TypeError, ValueError):
+                amount_int = 1
+            _increment_stat_counter(req_stats, "graph_auto_skip_reason_counts", str(key), amount_int)
+    edge_counts = graph_meta.get("edge_type_counts")
+    if isinstance(edge_counts, dict):
+        for key, amount in edge_counts.items():
+            try:
+                amount_int = int(amount)
+            except (TypeError, ValueError):
+                amount_int = 1
+            _increment_stat_counter(req_stats, "graph_edge_type_counts", str(key), amount_int)
+
+
 def _unknown_reason_signature(reasons: set[str] | tuple[str, ...] | list[str]) -> str:
     if not reasons:
         return "<none>"
@@ -2338,6 +2404,20 @@ class ConsistencyEngineImpl:
             req_stats.setdefault("graph_expand_refill_results", 0)
             req_stats.setdefault("graph_auto_trigger_count", 0)
             req_stats.setdefault("graph_auto_skip_count", 0)
+            req_stats.setdefault("graph_auto_skip_reason_counts", {})
+            req_stats.setdefault("graph_expand_seed_source_counts", {})
+            req_stats.setdefault("graph_expand_slot_counts", {})
+            req_stats.setdefault("graph_refill_gain_total", 0)
+            req_stats.setdefault("graph_refill_gain_samples", [])
+            req_stats.setdefault("graph_verdict_influence_counts", {})
+            req_stats.setdefault("graph_edge_type_counts", {})
+            req_stats.setdefault("kg_build_id", None)
+            req_stats.setdefault("kg_source_health_snapshot", {})
+            req_stats.setdefault("kg_sparse_reason_counts", {})
+            for graph_ms_key in _GRAPH_RUNTIME_MS_KEYS:
+                req_stats.setdefault(graph_ms_key, 0.0)
+            req_stats.setdefault("graph_payload_doc_count", 0)
+            req_stats.setdefault("graph_source_counts", {})
             req_stats.setdefault("unknown_reason_counts", {})
             req_stats.setdefault("unknown_slot_counts", {})
             req_stats.setdefault("no_evidence_slot_counts", {})
@@ -2412,6 +2492,39 @@ class ConsistencyEngineImpl:
                 input_doc_id=doc_id,
                 input_snapshot_id=snapshot_id,
             )
+            graph_for_run: dict[str, Any] | None = None
+            graph_for_run_loaded = False
+
+            def _ensure_graph_for_run() -> dict[str, Any]:
+                nonlocal graph_for_run, graph_for_run_loaded
+                if graph_for_run_loaded and graph_for_run is not None:
+                    return graph_for_run
+                load_started = time.perf_counter()
+                loaded_graph = load_project_graph(project_id)
+                load_ms = (time.perf_counter() - load_started) * 1000.0
+                if loaded_graph is not None:
+                    graph_for_run = loaded_graph
+                    _accumulate_graph_runtime_stats(
+                        req_stats,
+                        {
+                            "graph_source": "materialized",
+                            "graph_load_ms": load_ms,
+                            "graph_build_ms": 0.0,
+                        },
+                    )
+                else:
+                    build_started = time.perf_counter()
+                    graph_for_run = build_project_graph(conn, project_id)
+                    _accumulate_graph_runtime_stats(
+                        req_stats,
+                        {
+                            "graph_source": "built",
+                            "graph_load_ms": load_ms,
+                            "graph_build_ms": (time.perf_counter() - build_started) * 1000.0,
+                        },
+                    )
+                graph_for_run_loaded = True
+                return graph_for_run
 
             text = docstore.read_text(snapshot.path)
             offset = 0
@@ -2636,6 +2749,10 @@ class ConsistencyEngineImpl:
                         if req_stats is not None:
                             stat_key = "graph_auto_trigger_count" if graph_expand_for_claim else "graph_auto_skip_count"
                             req_stats[stat_key] = int(req_stats.get(stat_key, 0)) + 1
+                            if not seed_signal:
+                                _increment_stat_counter(req_stats, "graph_auto_skip_reason_counts", "no_seed_signal")
+                            elif not ambiguity_signal:
+                                _increment_stat_counter(req_stats, "graph_auto_skip_reason_counts", "not_ambiguous")
                     if graph_expand_for_claim:
                         candidate_doc_ids, graph_meta = expand_candidate_docs_with_graph(
                             conn,
@@ -2644,7 +2761,12 @@ class ConsistencyEngineImpl:
                             filters=dict(claim_filters),
                             max_hops=graph_max_hops,
                             doc_cap=graph_doc_cap,
+                            graph=_ensure_graph_for_run(),
+                            slots=slots,
+                            slot_key=primary_slot_key or None,
+                            claim_text=claim_text,
                         )
+                        _accumulate_graph_runtime_stats(req_stats, graph_meta)
                         raw_distances = graph_meta.get("doc_distances")
                         if isinstance(raw_distances, dict):
                             for key, value in raw_distances.items():
@@ -2658,7 +2780,18 @@ class ConsistencyEngineImpl:
                                 req_stats["graph_expand_applied_count"] = int(
                                     req_stats.get("graph_expand_applied_count", 0)
                                 ) + 1
+                                if primary_slot_key:
+                                    _increment_stat_counter(
+                                        req_stats,
+                                        "graph_expand_slot_counts",
+                                        primary_slot_key,
+                                    )
                             if candidate_doc_ids:
+                                before_graph_doc_ids = {
+                                    str((row.get("evidence") or {}).get("doc_id"))
+                                    for row in candidate_results
+                                    if isinstance((row.get("evidence") or {}).get("doc_id"), str)
+                                }
                                 graph_filters = dict(claim_filters)
                                 graph_filters["doc_ids"] = candidate_doc_ids
                                 graph_req: dict[str, Any] = {
@@ -2669,6 +2802,12 @@ class ConsistencyEngineImpl:
                                     "stats": retrieval_stats,
                                 }
                                 graph_results = fts_search(conn, graph_req)
+                                graph_result_doc_ids = {
+                                    str((row.get("evidence") or {}).get("doc_id"))
+                                    for row in graph_results
+                                    if isinstance((row.get("evidence") or {}).get("doc_id"), str)
+                                }
+                                refill_gain = len(graph_result_doc_ids.difference(before_graph_doc_ids))
                                 if req_stats is not None:
                                     req_stats["graph_expand_candidate_docs"] = int(
                                         req_stats.get("graph_expand_candidate_docs", 0)
@@ -2676,11 +2815,24 @@ class ConsistencyEngineImpl:
                                     req_stats["graph_expand_refill_results"] = int(
                                         req_stats.get("graph_expand_refill_results", 0)
                                     ) + len(graph_results)
+                                    req_stats["graph_refill_gain_total"] = int(
+                                        req_stats.get("graph_refill_gain_total", 0)
+                                    ) + refill_gain
+                                    _append_stat_sample(req_stats, "graph_refill_gain_samples", refill_gain)
+                                    if refill_gain > 0:
+                                        _increment_stat_counter(
+                                            req_stats,
+                                            "graph_verdict_influence_counts",
+                                            "candidate_docs_added",
+                                            refill_gain,
+                                        )
                                 candidate_results = _merge_result_lists(
                                     candidate_results,
                                     graph_results,
                                     limit=_CANDIDATE_K * 3,
                                 )
+                        elif graph_mode == "auto" and req_stats is not None:
+                            req_stats["graph_auto_skip_count"] = int(req_stats.get("graph_auto_skip_count", 0)) + 1
                     retrieval_cache[cache_key] = {
                         "results": list(candidate_results),
                         "graph_doc_distances": dict(graph_doc_distances),

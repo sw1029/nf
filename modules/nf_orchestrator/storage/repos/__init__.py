@@ -1,1 +1,5 @@
-﻿"""오케스트레이터 스토리지용 레포지토리 인터페이스."""
+﻿"""Orchestrator storage repository interfaces."""
+
+from . import kg_repo
+
+__all__ = ["kg_repo"]

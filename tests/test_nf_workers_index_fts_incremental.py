@@ -65,6 +65,27 @@ def _last_event_payload(conn, job_id: str) -> dict:
     return payload
 
 
+@pytest.fixture(autouse=True)
+def _skip_worker_lease_for_direct_handler_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner.WorkerContext, "_renew_owned_lease", lambda _self: None)
+
+    def _emit_without_lease(self, event):  # noqa: ANN001
+        if isinstance(event.payload, dict):
+            self._last_payload = dict(event.payload)
+        with db.connect(self._db_path) as conn:
+            runner.job_repo.add_job_event(
+                conn,
+                self.job_id,
+                event.level,
+                event.message,
+                progress=event.progress,
+                metrics=dict(event.metrics) if event.metrics else None,
+                payload=dict(event.payload) if event.payload else None,
+            )
+
+    monkeypatch.setattr(runner.WorkerContext, "emit", _emit_without_lease)
+
+
 @pytest.mark.unit
 def test_index_fts_uses_fts_meta_incremental_skip(tmp_path: Path) -> None:
     db_path = tmp_path / "orchestrator.db"
@@ -171,7 +192,7 @@ def test_index_fts_graph_extract_failure_is_isolated(tmp_path: Path, monkeypatch
     ctx = runner.WorkerContext(
         job_id=job_id,
         project_id=project_id,
-        payload={"scope": doc_id},
+        payload={"scope": "global"},
         params={"grouping": {"graph_extract": True}},
         db_path=db_path,
     )
@@ -186,3 +207,48 @@ def test_index_fts_graph_extract_failure_is_isolated(tmp_path: Path, monkeypatch
     warning = graph.get("warning")
     assert isinstance(warning, str)
     assert "graph exploded" in warning
+
+
+@pytest.mark.unit
+def test_index_fts_graph_extract_deferred_for_single_doc_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "첫 문장.\n둘째 문장."
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+
+    def _raise_if_called(_conn, _project_id):  # noqa: ANN001
+        raise AssertionError("single-doc graph materialization should be deferred")
+
+    monkeypatch.setattr(runner, "materialize_project_graph", _raise_if_called)
+
+    job_id = f"job-{uuid.uuid4()}"
+    ctx = runner.WorkerContext(
+        job_id=job_id,
+        project_id=project_id,
+        payload={"scope": doc_id},
+        params={"grouping": {"graph_extract": True}},
+        db_path=db_path,
+    )
+    runner._handle_index_fts(ctx)
+
+    with db.connect(db_path) as conn:
+        payload = _last_event_payload(conn, job_id)
+    graph_index = payload.get("graph_index")
+    assert graph_index == {
+        "deferred": True,
+        "reason": "non_global_scope",
+        "scope": doc_id,
+    }
+    assert payload["graph"]["index"] == graph_index
+    assert payload["graph"]["warning"] is None

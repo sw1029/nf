@@ -65,6 +65,27 @@ def _last_event_payload(conn, job_id: str) -> dict:
     return payload
 
 
+@pytest.fixture(autouse=True)
+def _skip_worker_lease_for_direct_handler_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner.WorkerContext, "_renew_owned_lease", lambda _self: None)
+
+    def _emit_without_lease(self, event):  # noqa: ANN001
+        if isinstance(event.payload, dict):
+            self._last_payload = dict(event.payload)
+        with db.connect(self._db_path) as conn:
+            runner.job_repo.add_job_event(
+                conn,
+                self.job_id,
+                event.level,
+                event.message,
+                progress=event.progress,
+                metrics=dict(event.metrics) if event.metrics else None,
+                payload=dict(event.payload) if event.payload else None,
+            )
+
+    monkeypatch.setattr(runner.WorkerContext, "emit", _emit_without_lease)
+
+
 @pytest.mark.unit
 def test_ingest_uses_incremental_skip_when_snapshot_unchanged(tmp_path: Path) -> None:
     db_path = tmp_path / "orchestrator.db"

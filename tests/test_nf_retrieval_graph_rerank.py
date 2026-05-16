@@ -307,3 +307,73 @@ def test_graph_rerank_can_seed_from_time_key_rel_phrase_without_filters(tmp_path
     assert isinstance(weights, dict)
     assert float(weights.get("doc-time", 0.0)) > 0.0
     assert reranked[0]["evidence"]["doc_id"] == "doc-time"
+
+
+@pytest.mark.unit
+def test_expand_candidate_docs_caps_graph_metadata_payload_with_provided_graph(tmp_path: Path) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-large"
+    doc_ids = [f"doc-{idx:04d}" for idx in range(350)]
+    graph = {
+        "project_id": project_id,
+        "entity_doc_ids": {"entity-ria": doc_ids},
+        "doc_entities": {doc_id: ["entity-ria"] for doc_id in doc_ids},
+        "entity_aliases": {"entity-ria": ["리아"]},
+        "time_doc_ids": {},
+        "timeline_doc_ids": {},
+        "doc_times": {},
+        "doc_timelines": {},
+        "entity_terms": {},
+    }
+
+    with db.connect(db_path) as conn:
+        candidates, meta = expand_candidate_docs_with_graph(
+            conn,
+            project_id=project_id,
+            query="리아는 연회에 참석했다",
+            filters={},
+            max_hops=2,
+            doc_cap=5,
+            graph=graph,
+        )
+
+    assert meta["applied"] is True
+    assert len(candidates) == 5
+    assert meta["graph_source"] == "provided"
+    assert int(meta["expanded_doc_count"]) == len(doc_ids)
+    assert int(meta["expanded_doc_sample_count"]) == 200
+    assert len(meta["expanded_docs"]) == 200
+    assert len(meta["doc_distances"]) == 200
+    assert int(meta["graph_payload_doc_count"]) == 200
+
+
+@pytest.mark.unit
+def test_expand_candidate_docs_seed_index_handles_short_alias_suffix(tmp_path: Path) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-short-alias"
+    graph = {
+        "project_id": project_id,
+        "entity_doc_ids": {"entity-ai": ["doc-ai"]},
+        "doc_entities": {"doc-ai": ["entity-ai"]},
+        "entity_aliases": {"entity-ai": ["AI"]},
+        "time_doc_ids": {},
+        "timeline_doc_ids": {},
+        "doc_times": {},
+        "doc_timelines": {},
+        "entity_terms": {},
+    }
+
+    with db.connect(db_path) as conn:
+        candidates, meta = expand_candidate_docs_with_graph(
+            conn,
+            project_id=project_id,
+            query="AI는 중앙 통제실에 도착했다",
+            filters={},
+            max_hops=1,
+            doc_cap=20,
+            graph=graph,
+        )
+
+    assert meta["applied"] is True
+    assert candidates == ["doc-ai"]
+    assert meta["seed_doc_weights"]["doc-ai"] > 0

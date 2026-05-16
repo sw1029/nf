@@ -29,10 +29,15 @@ from modules.nf_orchestrator.storage.repos import (
     ingest_meta_repo,
     ignore_repo,
     job_repo,
+    kg_repo,
     project_repo,
     schema_repo,
 )
-from modules.nf_retrieval.graph.materialized import materialize_project_graph
+from modules.nf_retrieval.graph.materialized import (
+    get_project_kg_source_state,
+    materialize_project_graph,
+    materialize_project_kg,
+)
 from modules.nf_retrieval.graph.rerank import rerank_results_with_graph
 from modules.nf_retrieval.fts.fts_index import fts_search, index_chunks
 from modules.nf_retrieval.vector.manifest import update_manifest, vector_search
@@ -1219,6 +1224,7 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
     anchors_created = 0
     timeline_events_created = 0
     graph_index_meta: dict[str, Any] | None = None
+    kg_build_meta: dict[str, Any] | None = None
     graph_warning: str | None = None
     grouping = ctx.params.get("grouping") if isinstance(ctx.params, dict) else None
     if not isinstance(grouping, dict):
@@ -1383,14 +1389,34 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                         )
                         anchors_created += 1
             conn.commit()
-        if graph_extract:
+        if graph_extract and scope != "global":
+            graph_index_meta = {
+                "deferred": True,
+                "reason": "non_global_scope",
+                "scope": scope,
+            }
+        elif graph_extract:
             ctx.heartbeat(force=True)
             try:
+                kg_build_meta = materialize_project_kg(
+                    conn,
+                    ctx.project_id,
+                    build_context={
+                        "source_refresh": {
+                            "entity_mentions": group_entities,
+                            "time_anchors": group_time,
+                            "timeline_doc_id": timeline_doc_id if isinstance(timeline_doc_id, str) else None,
+                        }
+                    },
+                )
                 graph_doc = materialize_project_graph(conn, ctx.project_id)
                 graph_index_meta = {
                     "nodes_entity": len(graph_doc.get("entity_doc_ids") or {}),
                     "nodes_time": len(graph_doc.get("time_doc_ids") or {}),
                     "nodes_timeline": len(graph_doc.get("timeline_doc_ids") or {}),
+                    "kg_build_id": graph_doc.get("kg_build_id"),
+                    "kg_node_counts": graph_doc.get("kg_node_counts") or {},
+                    "kg_edge_counts": graph_doc.get("kg_edge_counts") or {},
                 }
             except Exception as exc:  # noqa: BLE001
                 graph_warning = f"graph materialize skipped: {exc}"
@@ -1429,9 +1455,17 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
                 "timeline_events_created": timeline_events_created,
                 "graph_extract_enabled": graph_extract,
                 "graph_index": graph_index_meta,
+                "kg_build_id": (kg_build_meta or {}).get("build_id"),
+                "kg_source_health": (kg_build_meta or {}).get("source_health") or {},
+                "kg_node_counts": (kg_build_meta or {}).get("node_counts") or {},
+                "kg_edge_counts": (kg_build_meta or {}).get("edge_counts") or {},
                 "graph": {
                     "enabled": graph_extract,
                     "index": graph_index_meta,
+                    "kg_build_id": (kg_build_meta or {}).get("build_id"),
+                    "kg_source_health": (kg_build_meta or {}).get("source_health") or {},
+                    "kg_node_counts": (kg_build_meta or {}).get("node_counts") or {},
+                    "kg_edge_counts": (kg_build_meta or {}).get("edge_counts") or {},
                     "warning": graph_warning,
                 },
                 **_standard_metrics_payload(
@@ -1441,6 +1475,63 @@ def _handle_index_fts(ctx: WorkerContext) -> None:
             },
         )
     )
+
+
+def _consistency_graph_preflight_index_params(
+    params: dict[str, Any] | None,
+    *,
+    graph_mode: str,
+    metadata_grouping_enabled: bool,
+) -> dict[str, Any]:
+    index_params = dict(params) if isinstance(params, dict) else {}
+    grouping_raw = index_params.get("grouping")
+    grouping = dict(grouping_raw) if isinstance(grouping_raw, dict) else {}
+    consistency_raw = index_params.get("consistency")
+    consistency = consistency_raw if isinstance(consistency_raw, dict) else {}
+
+    if metadata_grouping_enabled or graph_mode in {"manual", "auto"}:
+        grouping["entity_mentions"] = True
+        grouping["time_anchors"] = True
+    if graph_mode in {"manual", "auto"}:
+        grouping["graph_extract"] = True
+
+    timeline_doc_id = grouping.get("timeline_doc_id")
+    if not isinstance(timeline_doc_id, str) or not timeline_doc_id.strip():
+        consistency_timeline_doc_id = consistency.get("timeline_doc_id")
+        if isinstance(consistency_timeline_doc_id, str) and consistency_timeline_doc_id.strip():
+            grouping["timeline_doc_id"] = consistency_timeline_doc_id.strip()
+
+    if grouping:
+        index_params["grouping"] = grouping
+    return index_params
+
+
+def _latest_kg_satisfies_graph_preflight(conn: sqlite3.Connection, project_id: str) -> bool:
+    latest = kg_repo.get_latest_project_kg_build(conn, project_id)
+    if latest is None:
+        return False
+    source_state = get_project_kg_source_state(conn, project_id)
+    if latest.get("source_checksum") != source_state.get("source_checksum"):
+        return False
+    stats = latest.get("stats") if isinstance(latest.get("stats"), dict) else {}
+    build_context = stats.get("build_context") if isinstance(stats.get("build_context"), dict) else {}
+    source_refresh = build_context.get("source_refresh") if isinstance(build_context.get("source_refresh"), dict) else {}
+    return source_refresh.get("entity_mentions") is True and source_refresh.get("time_anchors") is True
+
+
+def _attach_latest_kg_trace_stats(conn: sqlite3.Connection, project_id: str, req_stats: dict[str, Any]) -> None:
+    latest = kg_repo.get_latest_project_kg_build(conn, project_id)
+    if latest is None:
+        return
+    build_id = latest.get("build_id")
+    if isinstance(build_id, str) and build_id:
+        req_stats.setdefault("kg_build_id", build_id)
+    source_health = latest.get("source_health")
+    if isinstance(source_health, dict):
+        req_stats.setdefault("kg_source_health_snapshot", dict(source_health))
+        sparse_reason_counts = source_health.get("sparse_reason_counts")
+        if isinstance(sparse_reason_counts, dict):
+            req_stats.setdefault("kg_sparse_reason_counts", dict(sparse_reason_counts))
 
 
 def _run_consistency_preflight(
@@ -1459,12 +1550,15 @@ def _run_consistency_preflight(
 
     ingest_targets: list[tuple[str, str]] = []
     index_targets: list[str] = []
+    graph_global_refresh = False
+    preflight_doc_count = 0
 
     with db.connect(ctx._db_path) as conn:
         docs = document_repo.list_documents(conn, ctx.project_id)
         if not docs:
             fallback_doc = document_repo.get_document(conn, doc_id)
             docs = [fallback_doc] if fallback_doc is not None else []
+        preflight_doc_count = len([item for item in docs if item is not None])
         episodes = document_repo.list_episodes(conn, ctx.project_id)
         assignment_sig_cache: dict[str, str] = {}
 
@@ -1519,6 +1613,12 @@ def _run_consistency_preflight(
                 )
                 if needs_index:
                     index_targets.append(item.doc_id)
+        if ensure_index_fts and graph_mode in {"manual", "auto"}:
+            graph_global_refresh = (
+                bool(index_targets)
+                or bool(ingest_targets)
+                or not _latest_kg_satisfies_graph_preflight(conn, ctx.project_id)
+            )
 
     if ensure_index_fts and ingest_targets:
         existing = set(index_targets)
@@ -1560,20 +1660,37 @@ def _run_consistency_preflight(
                 level=JobEventLevel.INFO,
                 message="consistency preflight index_fts",
                 progress=None,
-                payload={"target_count": len(index_targets), "incremental": True},
+                payload={
+                    "target_count": len(index_targets),
+                    "incremental": True,
+                    "graph_global_refresh": graph_global_refresh,
+                    "graph_refresh_doc_count": preflight_doc_count if graph_global_refresh else 0,
+                },
             )
         )
+        if graph_global_refresh:
+            index_params = _consistency_graph_preflight_index_params(
+                ctx.params if isinstance(ctx.params, dict) else {},
+                graph_mode=graph_mode,
+                metadata_grouping_enabled=metadata_grouping_enabled,
+            )
+            _handle_index_fts(
+                WorkerContext(
+                    job_id=ctx.job_id,
+                    project_id=ctx.project_id,
+                    payload={"scope": "global"},
+                    params=index_params,
+                    db_path=ctx._db_path,
+                    lease_seconds=ctx._lease_seconds,
+                )
+            )
+            return
         for target_doc_id in index_targets:
-            index_params = dict(ctx.params) if isinstance(ctx.params, dict) else {}
-            grouping_raw = index_params.get("grouping")
-            grouping = dict(grouping_raw) if isinstance(grouping_raw, dict) else {}
-            if metadata_grouping_enabled:
-                grouping["entity_mentions"] = True
-                grouping["time_anchors"] = True
-            if graph_mode in {"manual", "auto"}:
-                grouping["graph_extract"] = True
-            if grouping:
-                index_params["grouping"] = grouping
+            index_params = _consistency_graph_preflight_index_params(
+                ctx.params if isinstance(ctx.params, dict) else {},
+                graph_mode=graph_mode,
+                metadata_grouping_enabled=metadata_grouping_enabled,
+            )
             _handle_index_fts(
                 WorkerContext(
                     job_id=ctx.job_id,
@@ -1741,6 +1858,9 @@ def _handle_consistency(ctx: WorkerContext) -> None:
     for attempt_idx in range(_CONSISTENCY_LOCK_RETRY_MAX_ATTEMPTS):
         req_stats = {}
         req["stats"] = req_stats
+        if str(req.get("graph_mode", "off")).strip().lower() in {"manual", "auto"}:
+            with db.connect(ctx._db_path) as conn:
+                _attach_latest_kg_trace_stats(conn, ctx.project_id, req_stats)
         try:
             verdicts = engine.run(req)
             last_lock_error = None
@@ -1817,6 +1937,32 @@ def _handle_consistency(ctx: WorkerContext) -> None:
                 "graph_expand_applied_count": int(req_stats.get("graph_expand_applied_count", 0)),
                 "graph_auto_trigger_count": int(req_stats.get("graph_auto_trigger_count", 0)),
                 "graph_auto_skip_count": int(req_stats.get("graph_auto_skip_count", 0)),
+                "kg_build_id": req_stats.get("kg_build_id"),
+                "kg_source_health_snapshot": dict(req_stats.get("kg_source_health_snapshot", {}))
+                if isinstance(req_stats.get("kg_source_health_snapshot"), dict)
+                else {},
+                "graph_auto_skip_reason_counts": dict(req_stats.get("graph_auto_skip_reason_counts", {}))
+                if isinstance(req_stats.get("graph_auto_skip_reason_counts"), dict)
+                else {},
+                "graph_expand_seed_source_counts": dict(req_stats.get("graph_expand_seed_source_counts", {}))
+                if isinstance(req_stats.get("graph_expand_seed_source_counts"), dict)
+                else {},
+                "graph_expand_slot_counts": dict(req_stats.get("graph_expand_slot_counts", {}))
+                if isinstance(req_stats.get("graph_expand_slot_counts"), dict)
+                else {},
+                "graph_refill_gain_total": int(req_stats.get("graph_refill_gain_total", 0)),
+                "graph_refill_gain_samples": list(req_stats.get("graph_refill_gain_samples", []))
+                if isinstance(req_stats.get("graph_refill_gain_samples"), list)
+                else [],
+                "graph_verdict_influence_counts": dict(req_stats.get("graph_verdict_influence_counts", {}))
+                if isinstance(req_stats.get("graph_verdict_influence_counts"), dict)
+                else {},
+                "graph_edge_type_counts": dict(req_stats.get("graph_edge_type_counts", {}))
+                if isinstance(req_stats.get("graph_edge_type_counts"), dict)
+                else {},
+                "kg_sparse_reason_counts": dict(req_stats.get("kg_sparse_reason_counts", {}))
+                if isinstance(req_stats.get("kg_sparse_reason_counts"), dict)
+                else {},
                 "metadata_grouping_enabled": bool(req_stats.get("metadata_grouping_enabled", False)),
                 "entity_unresolved_skip_count": int(req_stats.get("entity_unresolved_skip_count", 0)),
                 "numeric_conflict_unknown_count": int(req_stats.get("numeric_conflict_unknown_count", 0)),
@@ -1921,6 +2067,13 @@ def _handle_retrieve_vec(ctx: WorkerContext) -> None:
         "seed_docs": [],
         "expanded_docs": [],
         "boosted_results": 0,
+        "kg_build_id": None,
+        "kg_source_health_snapshot": {},
+        "seed_source_counts": {},
+        "skip_reason_counts": {"disabled": 1} if not graph_enabled else {},
+        "edge_type_counts": {},
+        "expanded_doc_total_count": 0,
+        "graph_payload_doc_count": 0,
     }
     if not isinstance(query, str):
         raise RuntimeError("query missing")

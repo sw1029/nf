@@ -171,6 +171,16 @@ def test_consistency_complete_payload_includes_unknown_reason_counts(
     assert "graph_expand_applied_count" in payload
     assert "graph_auto_trigger_count" in payload
     assert "graph_auto_skip_count" in payload
+    assert payload.get("kg_build_id") is None
+    assert payload.get("kg_source_health_snapshot") == {}
+    assert payload.get("graph_auto_skip_reason_counts") == {}
+    assert payload.get("graph_expand_seed_source_counts") == {}
+    assert payload.get("graph_expand_slot_counts") == {}
+    assert int(payload.get("graph_refill_gain_total", -1)) == 0
+    assert payload.get("graph_refill_gain_samples") == []
+    assert payload.get("graph_verdict_influence_counts") == {}
+    assert payload.get("graph_edge_type_counts") == {}
+    assert payload.get("kg_sparse_reason_counts") == {}
     assert "slot_candidate_count" in payload
     assert "slot_candidate_selected" in payload
     assert "avg_slot_confidence" in payload
@@ -461,7 +471,7 @@ def test_consistency_worker_retries_transient_sqlite_lock(
 
 
 @pytest.mark.unit
-def test_consistency_preflight_graph_mode_does_not_force_metadata_grouping(
+def test_consistency_preflight_graph_mode_enables_metadata_grouping_for_kg_sources(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -513,8 +523,79 @@ def test_consistency_preflight_graph_mode_does_not_force_metadata_grouping(
     grouping = captured_params[0].get("grouping")
     assert isinstance(grouping, dict)
     assert grouping.get("graph_extract") is True
-    assert grouping.get("entity_mentions") is not True
-    assert grouping.get("time_anchors") is not True
+    assert grouping.get("entity_mentions") is True
+    assert grouping.get("time_anchors") is True
+
+
+@pytest.mark.unit
+def test_consistency_preflight_graph_mode_refreshes_kg_when_fts_is_current(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    project_id = "project-1"
+    doc_id = "doc-1"
+    snapshot_id = "snap-1"
+    text = "그날 시로는 중앙 기록실에 있었다."
+
+    with db.connect(db_path) as conn:
+        _seed_document(
+            conn,
+            tmp_path=tmp_path,
+            project_id=project_id,
+            doc_id=doc_id,
+            snapshot_id=snapshot_id,
+            text=text,
+        )
+        job_id = _seed_running_consistency_job(conn, project_id=project_id)
+
+    runner._handle_index_fts(
+        runner.WorkerContext(
+            job_id=job_id,
+            project_id=project_id,
+            payload={"scope": doc_id},
+            params={},
+            db_path=db_path,
+        )
+    )
+
+    with db.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM kg_build WHERE project_id = ?", (project_id,)).fetchone()[0] == 0
+
+    def fake_run(_self, req):  # noqa: ANN001
+        stats = req.get("stats")
+        assert isinstance(stats, dict)
+        assert isinstance(stats.get("kg_build_id"), str)
+        assert stats.get("kg_source_health_snapshot", {}).get("timeline_available") is False
+        return []
+
+    monkeypatch.setattr("modules.nf_workers.runner.ConsistencyEngineImpl.run", fake_run)
+
+    ctx = runner.WorkerContext(
+        job_id=job_id,
+        project_id=project_id,
+        payload={
+            "input_doc_id": doc_id,
+            "input_snapshot_id": snapshot_id,
+            "range": {"start": 0, "end": len(text)},
+            "preflight": {
+                "ensure_ingest": False,
+                "ensure_index_fts": True,
+                "schema_scope": "latest_approved",
+            },
+        },
+        params={"consistency": {"graph_mode": "auto", "graph_expand_enabled": True}},
+        db_path=db_path,
+    )
+    runner._handle_consistency(ctx)
+
+    with db.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM kg_build WHERE project_id = ?", (project_id,)).fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM kg_node WHERE project_id = ?", (project_id,)).fetchone()[0] > 0
+        payload = _last_event_payload(conn, job_id)
+    assert isinstance(payload.get("kg_build_id"), str)
+    assert payload.get("kg_source_health_snapshot", {}).get("timeline_available") is False
+    assert payload.get("kg_sparse_reason_counts", {}).get("timeline_doc_id_missing") == 1
 
 
 @pytest.mark.unit

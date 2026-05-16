@@ -252,6 +252,61 @@ def test_db_initializer_sets_user_version_and_backfills_missing_columns(tmp_path
 
 
 @pytest.mark.unit
+def test_db_initializer_creates_kg_tables_and_indexes(tmp_path: Path) -> None:
+    db_path = tmp_path / "orchestrator.db"
+    with storage_db.connect(db_path) as conn:
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        tables = {
+            str(row["name"])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'kg_%'"
+            ).fetchall()
+        }
+        indexes = {
+            str(row["name"])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_kg_%'"
+            ).fetchall()
+        }
+        node_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(kg_node)").fetchall()}
+        edge_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(kg_edge)").fetchall()}
+
+    assert version >= 2
+    assert {"kg_build", "kg_node", "kg_edge"} <= tables
+    assert {
+        "idx_kg_build_project_built",
+        "idx_kg_node_lookup",
+        "idx_kg_edge_src",
+        "idx_kg_edge_dst",
+    } <= indexes
+    assert {
+        "node_id",
+        "project_id",
+        "build_id",
+        "node_type",
+        "source_table",
+        "source_id",
+        "label",
+        "payload_json",
+        "status",
+        "confidence",
+    } <= node_columns
+    assert {
+        "edge_id",
+        "project_id",
+        "build_id",
+        "src_node_id",
+        "dst_node_id",
+        "edge_type",
+        "source_table",
+        "source_id",
+        "payload_json",
+        "status",
+        "confidence",
+    } <= edge_columns
+
+
+@pytest.mark.unit
 def test_db_connect_applies_extended_busy_timeout(tmp_path: Path) -> None:
     db_path = tmp_path / "orchestrator.db"
     with storage_db.connect(db_path) as conn:
