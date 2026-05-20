@@ -202,6 +202,7 @@ function _setRightSidebarOpen(open) {
   const sb = document.getElementById("assistant-sidebar");
   if (!sb) return;
   sb.classList.toggle("is-open", open);
+  if (!open) sb.classList.remove("mobile-open");
   sb.setAttribute("aria-hidden", open ? "false" : "true");
   sb.inert = !open;
   _notifyLayoutDependents();
@@ -211,7 +212,13 @@ function openRightSidebar() {
   _setRightSidebarOpen(true);
 }
 
-function closeRightSidebar() {
+function closeRightSidebar(event) {
+  if (event && typeof event.preventDefault === "function") {
+    event.preventDefault();
+  }
+  if (event && typeof event.stopPropagation === "function") {
+    event.stopPropagation();
+  }
   _setRightSidebarOpen(false);
 }
 

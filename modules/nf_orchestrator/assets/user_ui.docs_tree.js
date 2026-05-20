@@ -280,7 +280,190 @@ function cancelDocDialog() {
   closeDocDialog(docDialogMode === "confirm" ? false : null);
 }
 
+function _escapeDocTreeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function _getExistingGroupNames() {
+  return Array.from(
+    new Set(
+      Object.values(state.docs)
+        .filter((doc) => doc && doc.type === "EPISODE")
+        .map((doc) =>
+          doc.metadata && typeof doc.metadata.group === "string"
+            ? doc.metadata.group.trim()
+            : "",
+        )
+        .filter((name) => name && name !== "미분류"),
+    ),
+  ).sort((left, right) => left.localeCompare(right, "ko"));
+}
+
+function _populateDocMetaGroupSelect(currentGroup) {
+  const select = document.getElementById("doc-meta-group-select");
+  if (!select) return;
+  select.innerHTML = "";
+
+  const ungrouped = document.createElement("option");
+  ungrouped.value = "__ungrouped__";
+  ungrouped.textContent = "미분류";
+  select.appendChild(ungrouped);
+
+  _getExistingGroupNames().forEach((groupName) => {
+    const option = document.createElement("option");
+    option.value = groupName;
+    option.textContent = groupName;
+    select.appendChild(option);
+  });
+
+  const custom = document.createElement("option");
+  custom.value = "__custom__";
+  custom.textContent = "새 챕터 만들기...";
+  select.appendChild(custom);
+
+  const normalizedCurrent = String(currentGroup || "").trim();
+  const values = Array.from(select.options).map((option) => option.value);
+  select.value =
+    normalizedCurrent && values.includes(normalizedCurrent)
+      ? normalizedCurrent
+      : normalizedCurrent
+        ? "__custom__"
+        : "__ungrouped__";
+}
+
+function handleDocMetaGroupSelectChange() {
+  const select = document.getElementById("doc-meta-group-select");
+  const input = document.getElementById("doc-meta-group-input");
+  if (!select || !input) return;
+  const isCustom = select.value === "__custom__";
+  input.disabled = !isCustom;
+  input.placeholder = isCustom
+    ? "새 챕터 이름"
+    : "기존 챕터를 선택한 상태입니다";
+  if (!isCustom) input.value = "";
+  else requestAnimationFrame(() => input.focus());
+}
+
+function openDocMetaDialog(docId) {
+  closeMobileLeftSidebarIfOpen();
+  const doc = state.docs[docId];
+  const overlay = document.getElementById("doc-meta-dialog");
+  const docIdInput = document.getElementById("doc-meta-dialog-doc-id");
+  const message = document.getElementById("doc-meta-dialog-message");
+  const groupInput = document.getElementById("doc-meta-group-input");
+  const episodeInput = document.getElementById("doc-meta-episode-input");
+  if (!doc || !overlay || !docIdInput || !message || !groupInput || !episodeInput) return;
+
+  const currentGroup =
+    doc.metadata && typeof doc.metadata.group === "string"
+      ? doc.metadata.group.trim()
+      : "";
+  const currentEpisode = doc.metadata?.episode_no;
+
+  docIdInput.value = docId;
+  message.innerText = `"${doc.title || "제목 없음"}"의 챕터와 회차 번호를 한 번에 정리합니다.`;
+  _populateDocMetaGroupSelect(currentGroup);
+  groupInput.value =
+    currentGroup &&
+    document.getElementById("doc-meta-group-select")?.value === "__custom__"
+      ? currentGroup
+      : "";
+  episodeInput.value =
+    currentEpisode === null || currentEpisode === undefined
+      ? ""
+      : String(currentEpisode);
+  handleDocMetaGroupSelectChange();
+
+  overlay.classList.add("active");
+  overlay.setAttribute("aria-hidden", "false");
+  requestAnimationFrame(() => {
+    const select = document.getElementById("doc-meta-group-select");
+    if (select) select.focus();
+  });
+}
+
+function cancelDocMetaDialog() {
+  const overlay = document.getElementById("doc-meta-dialog");
+  if (!overlay) return;
+  overlay.classList.remove("active");
+  overlay.setAttribute("aria-hidden", "true");
+}
+
+async function submitDocMetaDialog(event) {
+  if (event) event.preventDefault();
+  const docId = document.getElementById("doc-meta-dialog-doc-id")?.value || "";
+  const doc = state.docs[docId];
+  if (!doc) return;
+
+  const selectValue = document.getElementById("doc-meta-group-select")?.value || "__ungrouped__";
+  const customGroup = document.getElementById("doc-meta-group-input")?.value.trim() || "";
+  const group =
+    selectValue === "__custom__"
+      ? customGroup
+      : selectValue === "__ungrouped__"
+        ? ""
+        : selectValue;
+
+  const episodeRaw = document.getElementById("doc-meta-episode-input")?.value.trim() || "";
+  let episodeNo = null;
+  if (episodeRaw !== "") {
+    episodeNo = Number.parseInt(episodeRaw, 10);
+    if (!Number.isInteger(episodeNo) || episodeNo < 0) {
+      alert("회차 번호는 0 이상의 숫자로 입력해주세요.");
+      return;
+    }
+  }
+
+  if (selectValue === "__custom__" && !group) {
+    alert("새 챕터 이름을 입력하거나 기존 챕터를 선택해주세요.");
+    return;
+  }
+
+  showLoading("챕터/회차 저장 중...");
+  try {
+    const nextMeta = {
+      ...(doc.metadata || {}),
+      group,
+      episode_no: episodeNo,
+    };
+    const res = await api(`/projects/${state.projectId}/documents/${docId}`, "PATCH", {
+      metadata: {
+        group,
+        episode_no: episodeNo,
+      },
+    });
+    const updatedMeta = res?.document?.metadata || nextMeta;
+    state.docs[docId].metadata = {
+      ...nextMeta,
+      ...updatedMeta,
+    };
+    cancelDocMetaDialog();
+    if (state.currentNavTab === "TIMELINE") renderTimelineView();
+    else renderDocList();
+    showSuccess("챕터/회차가 저장되었습니다.");
+  } catch (error) {
+    alert("챕터/회차 저장에 실패했습니다.");
+    console.error(error);
+  } finally {
+    hideLoading();
+  }
+}
+
 document.addEventListener("keydown", (event) => {
+  const metaOverlay = document.getElementById("doc-meta-dialog");
+  if (metaOverlay && metaOverlay.classList.contains("active")) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelDocMetaDialog();
+    }
+    return;
+  }
+
   const overlay = document.getElementById("doc-action-dialog");
   if (!overlay || !overlay.classList.contains("active")) return;
   if (event.key === "Escape") {
@@ -751,9 +934,12 @@ function renderDocTree() {
     const groupDocs = groups[gName];
     // Sort docs by metadata.order -> metadata.episode_no -> created_at
     groupDocs.sort((a, b) => {
-      const ordA = (a.metadata && a.metadata.order) || 9999;
-      const ordB = (b.metadata && b.metadata.order) || 9999;
+      const ordA = _numericMetaValue(a.metadata?.order) ?? 9999;
+      const ordB = _numericMetaValue(b.metadata?.order) ?? 9999;
       if (ordA !== ordB) return ordA - ordB;
+      const episodeA = _numericMetaValue(a.metadata?.episode_no) ?? 9999;
+      const episodeB = _numericMetaValue(b.metadata?.episode_no) ?? 9999;
+      if (episodeA !== episodeB) return episodeA - episodeB;
       return new Date(a.created_at) - new Date(b.created_at);
     });
 
@@ -762,11 +948,17 @@ function renderDocTree() {
     details.style.marginBottom = "10px";
 
     const summary = document.createElement("summary");
-    summary.style.cursor = "pointer";
-    summary.style.fontWeight = "bold";
-    summary.style.padding = "5px";
-    summary.style.color = "#34495e";
-    summary.innerText = gName;
+    summary.className = "chapter-summary";
+    summary.innerHTML = `
+      <span class="chapter-summary-title">
+        <i data-lucide="folder" style="width:15px; height:15px;"></i>
+        <span>${_escapeDocTreeHtml(gName)}</span>
+        <span class="chapter-count">${groupDocs.length}</span>
+      </span>
+      <button type="button" class="chapter-action-btn" title="챕터 이름 변경" onclick="openGroupCtxMenu(event, decodeURIComponent('${encodeURIComponent(gName)}'))">
+        <i data-lucide="pencil" style="width:14px; height:14px;"></i>
+      </button>
+    `;
     // Context menu for Group
     summary.oncontextmenu = (e) => openGroupCtxMenu(e, gName);
 
@@ -778,9 +970,9 @@ function renderDocTree() {
     groupDocs.forEach((doc) => {
       const item = document.createElement("div");
       item.className =
-        "list-item" +
+        "list-item doc-tree-item" +
         (state.currentDocId === doc.doc_id ? " active" : "");
-      item.style.padding = "8px 10px";
+      item.dataset.docId = doc.doc_id;
 
       // Drag & Drop Attributes
       item.draggable = true;
@@ -788,23 +980,29 @@ function renderDocTree() {
       item.ondragover = (e) => handleDragOver(e);
       item.ondrop = (e) => handleDropOnItem(e, doc.doc_id, gName);
 
-      // Label construction: "N화 제목" 또는 "제목"
-      let label = doc.title;
-      if (doc.metadata && doc.metadata.episode_no) {
-        label = `<span style="color:#e67e22; font-weight:bold; margin-right:5px;">${doc.metadata.episode_no}화</span> ${doc.title}`;
-      }
+      const episodeNo = _numericMetaValue(doc.metadata?.episode_no);
+      const episodeLabel = episodeNo === null ? "회차 없음" : `${episodeNo}화`;
+      const chapterLabel =
+        doc.metadata && doc.metadata.group ? doc.metadata.group : "미분류";
+      const episodeClass = episodeNo === null ? "episode-chip muted" : "episode-chip";
 
       item.innerHTML = `
-          <div style="width:100%; display:flex; justify-content:space-between; align-items:center;">
-                  <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; pointer-events:none;">${label}</span>
-                  <div class="menu-btn" onclick="openDocCtxMenu(event, '${doc.doc_id}')">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <circle cx="12" cy="12" r="1"></circle>
-                      <circle cx="12" cy="5" r="1"></circle>
-                      <circle cx="12" cy="19" r="1"></circle>
-                    </svg>
-                  </div>
-              </div >
+          <div class="doc-tree-main">
+            <div class="doc-tree-title-row">
+              <span class="${episodeClass}">${_escapeDocTreeHtml(episodeLabel)}</span>
+              <span class="doc-tree-title">${_escapeDocTreeHtml(doc.title)}</span>
+            </div>
+            <div class="doc-tree-meta">${_escapeDocTreeHtml(chapterLabel)} · ${_escapeDocTreeHtml(doc.type || "EPISODE")}</div>
+          </div>
+          <div class="doc-tree-actions">
+            <button type="button" class="doc-meta-btn" title="챕터/회차 변경" onclick="openDocMetaDialog('${doc.doc_id}'); event.stopPropagation();">
+              <i data-lucide="list-ordered" style="width:14px; height:14px;"></i>
+              <span>챕터/회차</span>
+            </button>
+            <button type="button" class="menu-btn" title="문서 메뉴" onclick="openDocCtxMenu(event, '${doc.doc_id}')">
+              <i data-lucide="more-vertical" style="width:18px; height:18px;"></i>
+            </button>
+          </div>
           `;
       item.onclick = (e) => {
         loadDoc(doc.doc_id); // openDocCtxMenu stops propagation, so this is safe
@@ -1044,8 +1242,7 @@ function openDocCtxMenu(e, docId) {
 
   const options = [
     { label: "이름 변경", action: () => promptRenameDoc(docId) },
-    { label: "챕터 이동", action: () => promptMoveGroup(docId) },
-    { label: "회차 번호 설정", action: () => promptEpisodeNo(docId) },
+    { label: "챕터/회차 변경", action: () => openDocMetaDialog(docId) },
     {
       label: "삭제",
       action: () => confirmDeleteDoc(docId),
@@ -1086,47 +1283,11 @@ async function promptRenameDoc(docId) {
 }
 
 async function promptMoveGroup(docId) {
-  const doc = state.docs[docId];
-  const currentGroup = (doc.metadata && doc.metadata.group) || "";
-  const newGroup = await showDocDialog({
-    title: "챕터 이동",
-    message: "이동할 챕터 이름을 입력하세요. 비워 두면 '미분류'로 표시됩니다.",
-    value: currentGroup,
-  });
-  if (newGroup !== null) {
-    const meta = doc.metadata || {};
-    meta.group = newGroup;
-    api(`/projects/${state.projectId}/documents/${docId}`, "PATCH", {
-      metadata: meta,
-    }).then(() => {
-      state.docs[docId].metadata = meta; // local update
-      refreshDocList();
-    });
-  }
+  openDocMetaDialog(docId);
 }
 
 async function promptEpisodeNo(docId) {
-  const doc = state.docs[docId];
-  const currentNo = (doc.metadata && doc.metadata.episode_no) || "";
-  const num = await showDocDialog({
-    title: "회차 번호 설정",
-    message: "회차 번호를 숫자로 입력하세요.",
-    value: currentNo,
-    inputMode: "numeric",
-  });
-  if (num !== null) {
-    const intNum = parseInt(num, 10);
-    if (isNaN(intNum)) return alert("유효한 숫자를 입력해주세요.");
-
-    const meta = doc.metadata || {};
-    meta.episode_no = intNum;
-    api(`/projects/${state.projectId}/documents/${docId}`, "PATCH", {
-      metadata: meta,
-    }).then(() => {
-      state.docs[docId].metadata = meta;
-      refreshDocList();
-    });
-  }
+  openDocMetaDialog(docId);
 }
 
 async function confirmDeleteDoc(docId) {

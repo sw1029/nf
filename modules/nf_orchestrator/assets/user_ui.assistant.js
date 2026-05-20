@@ -1,4 +1,32 @@
 ﻿// --- Assistant ---
+function _assistantEmptyTitle(mode) {
+  if (mode === "SEARCH") return "검색어를 입력하고 실행하세요";
+  if (mode === "PROPOSE") return "다듬을 방향을 선택하세요";
+  return "점검 옵션을 고르고 실행하세요";
+}
+
+function _assistantEmptyCopy(mode) {
+  if (mode === "SEARCH") {
+    return "작품 기억에서 관련 문서와 근거를 찾아 여기에 정리합니다.";
+  }
+  if (mode === "PROPOSE") {
+    return "선택 문장이나 현재 문서를 기준으로 제안을 만듭니다.";
+  }
+  return "설정 충돌과 확인 필요 항목을 결과 카드로 보여줍니다.";
+}
+
+function _setAssistantEmptyState(mode) {
+  const contentPanel = document.getElementById("assistant-content");
+  if (!contentPanel) return;
+  contentPanel.innerHTML = `
+    <div class="assistant-empty-state">
+      <i data-lucide="sparkles" style="width:22px; height:22px;"></i>
+      <strong>${_assistantEmptyTitle(mode)}</strong>
+      <span>${_assistantEmptyCopy(mode)}</span>
+    </div>
+  `;
+}
+
 function switchAssistTab(eventOrMode, maybeMode) {
   const mode =
     typeof eventOrMode === "string" ? eventOrMode : String(maybeMode || "");
@@ -25,15 +53,17 @@ function switchAssistTab(eventOrMode, maybeMode) {
   state.assistantMode = mode;
 
   const btn = document.getElementById("assist-action-btn");
-  if (mode === "CHECK") btn.innerText = "오류 점검하기";
-  if (mode === "SEARCH") btn.innerText = "기억 검색하기";
-  if (mode === "PROPOSE") btn.innerText = "현재 문단 다듬기 제안받기";
+  if (mode === "CHECK") btn.innerText = "점검 시작";
+  if (mode === "SEARCH") btn.innerText = "검색 실행";
+  if (mode === "PROPOSE") btn.innerText = "문장 다듬기";
 
   document.querySelectorAll(".assist-panel-content").forEach(el => {
     el.style.display = 'none';
   });
   const activePanel = document.getElementById(`assist-panel-${mode}`);
   if (activePanel) activePanel.style.display = 'block';
+  _setAssistantEmptyState(mode);
+  if (typeof updateIcons === "function") updateIcons();
 }
 
 // --- API Helper for Jobs ---
@@ -458,6 +488,59 @@ function verdictLabel(verdict) {
   return "사실 확인 필요";
 }
 
+function _assistantLoading(message, detail = "") {
+  const safeDetail = detail
+    ? `<span>${escapeHtml(detail)}</span>`
+    : "";
+  return `
+    <div class="assistant-loading-state">
+      <img src="/assets/img.gif" width="30" alt="loading">
+      <strong>${escapeHtml(message)}</strong>
+      ${safeDetail}
+    </div>
+  `;
+}
+
+function _assistantMessage(title, message = "") {
+  const safeMessage = message
+    ? `<span>${escapeHtml(message)}</span>`
+    : "";
+  return `
+    <div class="assistant-message-state">
+      <i data-lucide="info" style="width:22px; height:22px;"></i>
+      <strong>${escapeHtml(title)}</strong>
+      ${safeMessage}
+    </div>
+  `;
+}
+
+function _readAssistantSearchQuery() {
+  const input = document.getElementById("assistant-search-query");
+  const value =
+    input && typeof input.value === "string"
+      ? input.value.trim()
+      : "";
+  if (value) return value;
+  const editor = document.getElementById("editor");
+  const editorText = typeof getEditorText === "function"
+    ? getEditorText()
+    : (editor?.innerText || "");
+  return editorText.substring(0, 500) || "내용 없음";
+}
+
+function _assistantDocAllowedBySearchScope(docId) {
+  const includeEpisodes =
+    document.getElementById("assistant-search-episodes")?.checked !== false;
+  const includeSettings =
+    document.getElementById("assistant-search-settings")?.checked !== false;
+  if (!includeEpisodes && !includeSettings) return false;
+  const doc = docId ? state.docs[docId] : null;
+  if (!doc) return true;
+  if (doc.type === "EPISODE") return includeEpisodes;
+  if (["SETTING", "CHAR", "PLOT", "NOTE"].includes(doc.type)) return includeSettings;
+  return includeEpisodes || includeSettings;
+}
+
 async function runAssistantAction() {
   if (!state.currentDocId) return alert("문서를 먼저 여세요");
 
@@ -465,15 +548,17 @@ async function runAssistantAction() {
   const contentPanel = document.getElementById("assistant-content");
 
   if (mode === "SEARCH") {
-    contentPanel.innerHTML =
-      '<div style="text-align:center; padding:20px; color:#666;"><img src="/assets/img.gif" width="30"> 관련 내용을 검색 중입니다...</div>';
+    const query = _readAssistantSearchQuery();
+    if (!_assistantDocAllowedBySearchScope(state.currentDocId)) {
+      contentPanel.innerHTML = _assistantMessage(
+        "검색 범위를 선택해주세요",
+        "본문 또는 설정/구상 중 하나 이상을 포함해야 합니다.",
+      );
+      if (typeof updateIcons === "function") updateIcons();
+      return;
+    }
+    contentPanel.innerHTML = _assistantLoading("관련 내용을 검색 중입니다", query);
     try {
-      const editor = document.getElementById("editor");
-      const editorText = typeof getEditorText === "function"
-        ? getEditorText()
-        : (editor?.innerText || "");
-      const query = editorText.substring(0, 500) || "내용 없음"; // Contextual search
-
       // Try Sync Retrieval (FTS)
       const res = await api("/query/retrieval", "POST", {
         project_id: state.projectId,
@@ -481,15 +566,27 @@ async function runAssistantAction() {
         k: 5,
       });
 
-      if (!res.results || res.results.length === 0) {
-        contentPanel.innerHTML =
-          '<div style="padding:20px; text-align:center;">관련된 내용을 찾지 못했습니다.</div>';
+      const scopedResults = (Array.isArray(res.results) ? res.results : []).filter((r) => {
+        const evidence =
+          r && typeof r === "object" && typeof r.evidence === "object"
+            ? r.evidence
+            : {};
+        const docId = evidence.doc_id || r.doc_id || "";
+        return _assistantDocAllowedBySearchScope(docId);
+      });
+
+      if (scopedResults.length === 0) {
+        contentPanel.innerHTML = _assistantMessage(
+          "관련 내용을 찾지 못했습니다",
+          "검색어를 조금 더 구체적으로 바꾸거나 검색 범위를 넓혀보세요.",
+        );
+        if (typeof updateIcons === "function") updateIcons();
         return;
       }
 
       let html =
-        '<div style="padding:10px;"><strong>검색 결과</strong></div>';
-      res.results.forEach((r) => {
+        `<div class="assistant-result-header">검색 결과 ${scopedResults.length}건</div>`;
+      scopedResults.forEach((r) => {
         const evidence =
           r && typeof r === "object" && typeof r.evidence === "object"
             ? r.evidence
@@ -503,13 +600,11 @@ async function runAssistantAction() {
             : docId || "문서";
         const score = Number(r.score || 0);
         html += `
-                    <div class="analysis-card info" style="cursor:pointer;" data-doc-id="${escapeHtml(docId)}">
-                        <div style="font-weight:600; font-size:0.9rem;">${escapeHtml(title)}</div>
-                        <div style="font-size:0.8rem; color:#666; margin-top:5px;">
-                            ${escapeHtml(snippet)}
-                        </div>
-                        <div style="font-size:0.75rem; color:#999; margin-top:5px;">점수: ${Number.isFinite(score) ? score.toFixed(3) : "-"}</div>
-                    </div>
+          <div class="assistant-result-card clickable" data-doc-id="${escapeHtml(docId)}">
+            <div class="assistant-result-title">${escapeHtml(title)}</div>
+            <div class="assistant-result-body">${escapeHtml(snippet)}</div>
+            <div class="assistant-result-meta">관련도 ${Number.isFinite(score) ? score.toFixed(3) : "-"}</div>
+          </div>
                 `;
       });
       contentPanel.innerHTML = html;
@@ -521,14 +616,17 @@ async function runAssistantAction() {
       });
     } catch (e) {
       console.error(e);
-      contentPanel.innerHTML = `<div style="text-align:center; padding:20px; color:red;">검색 실패<br>${e.message}</div>`;
+      contentPanel.innerHTML = _assistantMessage("검색에 실패했습니다", e.message);
+      if (typeof updateIcons === "function") updateIcons();
     }
     return;
   }
 
   if (mode === "PROPOSE") {
-    contentPanel.innerHTML =
-      '<div style="text-align:center; padding:20px;"><img src="/assets/img.gif" width="30" alt="loading"><br>문장 제안을 생성 중입니다...</div>';
+    contentPanel.innerHTML = _assistantLoading(
+      "문장 제안을 생성 중입니다",
+      "선택 문장이 있으면 해당 부분을 우선 다듬습니다.",
+    );
     try {
       const editor = document.getElementById("editor");
       const selectedText = window.getSelection
@@ -539,8 +637,11 @@ async function runAssistantAction() {
         : (editor?.innerText || "");
       const sourceText = (selectedText || editorText || "").trim();
       if (!sourceText) {
-        contentPanel.innerHTML =
-          '<div style="padding:20px; text-align:center;">제안할 문장이 없습니다.</div>';
+        contentPanel.innerHTML = _assistantMessage(
+          "제안할 문장이 없습니다",
+          "본문을 작성하거나 다듬을 문장을 선택해주세요.",
+        );
+        if (typeof updateIcons === "function") updateIcons();
         return;
       }
 
@@ -585,19 +686,22 @@ async function runAssistantAction() {
         ? result.citations
         : [];
       if (!suggestedText) {
-        contentPanel.innerHTML =
-          '<div style="padding:20px; text-align:center;">제안 결과가 비어 있습니다.</div>';
+        contentPanel.innerHTML = _assistantMessage(
+          "제안 결과가 비어 있습니다",
+          "문장을 조금 더 길게 선택한 뒤 다시 시도해보세요.",
+        );
+        if (typeof updateIcons === "function") updateIcons();
         return;
       }
 
       let html = `
-              <div class="analysis-card info">
-                <div style="font-weight:700; margin-bottom:8px;">제안 결과</div>
-                <div style="white-space:pre-wrap; line-height:1.6;">${escapeHtml(suggestedText)}</div>
+              <div class="assistant-result-card">
+                <div class="assistant-result-title">제안 결과</div>
+                <div class="assistant-result-body" style="white-space:pre-wrap;">${escapeHtml(suggestedText)}</div>
               </div>
             `;
       if (citations.length > 0) {
-        html += `<div class="analysis-card" style="margin-top:10px;"><div style="font-weight:600; margin-bottom:6px;">근거</div>`;
+        html += `<div class="assistant-result-card"><div class="assistant-result-title">참고 근거</div>`;
         citations.slice(0, 5).forEach((citation) => {
           const docId = citation?.doc_id || "";
           const title =
@@ -606,9 +710,9 @@ async function runAssistantAction() {
               : docId || "문서";
           const snippet = citation?.snippet_text || "";
           html += `
-                  <div style="padding:8px 0; border-top:1px dashed #e2e8f0;">
-                    <div style="font-size:0.82rem; font-weight:600;">${escapeHtml(title)}</div>
-                    <div style="font-size:0.8rem; color:#64748b; margin-top:4px;">${escapeHtml(snippet)}</div>
+                  <div style="padding:9px 0; border-top:1px solid #edf2f7;">
+                    <div class="assistant-result-meta" style="margin-top:0;">${escapeHtml(title)}</div>
+                    <div class="assistant-result-body">${escapeHtml(snippet)}</div>
                   </div>
                 `;
         });
@@ -617,14 +721,15 @@ async function runAssistantAction() {
       contentPanel.innerHTML = html;
     } catch (e) {
       console.error(e);
-      contentPanel.innerHTML = `<div style="color:red; padding:20px;">제안 생성 실패: ${e.message}</div>`;
+      contentPanel.innerHTML = _assistantMessage("제안 생성에 실패했습니다", e.message);
+      if (typeof updateIcons === "function") updateIcons();
     }
     return;
   }
 
   // CHECK Mode
   contentPanel.innerHTML =
-    '<div style="text-align:center; padding:20px;"><img src="/assets/img.gif" width="40" alt="loading"><br>AI가 분석 중입니다... <span id="check-progress">0%</span></div>';
+    '<div class="assistant-loading-state"><img src="/assets/img.gif" width="34" alt="loading"><strong>문서를 점검 중입니다</strong><span id="check-progress">0%</span></div>';
 
   try {
     // 1. Submit Job
@@ -681,7 +786,8 @@ async function runAssistantAction() {
     showSuccess("점검이 완료되었습니다.");
   } catch (e) {
     console.error(e);
-    contentPanel.innerHTML = `<div style="color:red; padding:20px;">분석 실패: ${e.message}</div>`;
+    contentPanel.innerHTML = _assistantMessage("점검에 실패했습니다", e.message);
+    if (typeof updateIcons === "function") updateIcons();
   }
 }
 
@@ -697,15 +803,16 @@ function renderVerdicts(verdicts, options = {}) {
   if (visible.length === 0) {
     clearInlineVerdictHighlights();
     contentPanel.innerHTML = showOk
-      ? '<div style="padding:20px; text-align:center;">정합성 판정 결과가 없습니다.</div>'
-      : '<div style="padding:20px; text-align:center;">충돌 또는 확인 필요 항목이 없습니다.</div>';
+      ? _assistantMessage("판정 결과가 없습니다", "점검 대상 문장이 충분한지 확인해주세요.")
+      : _assistantMessage("확인 필요 항목이 없습니다", "현재 기준에서는 충돌이나 모호한 부분을 찾지 못했습니다.");
+    if (typeof updateIcons === "function") updateIcons();
     return;
   }
 
   let html = "";
   if (options && options.background) {
     html +=
-      '<div style="padding:8px 10px; font-size:0.8rem; color:#64748b;">백그라운드 점검으로 변경 구간 결과가 갱신되었습니다.</div>';
+      '<div class="assistant-result-header">변경 구간 점검 결과</div>';
   }
   visible.forEach((v, idx) => {
     const verdict = String(v.verdict || "UNKNOWN");

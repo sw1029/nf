@@ -11,7 +11,7 @@
     href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Noto+Serif+KR:wght@300;400;600&display=swap"
     rel="stylesheet" />
   <script src="https://unpkg.com/lucide@latest"></script>
-  <link rel="stylesheet" href="/assets/user_ui.styles.css?v=20260505-toolbar-dock3" />
+  <link rel="stylesheet" href="/assets/user_ui.styles.css?v=20260520-assistant-scroll" />
 
 </head>
 
@@ -188,7 +188,7 @@
                 font-weight: 600;
                 margin-left: 10px;
               ">유형</span>
-          <input id="doc-title-input" class="doc-title-input" placeholder="제목을 입력하세요" oninput="handleInput()"
+          <input id="doc-title-input" class="doc-title-input" placeholder="제목을 입력하세요" oninput="handleInput(event)"
             onclick="this.select()" />
         </div>
 
@@ -322,6 +322,33 @@
         </form>
       </div>
 
+      <!-- Chapter / Episode Metadata Dialog -->
+      <div id="doc-meta-dialog" class="overlay" aria-hidden="true">
+        <form class="modal doc-meta-modal" onsubmit="submitDocMetaDialog(event)">
+          <h3 style="margin-top: 0">챕터 / 회차 변경</h3>
+          <p id="doc-meta-dialog-message" class="doc-action-dialog-message"></p>
+          <input id="doc-meta-dialog-doc-id" type="hidden" />
+          <label class="doc-meta-field">
+            <span>챕터</span>
+            <select id="doc-meta-group-select" class="doc-meta-select" onchange="handleDocMetaGroupSelectChange()"></select>
+          </label>
+          <label class="doc-meta-field">
+            <span>새 챕터 이름</span>
+            <input id="doc-meta-group-input" class="doc-action-dialog-input" placeholder="새 챕터 이름을 입력하거나 비워두세요" />
+          </label>
+          <label class="doc-meta-field">
+            <span>회차 번호</span>
+            <input id="doc-meta-episode-input" class="doc-action-dialog-input" type="text" pattern="[0-9]*"
+              inputmode="numeric" placeholder="예: 1, 2, 12 / 비우면 표시하지 않음" />
+          </label>
+          <div class="doc-meta-hint">기존 챕터를 선택하거나 새 이름을 입력하세요. 0은 프롤로그처럼 번호가 필요한 예외 회차에 사용할 수 있습니다.</div>
+          <div class="doc-action-dialog-actions">
+            <button class="btn btn-secondary" type="button" onclick="cancelDocMetaDialog()">취소</button>
+            <button class="btn btn-primary" type="submit">저장</button>
+          </div>
+        </form>
+      </div>
+
       <!-- Editor Toolbar -->
       <div id="editor-toolbar" class="editor-toolbar" aria-hidden="true" inert>
         <button onclick="execCmd('bold')" title="굵게"><i data-lucide="bold"
@@ -417,7 +444,8 @@
     <aside class="sidebar right" id="assistant-sidebar" aria-hidden="true" inert>
       <div class="sidebar-header" style="justify-content: space-between; align-items: center; display: flex;">
         <div class="sidebar-title">작가 도우미</div>
-        <button class="btn btn-icon" onclick="closeRightSidebar()" title="닫기" style="padding: 4px; margin-left: auto;">
+        <button class="btn btn-icon assistant-close-btn" type="button" onclick="closeRightSidebar(event)"
+          aria-label="작가 도우미 닫기" title="작가 도우미 닫기">
           <i data-lucide="x" style="width:18px; height:18px; color: #64748b;"></i>
         </button>
       </div>
@@ -434,95 +462,104 @@
         </button>
       </div>
 
-      <div style="padding: 15px; border-bottom: 1px solid #eee">
-        <button id="assist-action-btn" class="btn btn-primary" style="width: 100%" onclick="runAssistantAction()">오류
-          점검하기</button>
+      <div class="assistant-control-panel">
+        <button id="assist-action-btn" class="btn btn-primary assistant-primary-action" onclick="runAssistantAction()">
+          점검 시작
+        </button>
 
         <!-- CHECK: 설정 정합성 점검 옵션 -->
         <div id="assist-panel-CHECK" class="assist-panel-content" style="display: block;">
-          <label style="display: block; margin-top: 8px; font-size: 0.8rem; color: #64748b; cursor: pointer;">
-            <input id="toggle-show-ok" type="checkbox" style="margin-right: 6px" />
-            문제가 없는(OK) 단락도 함께 보기
+          <div class="assistant-panel-intro">
+            <div class="assistant-panel-title">설정 충돌 점검</div>
+            <div class="assistant-panel-copy">현재 문서를 작품 설정과 비교해 확인이 필요한 부분만 먼저 보여줍니다.</div>
+          </div>
+          <label class="assistant-toggle-row">
+            <input id="toggle-show-ok" type="checkbox" />
+            <span>문제없는 단락도 함께 보기</span>
           </label>
           <details class="assistant-advanced" open>
-            <summary>⚙️ 검토 옵션 (프리셋 선택형)</summary>
-            <div class="check-mode-group" style="margin-top: 10px" id="consistency-level-group">
+            <summary>점검 강도</summary>
+            <div class="check-mode-group" id="consistency-level-group">
               <label class="check-mode-label"><input type="radio" name="consistency-level" value="quick" checked />
-                <div><strong style="color: #16a34a">🟢 가볍게 (추천)</strong><br /><span class="desc">이름, 나이, 시간 등 명시적 충돌
-                    위주</span></div>
+                <div><strong>빠른 점검</strong><span class="desc">이름, 나이, 시간처럼 명시적인 충돌 위주</span></div>
               </label>
               <label class="check-mode-label"><input type="radio" name="consistency-level" value="deep" />
-                <div><strong style="color: #2563eb">🔵 꼼꼼하게</strong><br /><span class="desc">심리나 간접적인 떡밥 모순까지 추론</span>
+                <div><strong>정밀 점검</strong><span class="desc">간접 단서와 앞뒤 맥락까지 함께 확인</span>
                 </div>
               </label>
               <label class="check-mode-label"><input type="radio" name="consistency-level" value="strict" />
-                <div><strong style="color: #9333ea">🟣 매우 꼼꼼하게 (심층 검증)</strong><br /><span class="desc">정확하지만 1~3분 이상
-                    소요될 수 있습니다.</span></div>
+                <div><strong>심층 점검</strong><span class="desc">가장 보수적으로 검토하며 시간이 더 걸릴 수 있음</span></div>
               </label>
             </div>
-            <div style="margin-top: 6px; font-size: 0.75rem; color: #64748b;">
-              선택한 레벨에 맞춰 내부 검증 파라미터가 자동으로 적용됩니다.
+            <div class="assistant-helper-text">
+              선택한 강도에 맞춰 검색 범위와 검증 파라미터가 자동 조정됩니다.
             </div>
-            <div id="intensity-warning"
-              style="display: none; margin-top: 8px; padding: 10px; background: #fef08a; border-left: 3px solid #eab308; border-radius: 4px; font-size: 0.75rem; color: #854d0e; transition: opacity 0.3s ease-in-out;">
-              <b style="display:block; margin-bottom: 2px;">⏳ 잠깐! 주의해주세요.</b>
-              이 옵션은 심층 교차 분석을 수행하므로 정합성 체크에 다소 시간이 소요될 수 있습니다. 작업은 백그라운드에서 안전하게 진행되므로 글쓰기를 계속하셔도 됩니다.
+            <div id="intensity-warning" class="assistant-warning">
+              <b>심층 점검은 시간이 더 필요합니다.</b>
+              백그라운드에서 진행되므로 글쓰기는 계속할 수 있습니다.
             </div>
-            <div style="margin-top: 15px; border-top: 1px dashed #cbd5e1; padding-top: 10px;">
-              <span class="tooltip" title="입력하지 않으면 문서 전체를 대상으로 점검합니다."
-                style="font-size: 0.8rem; font-weight: bold; color: #475569; display: flex; align-items: center; gap: 4px; cursor: help;">🎯
-                집중 점검 대상을 정해볼까요? (선택) <i
-                  style="background: #e2e8f0; color: #475569; border-radius: 50%; width: 14px; height: 14px; display: inline-flex; justify-content: center; align-items: center; font-size: 10px; font-style: normal;">?</i></span>
-              <div class="row" style="margin-top: 8px"><input id="consistency-filter-entity" type="text"
-                  placeholder="특정 인물이나 장소 (예: 김철수, 숲)" /></div>
-              <div class="row"><input id="consistency-filter-time" type="text" placeholder="특정 시점이나 사건 (예: 프롤로그)" />
+            <div class="assistant-filter-box">
+              <div class="assistant-section-label">집중 점검 대상</div>
+              <div class="row"><input id="consistency-filter-entity" type="text"
+                  placeholder="인물/장소 예: 김철수, 숲" /></div>
+              <div class="row"><input id="consistency-filter-time" type="text" placeholder="시점/사건 예: 프롤로그" />
               </div>
               <div class="row"><input id="consistency-filter-timeline" type="number" min="0" step="1"
-                  placeholder="타임라인 인덱스 번호 (예: 12)" /></div>
+                  placeholder="타임라인 번호 예: 12" /></div>
             </div>
           </details>
         </div>
 
         <!-- SEARCH: 기억 검색 옵션 -->
         <div id="assist-panel-SEARCH" class="assist-panel-content" style="display: none;">
-          <div style="margin-top:10px;">
-            <div class="row" style="margin-top: 8px"><input type="text" placeholder="검색어를 입력하세요..."
-                style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:6px;" /></div>
+          <div class="assistant-panel-intro">
+            <div class="assistant-panel-title">작품 기억 검색</div>
+            <div class="assistant-panel-copy">키워드를 입력하면 설정, 회차, 메모에서 관련 근거를 찾아옵니다.</div>
           </div>
-          <details class="assistant-advanced">
-            <summary>⚙️ 검색 범위 설정</summary>
-            <label style="display: block; margin-top: 8px; font-size: 0.8rem; color: #64748b;"><input type="checkbox"
-                checked style="margin-right: 6px" /> 에피소드 본문 포함</label>
-            <label style="display: block; margin-top: 4px; font-size: 0.8rem; color: #64748b;"><input type="checkbox"
-                checked style="margin-right: 6px" /> 설정 문서 포함</label>
+          <div class="assistant-search-box">
+            <i data-lucide="search" style="width:15px; height:15px;"></i>
+            <input id="assistant-search-query" type="text" placeholder="검색어 입력 예: 황녀의 귀환, 숲, 복선" />
+          </div>
+          <details class="assistant-advanced" open>
+            <summary>검색 범위</summary>
+            <label class="assistant-toggle-row"><input id="assistant-search-episodes" type="checkbox" checked />
+              <span>본문 포함</span></label>
+            <label class="assistant-toggle-row"><input id="assistant-search-settings" type="checkbox" checked />
+              <span>설정/구상 포함</span></label>
           </details>
         </div>
 
         <!-- PROPOSE: 문장 교정 옵션 -->
         <div id="assist-panel-PROPOSE" class="assist-panel-content" style="display: none;">
-          <div style="margin-top: 10px;">
-            <span style="font-size: 0.85rem; font-weight: bold; color: #475569">어떤 방향으로 다듬어드릴까요?</span>
-            <div class="check-mode-group" style="margin-top: 8px">
-              <label class="check-mode-label" style="padding: 8px 10px;"><input type="radio" name="propose-level"
+          <div class="assistant-panel-intro">
+            <div class="assistant-panel-title">문장 다듬기</div>
+            <div class="assistant-panel-copy">선택한 문장이나 현재 문서를 기준으로 원하는 톤의 제안을 만듭니다.</div>
+          </div>
+          <div>
+            <div class="assistant-section-label">다듬기 방향</div>
+            <div class="check-mode-group">
+              <label class="check-mode-label compact"><input type="radio" name="propose-level"
                   value="spell" checked />
-                <div><strong>단순 맞춤법/오탈자 교정</strong></div>
+                <div><strong>맞춤법 중심</strong><span class="desc">오탈자와 어색한 조사만 가볍게 정리</span></div>
               </label>
-              <label class="check-mode-label" style="padding: 8px 10px;"><input type="radio" name="propose-level"
+              <label class="check-mode-label compact"><input type="radio" name="propose-level"
                   value="smooth" />
-                <div><strong>매끄러운 윤문 (자연스럽게)</strong></div>
+                <div><strong>자연스럽게 윤문</strong><span class="desc">문장 흐름과 호흡을 부드럽게 조정</span></div>
               </label>
-              <label class="check-mode-label" style="padding: 8px 10px;"><input type="radio" name="propose-level"
+              <label class="check-mode-label compact"><input type="radio" name="propose-level"
                   value="dramatic" />
-                <div><strong>더 극적인 표사로 분위기 변경</strong></div>
+                <div><strong>분위기 강화</strong><span class="desc">장면의 긴장감과 표현 밀도를 높임</span></div>
               </label>
             </div>
           </div>
         </div>
       </div>
 
-      <div id="assistant-content" class="list-container">
-        <div style="text-align: center; color: #aaa; margin-top: 50px">
-          도우미가 대기 중입니다.
+      <div id="assistant-content" class="list-container assistant-results">
+        <div class="assistant-empty-state">
+          <i data-lucide="sparkles" style="width:22px; height:22px;"></i>
+          <strong>도우미가 대기 중입니다</strong>
+          <span>위 옵션을 고른 뒤 실행하면 결과가 여기에 정리됩니다.</span>
         </div>
       </div>
     </aside>
@@ -570,13 +607,13 @@
     </div>
   </div>
 
-  <script src="/assets/user_ui.state.js?v=20260505-toolbar-dock3"></script>
-  <script src="/assets/user_ui.api.js?v=20260505-toolbar-dock3"></script>
-  <script src="/assets/user_ui.editor.js?v=20260505-toolbar-dock3"></script>
-  <script src="/assets/user_ui.docs_tree.js?v=20260505-toolbar-dock3"></script>
-  <script src="/assets/user_ui.assistant.js?v=20260505-toolbar-dock3"></script>
-  <script src="/assets/user_ui.jobs.js?v=20260505-toolbar-dock3"></script>
-  <script src="/assets/user_ui.bootstrap.js?v=20260505-toolbar-dock3"></script>
+  <script src="/assets/user_ui.state.js?v=20260520-assistant-polish"></script>
+  <script src="/assets/user_ui.api.js?v=20260520-assistant-close"></script>
+  <script src="/assets/user_ui.editor.js?v=20260520-assistant-polish"></script>
+  <script src="/assets/user_ui.docs_tree.js?v=20260520-assistant-polish"></script>
+  <script src="/assets/user_ui.assistant.js?v=20260520-assistant-polish"></script>
+  <script src="/assets/user_ui.jobs.js?v=20260520-assistant-polish"></script>
+  <script src="/assets/user_ui.bootstrap.js?v=20260520-assistant-polish"></script>
 
 </body>
 

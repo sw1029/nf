@@ -150,7 +150,9 @@ def test_user_ui_assets_and_inline_handler_exports_exist() -> None:
         "window.closeExportModal",
         "window.closeLeftSidebar",
         "window.cancelDocDialog",
+        "window.cancelDocMetaDialog",
         "window.createNewDoc",
+        "window.handleDocMetaGroupSelectChange",
         "window.handleInput",
         "window.handleTimelineDrop",
         "window.handleTimelinePointerDown",
@@ -158,6 +160,8 @@ def test_user_ui_assets_and_inline_handler_exports_exist() -> None:
         "window.moveTimelineDocToPosition",
         "window.runAssistantAction",
         "window.submitDocDialog",
+        "window.submitDocMetaDialog",
+        "window.openDocMetaDialog",
         "window.toggleJobsPanel",
     ):
         assert handler in bootstrap
@@ -200,9 +204,14 @@ def test_user_ui_memo_metadata_anchor_contract() -> None:
 def test_user_ui_has_composition_handler_binding() -> None:
     bundle = _user_ui_bundle_text()
     assert "function handleComposition(active)" in bundle
+    assert "function _isCompositionEvent(event)" in bundle
+    assert "event?.keyCode === 229" in bundle
+    assert "if (_isCompositionEvent(event)) return;" in bundle
+    assert "pendingRepaginateAfterComposition = true;" in bundle
     assert 'editorHost.addEventListener(' in bundle
     assert '"compositionstart"' in bundle
     assert '"compositionend"' in bundle
+    assert '"compositioncancel"' in bundle
 
 
 @pytest.mark.unit
@@ -258,7 +267,9 @@ def test_user_ui_sidebar_and_tab_handlers_use_explicit_event_and_open_close_cont
     assert "switchNavTab(event, 'EPISODE')" in html
     assert "switchAssistTab(event, 'CHECK')" in html
     assert 'onclick="openRightSidebar()"' in html
-    assert 'onclick="closeRightSidebar()"' in html
+    assert 'onclick="closeRightSidebar(event)"' in html
+    assert 'aria-label="작가 도우미 닫기"' in html
+    assert "assistant-close-btn" in html
     assert 'id="assistant-sidebar" aria-hidden="true" inert' in html
     assert "function switchNavTab(eventOrType, maybeType)" in docs_tree
     assert "function switchAssistTab(eventOrMode, maybeMode)" in assistant
@@ -267,8 +278,47 @@ def test_user_ui_sidebar_and_tab_handlers_use_explicit_event_and_open_close_cont
     assert "sb.setAttribute(\"aria-hidden\", open ? \"false\" : \"true\")" in api
     assert "sb.inert = !open;" in api
     assert "function openRightSidebar()" in api
-    assert "function closeRightSidebar()" in api
+    assert "function closeRightSidebar(event)" in api
+    assert 'sb.classList.remove("mobile-open")' in api
+    assert 'event.stopPropagation()' in api
     assert 'if (event.key !== "Escape") return;' in api
+
+
+@pytest.mark.unit
+def test_user_ui_assistant_panel_has_modern_control_contracts() -> None:
+    html = _user_ui_html_text()
+    css = Path("modules/nf_orchestrator/assets/user_ui.styles.css").read_text(encoding="utf-8")
+    assistant = Path("modules/nf_orchestrator/assets/user_ui.assistant.js").read_text(encoding="utf-8")
+
+    assert "assistant-control-panel" in html
+    assert "assistant-panel-intro" in html
+    assert "assistant-search-query" in html
+    assert "assistant-search-episodes" in html
+    assert "assistant-search-settings" in html
+    assert '<details class="assistant-advanced" open>' in html
+    assert "맞춤법 중심" in html
+    assert "분위기 강화" in html
+    assert "표사" not in html
+    assert ".assistant-control-panel" in css
+    assert ".assistant-result-card" in css
+    assert ".assistant-empty-state" in css
+    assert "overscroll-behavior: contain" in css
+    assert "#assistant-sidebar .assistant-control-panel" in css
+    assert "#assistant-sidebar .assistant-results" in css
+    assert "overflow: visible" in css
+    assert "z-index: 35" in css
+    assert "min-height: 44px" in css
+    assert '.assistant-toggle-row input[type="checkbox"]' in css
+    assert '.check-mode-label input[type="radio"]' in css
+    assert "min-width: 22px" in css
+    assert ".check-mode-label:has(input:checked)" in css
+    assert "function _setAssistantEmptyState(mode)" in assistant
+    assert "검색어를 입력하고 실행하세요" in assistant
+    assert "다듬을 방향을 선택하세요" in assistant
+    assert "function _readAssistantSearchQuery()" in assistant
+    assert "function _assistantDocAllowedBySearchScope(docId)" in assistant
+    assert "검색 실행" in assistant
+    assert "문장 다듬기" in assistant
 
 
 @pytest.mark.unit
@@ -299,8 +349,13 @@ def test_user_ui_mobile_doc_selection_closes_sidebar_and_caps_timeline_render() 
     assert "await showDocDialog({" in docs_tree
     assert "title: \"새 챕터\"" in docs_tree
     assert "title: \"이름 변경\"" in docs_tree
-    assert "title: \"챕터 이동\"" in docs_tree
-    assert "title: \"회차 번호 설정\"" in docs_tree
+    assert "챕터/회차 변경" in docs_tree
+    assert "function openDocMetaDialog(docId)" in docs_tree
+    assert "function submitDocMetaDialog(event)" in docs_tree
+    assert "doc-meta-group-select" in html
+    assert "doc-meta-episode-input" in html
+    assert "doc-meta-btn" in css
+    assert "episode-chip" in css
     assert "title: \"챕터 이름 변경\"" in docs_tree
     assert "title: \"문서 삭제\"" in docs_tree
     assert "function closeMobileLeftSidebarIfOpen()" in docs_tree

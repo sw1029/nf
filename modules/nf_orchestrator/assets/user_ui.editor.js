@@ -561,6 +561,15 @@ function _insertPlainNewlineAtCaret() {
   return _insertTextAtSelection("\n");
 }
 
+function _isCompositionEvent(event) {
+  return Boolean(
+    state.isComposing ||
+    event?.isComposing ||
+    event?.keyCode === 229 ||
+    event?.which === 229,
+  );
+}
+
 function _handlePaste(event) {
   const page = event.target?.closest?.(".page-editor");
   if (!page) return;
@@ -593,6 +602,8 @@ function _scheduleFloatingPopoverReposition() {
 }
 
 function _handlePageBoundaryKeydown(event) {
+  if (_isCompositionEvent(event)) return;
+
   const page = event.target?.closest?.(".page-editor");
   if (!page || !_isCollapsedSelectionIn(page)) return;
 
@@ -1379,7 +1390,11 @@ document.addEventListener("DOMContentLoaded", () => {
       "input",
       (event) => {
         if (event.target?.classList?.contains("page-editor")) {
-          handleInput();
+          handleInput(event);
+          if (_isCompositionEvent(event)) {
+            pendingRepaginateAfterComposition = true;
+            return;
+          }
           _scheduleRepaginateFromDom();
         }
       },
@@ -1401,11 +1416,28 @@ document.addEventListener("DOMContentLoaded", () => {
       (event) => {
         if (!event.target?.classList?.contains("page-editor")) return;
         handleComposition(false);
+        const shouldRepaginate = pendingRepaginateAfterComposition;
+        pendingRepaginateAfterComposition = false;
+        requestAnimationFrame(() => {
+          handleInput();
+          if (shouldRepaginate) {
+            const requestId = ++paginationWorkerSeq;
+            void _repaginateFromDom(requestId);
+          } else {
+            _scheduleRepaginateFromDom();
+          }
+        });
+      },
+      true,
+    );
+
+    editorHost.addEventListener(
+      "compositioncancel",
+      (event) => {
+        if (!event.target?.classList?.contains("page-editor")) return;
+        handleComposition(false);
         if (pendingRepaginateAfterComposition) {
           pendingRepaginateAfterComposition = false;
-          const requestId = ++paginationWorkerSeq;
-          void _repaginateFromDom(requestId);
-        } else {
           _scheduleRepaginateFromDom();
         }
       },
@@ -1468,7 +1500,7 @@ function handleComposition(active) {
 }
 
 // --- Editor Input Handler ---
-function handleInput() {
+function handleInput(event = null) {
   state.isDirty = true;
   clearInlineVerdictHighlights();
   _setSaveStatus("저장되지 않음", "#e67e22");
@@ -1476,7 +1508,7 @@ function handleInput() {
   updateStatusBar();
   collectGarbageMemos();
 
-  if (!state.isComposing) {
+  if (!_isCompositionEvent(event)) {
     _scheduleSave(2000);
   }
 }
