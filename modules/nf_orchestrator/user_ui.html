@@ -11,7 +11,7 @@
     href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Noto+Serif+KR:wght@300;400;600&display=swap"
     rel="stylesheet" />
   <script src="https://unpkg.com/lucide@latest"></script>
-  <link rel="stylesheet" href="/assets/user_ui.styles.css?v=20260520-assistant-scroll" />
+  <link rel="stylesheet" href="/assets/user_ui.styles.css?v=20260612-graph-view-assistant" />
 
 </head>
 
@@ -120,6 +120,17 @@
         </button>
       </div>
 
+      <div class="sidebar-graph-view-entry">
+        <button id="graph-view-sidebar-btn" class="graph-view-entry-card" type="button" onclick="openGraphView()"
+          title="작품 관계도 보기">
+          <span class="graph-view-entry-icon"><i data-lucide="network" style="width:18px; height:18px;"></i></span>
+          <span>
+            <strong>관계도 보기</strong>
+            <small>인물, 장소, 사건을 한눈에 확인</small>
+          </span>
+        </button>
+      </div>
+
       <div id="doc-list" class="list-container">
         <!-- Rendered via JS -->
       </div>
@@ -210,6 +221,12 @@
             <i data-lucide="eye" style="width:14px; height:14px; margin-right:4px;"></i>
             <span class="text" id="consistency-status-text">상시 검토 중</span>
           </div>
+
+          <button id="graph-view-open-btn" class="btn btn-secondary graph-view-entry-btn" type="button"
+            onclick="openGraphView()" title="작품 관계도 보기">
+            <i data-lucide="network" style="width:16px; height:16px;"></i>
+            <span>관계도</span>
+          </button>
 
           <span id="save-status" style="
                 font-size: 0.8rem;
@@ -308,6 +325,112 @@
           </select>
         </div>
       </div>
+
+      <!-- Graph View Workspace -->
+      <section id="graph-view-panel" class="graph-view-panel" aria-hidden="true" inert>
+        <div class="graph-view-window-bar">
+          <div class="graph-view-title-group">
+            <div class="graph-view-mark"><i data-lucide="network" style="width:18px; height:18px;"></i></div>
+            <div>
+              <h2>작품 관계도</h2>
+              <p id="graph-view-source-status">프로젝트의 문서와 설정을 연결해 보여줍니다.</p>
+            </div>
+          </div>
+          <div class="graph-view-toolbar">
+            <div class="graph-view-mode-switch" aria-label="관계도 보기 방식">
+              <button type="button" class="active" data-graph-view-mode="2d">2D</button>
+              <button type="button" data-graph-view-mode="nd">묶음</button>
+              <button type="button" data-graph-view-mode="3d">입체</button>
+            </div>
+            <button id="graph-view-refresh" class="graph-view-icon-btn" type="button" title="관계도 새로고침">
+              <i data-lucide="refresh-cw" style="width:16px; height:16px;"></i>
+            </button>
+            <button class="graph-view-icon-btn" type="button" onclick="closeGraphView()" title="관계도 닫기">
+              <i data-lucide="x" style="width:18px; height:18px;"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="graph-view-body">
+          <aside class="graph-view-side-panel graph-view-filters">
+            <div class="graph-view-section-title">보기 조절</div>
+            <label class="graph-view-search">
+              <i data-lucide="search" style="width:15px; height:15px;"></i>
+              <input id="graph-view-search" type="search" placeholder="인물, 장소, 사건 검색" />
+            </label>
+
+            <div class="graph-view-control-row">
+              <div>
+                <strong>묶음 적용</strong>
+                <span>비슷한 요소끼리 모아 보기</span>
+              </div>
+              <button id="graph-view-cluster-toggle" class="graph-view-toggle" type="button" aria-pressed="false">
+                <span></span>
+              </button>
+            </div>
+
+            <label class="graph-view-range">
+              <span>묶음 간격</span>
+              <input id="graph-view-distance" type="range" min="70" max="190" value="128" />
+            </label>
+
+            <button id="graph-view-focus-current" class="btn btn-secondary graph-view-wide-btn" type="button">
+              <i data-lucide="crosshair" style="width:15px; height:15px;"></i>
+              현재 문서 찾기
+            </button>
+
+            <div class="graph-view-divider"></div>
+            <div class="graph-view-section-title">표시할 종류</div>
+            <div id="graph-view-type-list" class="graph-view-check-list"></div>
+
+            <div class="graph-view-divider"></div>
+            <div class="graph-view-section-title">묶음 기준</div>
+            <div id="graph-view-dimension-list" class="graph-view-check-list"></div>
+          </aside>
+
+          <section class="graph-view-canvas-panel">
+            <div class="graph-view-canvas-top">
+              <div class="graph-view-stats">
+                <span><strong id="graph-view-node-count">0</strong>개 요소</span>
+                <span><strong id="graph-view-edge-count">0</strong>개 연결</span>
+              </div>
+              <div class="graph-view-canvas-actions">
+                <button id="graph-view-reset" class="graph-view-small-btn" type="button">화면 맞춤</button>
+                <button id="graph-view-label-toggle" class="graph-view-small-btn active" type="button">이름 표시</button>
+              </div>
+            </div>
+            <div class="graph-view-canvas-shell">
+              <canvas id="graph-view-canvas"></canvas>
+              <div id="graph-view-empty" class="graph-view-empty">
+                <i data-lucide="network" style="width:34px; height:34px;"></i>
+                <strong>아직 보여줄 관계가 없습니다.</strong>
+                <span>프로젝트를 불러오거나 문서를 만들면 관계도가 자동으로 채워집니다.</span>
+              </div>
+            </div>
+            <div id="graph-view-help" class="graph-view-help">
+              드래그로 이동, 휠로 확대, 노드 클릭으로 문서와 설정 위치를 확인할 수 있습니다.
+            </div>
+          </section>
+
+          <aside class="graph-view-side-panel graph-view-inspector">
+            <div class="graph-view-section-title">선택한 요소</div>
+            <div id="graph-view-inspector-content" class="graph-view-inspector-content">
+              <div class="graph-view-inspector-empty">
+                그래프에서 인물, 장소, 사건, 문서를 클릭해보세요.
+              </div>
+            </div>
+            <div class="graph-view-route-box">
+              <div class="graph-view-section-title">이동</div>
+              <button id="graph-view-route-primary" class="btn btn-primary graph-view-wide-btn" type="button" disabled>
+                원문으로 이동
+              </button>
+              <button id="graph-view-route-secondary" class="btn btn-secondary graph-view-wide-btn" type="button" disabled>
+                목록에서 보기
+              </button>
+            </div>
+          </aside>
+        </div>
+      </section>
 
       <!-- Sidebar Action Dialog -->
       <div id="doc-action-dialog" class="overlay" aria-hidden="true">
@@ -607,13 +730,14 @@
     </div>
   </div>
 
-  <script src="/assets/user_ui.state.js?v=20260520-assistant-polish"></script>
-  <script src="/assets/user_ui.api.js?v=20260520-assistant-close"></script>
-  <script src="/assets/user_ui.editor.js?v=20260520-assistant-polish"></script>
-  <script src="/assets/user_ui.docs_tree.js?v=20260520-assistant-polish"></script>
-  <script src="/assets/user_ui.assistant.js?v=20260520-assistant-polish"></script>
-  <script src="/assets/user_ui.jobs.js?v=20260520-assistant-polish"></script>
-  <script src="/assets/user_ui.bootstrap.js?v=20260520-assistant-polish"></script>
+  <script src="/assets/user_ui.state.js?v=20260612-graph-view-assistant"></script>
+  <script src="/assets/user_ui.api.js?v=20260612-graph-view-assistant"></script>
+  <script src="/assets/user_ui.editor.js?v=20260612-graph-view-assistant"></script>
+  <script src="/assets/user_ui.docs_tree.js?v=20260612-graph-view-assistant"></script>
+  <script src="/assets/user_ui.assistant.js?v=20260612-graph-view-assistant"></script>
+  <script src="/assets/user_ui.jobs.js?v=20260612-graph-view-assistant"></script>
+  <script src="/assets/user_ui.graph_view.js?v=20260612-graph-view-assistant"></script>
+  <script src="/assets/user_ui.bootstrap.js?v=20260612-graph-view-assistant"></script>
 
 </body>
 

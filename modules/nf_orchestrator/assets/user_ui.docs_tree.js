@@ -132,6 +132,9 @@ async function refreshDocList() {
     });
     state.docs = docsMap;
     renderDocList();
+    if (typeof window.refreshGraphView === "function") {
+      void window.refreshGraphView();
+    }
   } catch (e) {
     list.innerHTML =
       '<div style="text-align:center; color:red;">로드 실패</div>';
@@ -1531,6 +1534,9 @@ async function loadDoc(did) {
     if (typeof renderMemos === "function") renderMemos();
 
     renderDocList();
+    if (typeof window.syncGraphViewSelection === "function") {
+      window.syncGraphViewSelection(did);
+    }
     closeMobileLeftSidebarIfOpen();
     // hideLoading();
   } catch (e) {
