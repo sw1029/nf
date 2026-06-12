@@ -53,6 +53,7 @@ def test_user_ui_export_formats_match_backend_contract() -> None:
     html = _user_ui_html_text()
     assert 'name="export-fmt" value="txt"' in html
     assert 'name="export-fmt" value="docx"' in html
+    assert 'name="export-fmt" value="nfstory"' in html
     assert 'name="export-fmt" value="json"' not in html
 
 

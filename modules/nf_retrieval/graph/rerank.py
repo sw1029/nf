@@ -110,7 +110,21 @@ def _matches_signal(query_norm: str, query_tokens: set[str], raw_signal: str) ->
     if signal in query_tokens:
         return True
     # For multi-token signals, require all tokens to be present.
-    return bool(signal_tokens) and all(token in query_tokens for token in signal_tokens)
+    if not signal_tokens:
+        return False
+
+    def token_present(signal_token: str) -> bool:
+        if signal_token in query_tokens:
+            return True
+        for token in query_tokens:
+            if not token.startswith(signal_token):
+                continue
+            suffix = token[len(signal_token) :]
+            if suffix in _SHORT_ALIAS_SUFFIXES:
+                return True
+        return False
+
+    return all(token_present(token) for token in signal_tokens)
 
 
 def _append_runtime_signal(
@@ -540,6 +554,9 @@ def _graph_trace_meta(
         "seed_source_counts": dict(seed_source_counts or {}),
         "skip_reason_counts": skip_reason_counts,
         "edge_type_counts": dict(edge_type_counts) if isinstance(edge_type_counts, dict) else {},
+        "external_graph_overlay": dict(graph.get("external_graph_overlay") or {})
+        if isinstance(graph.get("external_graph_overlay"), dict)
+        else {},
     }
     return out
 

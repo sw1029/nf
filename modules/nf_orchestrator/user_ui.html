@@ -11,7 +11,7 @@
     href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Noto+Serif+KR:wght@300;400;600&display=swap"
     rel="stylesheet" />
   <script src="https://unpkg.com/lucide@latest"></script>
-  <link rel="stylesheet" href="/assets/user_ui.styles.css?v=20260612-graph-view-assistant" />
+  <link rel="stylesheet" href="/assets/user_ui.styles.css?v=20260612-rubber-node-drag" />
 
 </head>
 
@@ -342,6 +342,9 @@
               <button type="button" data-graph-view-mode="nd">묶음</button>
               <button type="button" data-graph-view-mode="3d">입체</button>
             </div>
+            <button id="graph-view-external-toggle" class="graph-view-small-btn graph-view-external-toggle" type="button">
+              세계관 연결
+            </button>
             <button id="graph-view-refresh" class="graph-view-icon-btn" type="button" title="관계도 새로고침">
               <i data-lucide="refresh-cw" style="width:16px; height:16px;"></i>
             </button>
@@ -378,6 +381,9 @@
               <i data-lucide="crosshair" style="width:15px; height:15px;"></i>
               현재 문서 찾기
             </button>
+            <button id="graph-view-favorite-filter" class="btn btn-secondary graph-view-wide-btn" type="button">
+              즐겨찾기만 보기
+            </button>
 
             <div class="graph-view-divider"></div>
             <div class="graph-view-section-title">표시할 종류</div>
@@ -397,6 +403,10 @@
               <div class="graph-view-canvas-actions">
                 <button id="graph-view-reset" class="graph-view-small-btn" type="button">화면 맞춤</button>
                 <button id="graph-view-label-toggle" class="graph-view-small-btn active" type="button">이름 표시</button>
+                <button id="graph-view-cloud-toggle" class="graph-view-small-btn active" type="button">구름 표시</button>
+                <button id="graph-view-rotation-toggle" class="graph-view-small-btn graph-view-rotation-btn" type="button">
+                  회전 정지
+                </button>
               </div>
             </div>
             <div class="graph-view-canvas-shell">
@@ -408,7 +418,7 @@
               </div>
             </div>
             <div id="graph-view-help" class="graph-view-help">
-              드래그로 이동, 휠로 확대, 노드 클릭으로 문서와 설정 위치를 확인할 수 있습니다.
+              드래그로 이동, 휠로 확대, 요소 클릭으로 본문과 설정 위치를 확인할 수 있습니다.
             </div>
           </section>
 
@@ -422,7 +432,7 @@
             <div class="graph-view-route-box">
               <div class="graph-view-section-title">이동</div>
               <button id="graph-view-route-primary" class="btn btn-primary graph-view-wide-btn" type="button" disabled>
-                원문으로 이동
+                본문으로 이동
               </button>
               <button id="graph-view-route-secondary" class="btn btn-secondary graph-view-wide-btn" type="button" disabled>
                 목록에서 보기
@@ -430,6 +440,100 @@
             </div>
           </aside>
         </div>
+
+        <aside id="graph-view-external-drawer" class="graph-view-external-drawer" aria-hidden="true">
+          <div class="graph-view-drawer-head">
+            <div>
+              <div class="graph-view-section-title">세계관 연결</div>
+              <p>다른 작품의 관계도를 함께 보며, 필요한 요소만 현재 작품과 이어줍니다.</p>
+            </div>
+            <button id="graph-view-external-close" class="graph-view-icon-btn" type="button" title="세계관 연결 창 닫기">
+              <i data-lucide="x" style="width:16px; height:16px;"></i>
+            </button>
+          </div>
+
+          <div class="graph-view-drawer-section">
+            <div class="graph-view-section-title">불러오기</div>
+            <label class="graph-view-field">
+              <span>내 프로젝트에서 가져오기</span>
+              <select id="graph-view-external-project"></select>
+            </label>
+            <button id="graph-view-add-project-source" class="btn btn-secondary graph-view-wide-btn" type="button">
+              선택한 프로젝트 불러오기
+            </button>
+          </div>
+
+          <div class="graph-view-drawer-section">
+            <div class="graph-view-section-title">작품 정리 파일</div>
+            <label class="graph-view-field">
+              <span>작품 정리 파일 이름</span>
+              <input id="graph-view-dataset-label" type="text" placeholder="예: 검은 등대 정리" />
+            </label>
+            <label class="graph-view-field">
+              <span>비밀번호 (선택)</span>
+              <input id="graph-view-story-password" type="password" placeholder="비밀번호가 있는 파일만 입력" autocomplete="off" />
+            </label>
+            <label class="graph-view-file-pick">
+              <input id="graph-view-dataset-files" type="file" accept=".nfstory,.json" />
+              <span>작품 정리 파일 선택</span>
+            </label>
+            <button id="graph-view-import-dataset" class="btn btn-secondary graph-view-wide-btn" type="button">
+              정리 파일에서 불러오기
+            </button>
+            <button id="graph-view-export-story" class="btn btn-secondary graph-view-wide-btn" type="button">
+              현재 관계도 정리 파일로 저장
+            </button>
+          </div>
+
+          <div class="graph-view-drawer-section">
+            <div class="graph-view-section-title">연결된 작품</div>
+            <div id="graph-view-external-source-list" class="graph-view-external-list"></div>
+          </div>
+
+          <div class="graph-view-drawer-section">
+            <div class="graph-view-section-title">연결 편집</div>
+            <div class="graph-view-control-row graph-view-link-mode-row">
+              <div>
+                <strong>연결 만들기</strong>
+                <span>요소에서 요소로 드래그</span>
+              </div>
+              <button id="graph-view-link-mode-toggle" class="graph-view-toggle" type="button" aria-pressed="false">
+                <span></span>
+              </button>
+            </div>
+            <label class="graph-view-field">
+              <span>관계 종류</span>
+              <select id="graph-view-relation-type">
+                <option value="SAME_ENTITY">같은 인물/대상</option>
+                <option value="SAME_WORLD">같은 장소/세계관</option>
+                <option value="SIMILAR_EVENT">닮은 사건</option>
+                <option value="NARRATIVE_HINT">힌트/복선</option>
+                <option value="CONTRASTS_WITH">대비/충돌</option>
+                <option value="CUSTOM">직접 입력</option>
+              </select>
+            </label>
+            <label class="graph-view-field">
+              <span>직접 입력 이름</span>
+              <input id="graph-view-relation-custom-label" type="text" placeholder="예: 같은 비밀을 공유" />
+            </label>
+            <label class="graph-view-field">
+              <span>시작 요소</span>
+              <select id="graph-view-link-source-select"></select>
+            </label>
+            <label class="graph-view-field">
+              <span>대상 요소</span>
+              <select id="graph-view-link-target-select"></select>
+            </label>
+            <button id="graph-view-create-link" class="btn btn-primary graph-view-wide-btn" type="button">
+              선택한 요소 연결
+            </button>
+          </div>
+
+          <div class="graph-view-drawer-section">
+            <div class="graph-view-section-title">추가한 관계</div>
+            <div id="graph-view-link-list" class="graph-view-link-list"></div>
+          </div>
+        </aside>
       </section>
 
       <!-- Sidebar Action Dialog -->
@@ -721,7 +825,20 @@
             텍스트 (.txt)</label>
           <label style="cursor: pointer"><input type="radio" name="export-fmt" value="docx" /> 문서
             (.docx)</label>
+          <label style="cursor: pointer"><input type="radio" name="export-fmt" value="nfstory" /> 작품 정리 파일
+            (.nfstory)</label>
         </div>
+      </div>
+      <div id="story-export-options" class="form-group" style="margin-top: 14px">
+        <label>작품 정리 파일 범위</label>
+        <select id="story-export-kind" style="width: 100%; margin-top: 6px; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px;">
+          <option value="knowledge_graph" selected>관계도만</option>
+          <option value="document_text">현재 본문만</option>
+          <option value="project_archive">프로젝트 전체</option>
+        </select>
+        <label style="display: block; margin-top: 10px">비밀번호 (선택)</label>
+        <input id="story-export-password" type="password" placeholder="비워두면 파일 내용은 난독화만 됩니다" autocomplete="off"
+          style="width: 100%; margin-top: 6px; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px;" />
       </div>
       <div class="actions">
         <button onclick="closeExportModal()">취소</button>
@@ -733,10 +850,10 @@
   <script src="/assets/user_ui.state.js?v=20260612-graph-view-assistant"></script>
   <script src="/assets/user_ui.api.js?v=20260612-graph-view-assistant"></script>
   <script src="/assets/user_ui.editor.js?v=20260612-graph-view-assistant"></script>
-  <script src="/assets/user_ui.docs_tree.js?v=20260612-graph-view-assistant"></script>
+  <script src="/assets/user_ui.docs_tree.js?v=20260612-story-package"></script>
   <script src="/assets/user_ui.assistant.js?v=20260612-graph-view-assistant"></script>
   <script src="/assets/user_ui.jobs.js?v=20260612-graph-view-assistant"></script>
-  <script src="/assets/user_ui.graph_view.js?v=20260612-graph-view-assistant"></script>
+  <script src="/assets/user_ui.graph_view.js?v=20260612-story-package"></script>
   <script src="/assets/user_ui.bootstrap.js?v=20260612-graph-view-assistant"></script>
 
 </body>

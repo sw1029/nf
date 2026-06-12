@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable, Iterable, TypeVar
 
 DEFAULT_DB_PATH = Path(os.environ.get("NF_ORCH_DB_PATH", "nf_orchestrator.sqlite3"))
-_SCHEMA_USER_VERSION = 2
+_SCHEMA_USER_VERSION = 4
 _SQLITE_CONNECT_TIMEOUT_SEC = 30.0
 _SQLITE_BUSY_TIMEOUT_MS = 30000
 _SQLITE_LOCK_RETRY_ATTEMPTS = 4
@@ -479,6 +479,83 @@ def _apply_schema(conn: sqlite3.Connection) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS external_graph_source (
+            source_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            source_label TEXT NOT NULL,
+            linked_project_id TEXT,
+            schema_version TEXT NOT NULL,
+            adapter_version TEXT NOT NULL,
+            color TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            warnings_json TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS external_graph_node (
+            node_ref TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            native_id TEXT NOT NULL,
+            node_type TEXT NOT NULL,
+            label TEXT NOT NULL,
+            aliases_json TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            evidence_refs_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 1.0
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS external_graph_edge (
+            edge_ref TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            native_id TEXT NOT NULL,
+            src_node_ref TEXT NOT NULL,
+            dst_node_ref TEXT NOT NULL,
+            edge_type TEXT NOT NULL,
+            label TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            evidence_refs_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 1.0
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS external_graph_link (
+            link_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            src_node_ref TEXT NOT NULL,
+            dst_node_ref TEXT NOT NULL,
+            relation_type TEXT NOT NULL,
+            label TEXT NOT NULL,
+            note TEXT,
+            confidence REAL NOT NULL DEFAULT 0.75,
+            status TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS graph_favorite (
+            project_id TEXT NOT NULL,
+            node_ref TEXT NOT NULL,
+            node_kind TEXT NOT NULL,
+            source_id TEXT,
+            label_snapshot TEXT NOT NULL,
+            note TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (project_id, node_ref)
+        )
+        """,
+        """
         CREATE VIRTUAL TABLE IF NOT EXISTS fts_docs USING fts5(
             content,
             chunk_id UNINDEXED,
@@ -529,6 +606,14 @@ def _ensure_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_kg_node_lookup ON kg_node(project_id, build_id, node_type, source_table, source_id)",
         "CREATE INDEX IF NOT EXISTS idx_kg_edge_src ON kg_edge(project_id, build_id, src_node_id, edge_type)",
         "CREATE INDEX IF NOT EXISTS idx_kg_edge_dst ON kg_edge(project_id, build_id, dst_node_id, edge_type)",
+        "CREATE INDEX IF NOT EXISTS idx_external_graph_source_project ON external_graph_source(project_id, enabled, updated_at)",
+        "CREATE INDEX IF NOT EXISTS idx_external_graph_node_source ON external_graph_node(project_id, source_id, node_type)",
+        "CREATE INDEX IF NOT EXISTS idx_external_graph_edge_source ON external_graph_edge(project_id, source_id, src_node_ref, dst_node_ref)",
+        "CREATE INDEX IF NOT EXISTS idx_external_graph_link_project ON external_graph_link(project_id, source_id, status, updated_at)",
+        "CREATE INDEX IF NOT EXISTS idx_external_graph_link_src ON external_graph_link(project_id, src_node_ref, status)",
+        "CREATE INDEX IF NOT EXISTS idx_external_graph_link_dst ON external_graph_link(project_id, dst_node_ref, status)",
+        "CREATE INDEX IF NOT EXISTS idx_graph_favorite_project ON graph_favorite(project_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_graph_favorite_source ON graph_favorite(project_id, source_id)",
         "CREATE INDEX IF NOT EXISTS idx_whitelist_lookup ON whitelist_item(project_id, claim_fingerprint, scope)",
         "CREATE INDEX IF NOT EXISTS idx_whitelist_annotation_lookup ON whitelist_annotation(project_id, claim_fingerprint, scope, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_ignore_lookup ON ignore_item(project_id, claim_fingerprint, scope, kind)",

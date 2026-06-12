@@ -891,11 +891,11 @@ function renderFlatList() {
       "list-item" + (state.currentDocId === doc.doc_id ? " active" : "");
     item.onclick = () => loadDoc(doc.doc_id);
     item.innerHTML = `
-          < div >
-                   <div style="font-weight:600;">${doc.title}</div>
-                   <div class="meta">${new Date(doc.updated_at).toLocaleString()}</div>
-                </div >
-          <div style="font-size:0.8rem; background:#eee; padding:2px 6px; border-radius:4px;">${doc.type}</div>
+          <div>
+                   <div style="font-weight:600;">${_escapeDocTreeHtml(doc.title || "제목 없음")}</div>
+                   <div class="meta">${_escapeDocTreeHtml(new Date(doc.updated_at).toLocaleString())}</div>
+                </div>
+          <div style="font-size:0.8rem; background:#eee; padding:2px 6px; border-radius:4px;">${_escapeDocTreeHtml(doc.type || "")}</div>
         `;
     list.appendChild(item);
   });
@@ -1557,14 +1557,112 @@ function openExportModal() {
 function closeExportModal() {
   document.getElementById("export-modal").classList.remove("active");
 }
+
+function safeExportFilename(name, fallback = "story") {
+  return String(name || fallback)
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .replace(/\s+/g, "_")
+    .replace(/^_+|_+$/g, "") || fallback;
+}
+
+async function buildDocumentTextStoryPackage() {
+  if (!state.currentDocId) throw new Error("문서를 열어주세요");
+  const doc = state.docs[state.currentDocId] || {};
+  return {
+    format: "nf-story-package-v1",
+    content_kind: "document_text",
+    display_name: document.getElementById("doc-title-input")?.value || doc.title || "본문",
+    created_at: new Date().toISOString(),
+    payload_encoding: "json-v1",
+    security: { mode: "none" },
+    payload: {
+      document: {
+        doc_id: state.currentDocId,
+        title: document.getElementById("doc-title-input")?.value || doc.title || "본문",
+        type: doc.type || state.currentDocType,
+        metadata: doc.metadata || {},
+        content: typeof getEditorText === "function" ? getEditorText() : state.editorText || "",
+      },
+    },
+  };
+}
+
+async function buildProjectArchiveStoryPackage() {
+  if (!state.projectId) throw new Error("프로젝트를 불러와주세요");
+  const listRes = await api(`/projects/${state.projectId}/documents`);
+  const docs = Array.isArray(listRes.documents)
+    ? listRes.documents
+    : typeof listRes.documents === "object"
+      ? Object.values(listRes.documents)
+      : [];
+  const documents = [];
+  for (const doc of docs) {
+    if (!doc?.doc_id) continue;
+    const detail = await api(`/projects/${state.projectId}/documents/${doc.doc_id}`);
+    documents.push({
+      ...(detail.document || doc),
+      content: detail.document?.content || "",
+    });
+  }
+  return {
+    format: "nf-story-package-v1",
+    content_kind: "project_archive",
+    display_name: state.projectName || "프로젝트",
+    created_at: new Date().toISOString(),
+    payload_encoding: "json-v1",
+    security: { mode: "none" },
+    payload: {
+      project: {
+        project_id: state.projectId,
+        name: state.projectName || "프로젝트",
+      },
+      documents,
+    },
+  };
+}
+
+async function handleStoryPackageExport() {
+  if (!window.NFStoryPackage) throw new Error("작품 정리 파일 도구를 불러오지 못했습니다");
+  const kind = document.getElementById("story-export-kind")?.value || "knowledge_graph";
+  const password = document.getElementById("story-export-password")?.value || "";
+  let pkg;
+  let filenameBase = state.projectName || "story";
+  if (kind === "knowledge_graph") {
+    if (!state.projectId) throw new Error("프로젝트를 불러와주세요");
+    const res = await api(`/projects/${state.projectId}/graph/story-package`);
+    pkg = res.package;
+    filenameBase = (res.filename || filenameBase).replace(/\.[^.]+$/, "");
+  } else if (kind === "document_text") {
+    pkg = await buildDocumentTextStoryPackage();
+    filenameBase = pkg.display_name;
+  } else if (kind === "project_archive") {
+    pkg = await buildProjectArchiveStoryPackage();
+    filenameBase = pkg.display_name;
+  } else {
+    throw new Error("지원하지 않는 작품 정리 파일 범위입니다");
+  }
+  const protectedPackage = await window.NFStoryPackage.protect(pkg, password);
+  window.NFStoryPackage.download(`${safeExportFilename(filenameBase)}.nfstory`, protectedPackage);
+}
+
 async function handleJobExport() {
-  if (!state.currentDocId) return alert("문서를 열어주세요");
   const format = document.querySelector(
     'input[name="export-fmt"]:checked',
   ).value;
 
   showLoading("파일 준비 중...");
   try {
+    if (format === "nfstory") {
+      await handleStoryPackageExport();
+      hideLoading();
+      closeExportModal();
+      return;
+    }
+    if (!state.currentDocId) {
+      hideLoading();
+      return alert("문서를 열어주세요");
+    }
     const res = await api("/jobs", "POST", {
       type: "EXPORT",
       project_id: state.projectId,

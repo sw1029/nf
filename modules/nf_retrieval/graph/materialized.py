@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from modules.nf_orchestrator.storage.repos import kg_repo
+from modules.nf_orchestrator.storage.repos import external_graph_repo, kg_repo
 from modules.nf_retrieval.vector.shard_store import DEFAULT_VECTOR_PATH
 
 _WORD_BOUNDARY_RE = re.compile(r"[0-9A-Za-z\uac00-\ud7a3]+")
@@ -772,9 +772,172 @@ def _project_kg_to_graph(kg: dict[str, Any], project_id: str) -> dict[str, Any]:
     }
 
 
+def _signal_list_mapping_to_sets(value: Any) -> dict[str, dict[str, set[str]]]:
+    out = _empty_signal_doc_ids()
+    if not isinstance(value, dict):
+        return out
+    for kind in _SIGNAL_KINDS:
+        raw_kind = value.get(kind)
+        if not isinstance(raw_kind, dict):
+            continue
+        for signal, doc_ids in raw_kind.items():
+            normalized = _normalize_term(str(signal))
+            if not normalized:
+                continue
+            docs = {str(item) for item in doc_ids if isinstance(item, str) and item} if isinstance(doc_ids, list) else set()
+            if docs:
+                out.setdefault(kind, {}).setdefault(normalized, set()).update(docs)
+    return out
+
+
+def _token_index_list_mapping_to_sets(value: Any) -> dict[str, dict[str, set[str]]]:
+    out = _empty_signal_token_index()
+    if not isinstance(value, dict):
+        return out
+    for token, raw_bucket in value.items():
+        normalized_token = _normalize_term(str(token))
+        if not normalized_token or not isinstance(raw_bucket, dict):
+            continue
+        bucket = out.setdefault(normalized_token, {kind: set() for kind in _SIGNAL_KINDS})
+        for kind in _SIGNAL_KINDS:
+            signals = raw_bucket.get(kind)
+            if isinstance(signals, list):
+                bucket.setdefault(kind, set()).update(_normalize_term(str(signal)) for signal in signals if str(signal).strip())
+    return out
+
+
+def _signal_sets_to_lists(value: dict[str, dict[str, set[str]]]) -> dict[str, dict[str, list[str]]]:
+    return {
+        kind: {signal: sorted(docs) for signal, docs in signals.items() if docs}
+        for kind, signals in value.items()
+    }
+
+
+def _token_index_sets_to_lists(value: dict[str, dict[str, set[str]]]) -> dict[str, dict[str, list[str]]]:
+    return {
+        token: {kind: sorted(signals) for kind, signals in bucket.items() if signals}
+        for token, bucket in value.items()
+        if any(bucket.values())
+    }
+
+
+def _doc_ids_for_graph_node_ref(graph: dict[str, Any], node_ref: str) -> set[str]:
+    if not node_ref:
+        return set()
+    if node_ref.startswith("doc:"):
+        doc_id = node_ref.split(":", 1)[1]
+        return {doc_id} if doc_id else set()
+    if node_ref.startswith("entity:"):
+        entity_id = node_ref.split(":", 1)[1]
+        docs = graph.get("entity_doc_ids", {}).get(entity_id) if isinstance(graph.get("entity_doc_ids"), dict) else []
+        return {str(item) for item in docs if isinstance(item, str) and item}
+    if node_ref.startswith("time:"):
+        time_key = node_ref.split(":", 1)[1]
+        docs = graph.get("time_doc_ids", {}).get(time_key) if isinstance(graph.get("time_doc_ids"), dict) else []
+        return {str(item) for item in docs if isinstance(item, str) and item}
+    return set()
+
+
+def _external_node_terms(node: dict[str, Any], node_by_ref: dict[str, dict[str, Any]], edges: list[dict[str, Any]]) -> list[str]:
+    terms: list[str] = []
+
+    def add(value: Any) -> None:
+        normalized = _normalize_term(str(value))
+        if normalized and normalized not in terms:
+            terms.append(normalized)
+
+    add(node.get("label"))
+    aliases = node.get("aliases")
+    if isinstance(aliases, list):
+        for alias in aliases:
+            add(alias)
+    payload = node.get("payload") if isinstance(node.get("payload"), dict) else {}
+    for key in ("canonical_name", "display_name", "name", "title", "summary", "value"):
+        add(payload.get(key))
+    node_ref = str(node.get("node_ref") or "")
+    for edge in edges:
+        if edge.get("src_node_ref") == node_ref:
+            other = node_by_ref.get(str(edge.get("dst_node_ref")))
+        elif edge.get("dst_node_ref") == node_ref:
+            other = node_by_ref.get(str(edge.get("src_node_ref")))
+        else:
+            continue
+        add(edge.get("label") or edge.get("edge_type"))
+        if other:
+            add(other.get("label"))
+            for alias in other.get("aliases") or []:
+                add(alias)
+        if len(terms) >= 30:
+            break
+    return terms[:30]
+
+
+def _apply_external_graph_overlay(conn: sqlite3.Connection, project_id: str, graph: dict[str, Any]) -> dict[str, Any]:
+    overlay = external_graph_repo.load_external_graph_overlay(conn, project_id, enabled_only=True)
+    sources = overlay.get("sources") if isinstance(overlay.get("sources"), list) else []
+    nodes = overlay.get("nodes") if isinstance(overlay.get("nodes"), list) else []
+    edges = overlay.get("edges") if isinstance(overlay.get("edges"), list) else []
+    links = overlay.get("links") if isinstance(overlay.get("links"), list) else []
+    if not sources or not nodes or not links:
+        graph["external_graph_overlay"] = {
+            "source_count": len(sources),
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "link_count": len(links),
+            "bridge_signal_count": 0,
+            "source_ids": [str(source.get("source_id")) for source in sources if source.get("source_id")],
+        }
+        return graph
+
+    node_by_ref = {str(node.get("node_ref")): node for node in nodes if isinstance(node, dict) and node.get("node_ref")}
+    signal_doc_sets = _signal_list_mapping_to_sets(graph.get("signal_doc_ids"))
+    token_index_sets = _token_index_list_mapping_to_sets(graph.get("signal_token_index"))
+    bridge_signal_count = 0
+    source_ids: set[str] = set()
+    for link in links:
+        if not isinstance(link, dict) or link.get("status") != "ACTIVE":
+            continue
+        src_ref = str(link.get("src_node_ref") or "")
+        dst_ref = str(link.get("dst_node_ref") or "")
+        src_external = src_ref.startswith("ext:")
+        dst_external = dst_ref.startswith("ext:")
+        if src_external == dst_external:
+            continue
+        external_ref = src_ref if src_external else dst_ref
+        current_ref = dst_ref if src_external else src_ref
+        external_node = node_by_ref.get(external_ref)
+        current_docs = _doc_ids_for_graph_node_ref(graph, current_ref)
+        if not external_node or not current_docs:
+            continue
+        source_id = str(external_node.get("source_id") or "")
+        if source_id:
+            source_ids.add(source_id)
+        for term in _external_node_terms(external_node, node_by_ref, edges):
+            _append_signal_docs(signal_doc_sets, token_index_sets, kind="term", signal=term, doc_ids=current_docs)
+            bridge_signal_count += 1
+
+    graph["signal_doc_ids"] = _signal_sets_to_lists(signal_doc_sets)
+    graph["signal_token_index"] = _token_index_sets_to_lists(token_index_sets)
+    edge_counts = graph.get("kg_edge_counts") if isinstance(graph.get("kg_edge_counts"), dict) else {}
+    graph["kg_edge_counts"] = {
+        **edge_counts,
+        "EXTERNAL_MANUAL_LINK": int(edge_counts.get("EXTERNAL_MANUAL_LINK", 0)) + len(links),
+    }
+    graph["external_graph_overlay"] = {
+        "source_count": len(sources),
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "link_count": len(links),
+        "bridge_signal_count": bridge_signal_count,
+        "source_ids": sorted(source_ids or {str(source.get("source_id")) for source in sources if source.get("source_id")}),
+    }
+    return graph
+
+
 def build_project_graph(conn: sqlite3.Connection, project_id: str) -> dict[str, Any]:
     kg = _latest_kg_or_build(conn, project_id)
-    return _project_kg_to_graph(kg, project_id)
+    graph = _project_kg_to_graph(kg, project_id)
+    return _apply_external_graph_overlay(conn, project_id, graph)
 
 
 def materialize_project_graph(conn: sqlite3.Connection, project_id: str) -> dict[str, Any]:

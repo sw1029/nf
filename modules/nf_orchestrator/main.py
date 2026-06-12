@@ -29,7 +29,14 @@ from modules.nf_orchestrator.services.tag_service import TagServiceImpl
 from modules.nf_orchestrator.services.timeline_service import TimelineServiceImpl
 from modules.nf_orchestrator.services.whitelist_service import WhitelistServiceImpl
 from modules.nf_orchestrator.storage import db, docstore
-from modules.nf_orchestrator.storage.repos import job_repo
+from modules.nf_orchestrator.storage.repos import external_graph_repo, job_repo, kg_repo
+from modules.nf_retrieval.graph.external_adapter import (
+    bundle_from_artifacts,
+    bundle_from_external_bundle,
+    bundle_from_project_kg,
+)
+from modules.nf_retrieval.graph.materialized import materialize_project_kg
+from modules.nf_retrieval.graph.story_package import decode_story_package, make_story_package
 from modules.nf_orchestrator.controllers import http_response as controller_http_response
 from modules.nf_retrieval.vector import shard_store
 from modules.nf_shared.config import load_config
@@ -59,6 +66,14 @@ from modules.nf_consistency.extractors import (
 
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
+_GRAPH_RELATION_LABELS = {
+    "SAME_ENTITY": "같은 인물/대상",
+    "SAME_WORLD": "같은 장소/세계관",
+    "SIMILAR_EVENT": "닮은 사건",
+    "NARRATIVE_HINT": "힌트/복선",
+    "CONTRASTS_WITH": "대비/충돌",
+    "CUSTOM": "직접 입력",
+}
 
 
 def _resolve_resource(filename: str) -> Path:
@@ -119,6 +134,27 @@ def _build_openapi_spec() -> dict[str, Any]:
             },
             "/projects/{project_id}/whitelist": {"post": {"summary": "Add whitelist item"}, "delete": {"summary": "Delete whitelist item"}},
             "/projects/{project_id}/ignore": {"post": {"summary": "Add ignore item"}, "delete": {"summary": "Delete ignore item"}},
+            "/projects/{project_id}/graph/view": {"get": {"summary": "Get graph view overlay"}},
+            "/projects/{project_id}/graph/external-sources": {
+                "get": {"summary": "List external graph sources"},
+                "post": {"summary": "Create external graph source"},
+            },
+            "/projects/{project_id}/graph/external-sources/{source_id}": {
+                "patch": {"summary": "Update external graph source"},
+                "delete": {"summary": "Delete external graph source"},
+            },
+            "/projects/{project_id}/graph/external-links": {"post": {"summary": "Create external graph link"}},
+            "/projects/{project_id}/graph/external-links/{link_id}": {
+                "patch": {"summary": "Update external graph link"},
+                "delete": {"summary": "Delete external graph link"},
+            },
+            "/projects/{project_id}/graph/favorites": {
+                "get": {"summary": "List graph favorites"},
+                "post": {"summary": "Add graph favorite"},
+                "delete": {"summary": "Delete graph favorite"},
+            },
+            "/projects/{project_id}/graph/story-package": {"get": {"summary": "Export story package"}},
+            "/projects/{project_id}/graph/story-package/import": {"post": {"summary": "Import story package"}},
             "/jobs": {"get": {"summary": "List jobs"}, "post": {"summary": "Submit job"}},
             "/jobs/{job_id}": {"get": {"summary": "Get job"}},
             "/jobs/{job_id}/artifact": {"get": {"summary": "Download job artifact"}},
@@ -348,6 +384,9 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 return
             if resource == "schema":
                 self._handle_schema(project_id, tail)
+                return
+            if resource == "graph":
+                self._handle_graph(project_id, tail)
                 return
 
         self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
@@ -1093,6 +1132,336 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"deleted": True})
             return
         self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _handle_graph(self, project_id: str, tail: list[str]) -> None:
+        if tail == ["view"]:
+            if self.command != "GET":
+                self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+                return
+            with db.connect() as conn:
+                overlay = external_graph_repo.load_external_graph_overlay(conn, project_id)
+            self._send_json(HTTPStatus.OK, {"external_graph": overlay})
+            return
+
+        if tail == ["favorites"]:
+            if self.command == "GET":
+                with db.connect() as conn:
+                    favorites = external_graph_repo.list_graph_favorites(conn, project_id)
+                self._send_json(HTTPStatus.OK, {"favorites": favorites})
+                return
+            if self.command == "POST":
+                payload = self._read_json()
+                node_ref = payload.get("node_ref")
+                if not isinstance(node_ref, str) or not node_ref.strip():
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "node_ref가 필요합니다")
+                node_kind = payload.get("node_kind") if isinstance(payload.get("node_kind"), str) else "unknown"
+                source_id = payload.get("source_id") if isinstance(payload.get("source_id"), str) else None
+                label_snapshot = payload.get("label_snapshot") if isinstance(payload.get("label_snapshot"), str) else node_ref
+                note = payload.get("note") if isinstance(payload.get("note"), str) else None
+                with db.connect() as conn:
+                    favorite = external_graph_repo.upsert_graph_favorite(
+                        conn,
+                        project_id=project_id,
+                        node_ref=node_ref.strip(),
+                        node_kind=node_kind.strip() or "unknown",
+                        source_id=source_id.strip() if isinstance(source_id, str) and source_id.strip() else None,
+                        label_snapshot=label_snapshot.strip() or node_ref.strip(),
+                        note=note.strip() if isinstance(note, str) and note.strip() else None,
+                    )
+                self._send_json(HTTPStatus.CREATED, {"favorite": favorite})
+                return
+            if self.command == "DELETE":
+                payload = self._read_json()
+                node_ref = payload.get("node_ref")
+                if not isinstance(node_ref, str) or not node_ref.strip():
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "node_ref가 필요합니다")
+                with db.connect() as conn:
+                    deleted = external_graph_repo.delete_graph_favorite(
+                        conn,
+                        project_id=project_id,
+                        node_ref=node_ref.strip(),
+                    )
+                self._send_json(HTTPStatus.OK, {"deleted": deleted})
+                return
+            self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+            return
+
+        if tail == ["story-package"]:
+            if self.command != "GET":
+                self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+                return
+            package, filename = self._build_story_package_for_project(project_id)
+            self._send_json(HTTPStatus.OK, {"package": package, "filename": filename})
+            return
+
+        if tail == ["story-package", "import"]:
+            if self.command != "POST":
+                self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+                return
+            payload = self._read_json()
+            package = payload.get("package")
+            if not isinstance(package, dict):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "작품 정리 파일 내용이 필요합니다")
+            try:
+                content_kind, package_payload = decode_story_package(package)
+            except ValueError as exc:
+                raise AppError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
+            if content_kind != "knowledge_graph":
+                raise AppError(ErrorCode.VALIDATION_ERROR, "관계도 정리 파일만 불러올 수 있습니다")
+            bundle_payload = package_payload.get("bundle") if isinstance(package_payload.get("bundle"), dict) else package_payload
+            source_id = external_graph_repo.new_source_id()
+            source_label = (
+                payload.get("source_label")
+                if isinstance(payload.get("source_label"), str)
+                else package.get("display_name")
+                if isinstance(package.get("display_name"), str)
+                else "가져온 작품"
+            )
+            bundle = bundle_from_external_bundle(
+                source_id=source_id,
+                payload=bundle_payload,
+                fallback_label=source_label,
+            )
+            color = payload.get("color") if isinstance(payload.get("color"), str) else "#8b5cf6"
+            enabled = bool(payload.get("enabled", True))
+            with db.connect() as conn:
+                source = external_graph_repo.replace_external_graph_source(
+                    conn,
+                    project_id=project_id,
+                    bundle=bundle,
+                    color=color,
+                    enabled=enabled,
+                )
+            self._send_json(HTTPStatus.CREATED, {"source": source, "bundle": {"warnings": bundle.get("warnings", [])}})
+            return
+
+        if tail == ["external-sources"]:
+            if self.command == "GET":
+                with db.connect() as conn:
+                    overlay = external_graph_repo.load_external_graph_overlay(conn, project_id)
+                self._send_json(HTTPStatus.OK, {"external_graph": overlay})
+                return
+            if self.command == "POST":
+                payload = self._read_json()
+                source_kind = payload.get("source_kind")
+                if not isinstance(source_kind, str) or source_kind not in {"nf_project", "dataset_artifact_set"}:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "지원하지 않는 불러오기 방식입니다")
+                color = payload.get("color") if isinstance(payload.get("color"), str) else "#14b8a6"
+                enabled = bool(payload.get("enabled", True))
+                source_id = external_graph_repo.new_source_id()
+                source_label = payload.get("source_label") if isinstance(payload.get("source_label"), str) else "외부 작품"
+                if source_kind == "nf_project":
+                    linked_project_id = payload.get("linked_project_id")
+                    if not isinstance(linked_project_id, str) or not linked_project_id.strip():
+                        raise AppError(ErrorCode.VALIDATION_ERROR, "linked_project_id가 필요합니다")
+                    linked_project = self.server.project_service.get_project(linked_project_id)
+                    if linked_project is None:
+                        self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "연동할 프로젝트를 찾을 수 없습니다")
+                        return
+                    source_label = linked_project.name
+                    with db.connect() as conn:
+                        kg = kg_repo.load_latest_project_kg(conn, linked_project_id)
+                        if kg is None:
+                            materialize_project_kg(conn, linked_project_id)
+                            kg = kg_repo.load_latest_project_kg(conn, linked_project_id)
+                        bundle = bundle_from_project_kg(
+                            source_id=source_id,
+                            source_label=source_label,
+                            linked_project_id=linked_project_id,
+                            kg=kg,
+                        )
+                        source = external_graph_repo.replace_external_graph_source(
+                            conn,
+                            project_id=project_id,
+                            bundle=bundle,
+                            color=color,
+                            enabled=enabled,
+                        )
+                    self._send_json(HTTPStatus.CREATED, {"source": source, "bundle": {"warnings": bundle.get("warnings", [])}})
+                    return
+
+                bundle_payload = payload.get("bundle")
+                artifacts = payload.get("artifacts")
+                schema_version = payload.get("schema_version") if isinstance(payload.get("schema_version"), str) else None
+                if isinstance(bundle_payload, dict):
+                    bundle = bundle_from_external_bundle(
+                        source_id=source_id,
+                        payload=bundle_payload,
+                        fallback_label=source_label,
+                    )
+                elif isinstance(artifacts, dict):
+                    bundle = bundle_from_artifacts(
+                        source_id=source_id,
+                        source_label=source_label,
+                        artifacts=artifacts,
+                        schema_version=schema_version,
+                    )
+                else:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "작품 관계도 내용이 필요합니다")
+                with db.connect() as conn:
+                    source = external_graph_repo.replace_external_graph_source(
+                        conn,
+                        project_id=project_id,
+                        bundle=bundle,
+                        color=color,
+                        enabled=enabled,
+                    )
+                self._send_json(HTTPStatus.CREATED, {"source": source, "bundle": {"warnings": bundle.get("warnings", [])}})
+                return
+
+        if len(tail) == 2 and tail[0] == "external-sources":
+            source_id = tail[1]
+            if self.command == "PATCH":
+                payload = self._read_json()
+                enabled = payload.get("enabled") if isinstance(payload.get("enabled"), bool) else None
+                color = payload.get("color") if isinstance(payload.get("color"), str) else None
+                source_label = payload.get("source_label") if isinstance(payload.get("source_label"), str) else None
+                with db.connect() as conn:
+                    source = external_graph_repo.update_external_source(
+                        conn,
+                        project_id=project_id,
+                        source_id=source_id,
+                        enabled=enabled,
+                        color=color,
+                        source_label=source_label,
+                    )
+                if source is None:
+                    self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "가져온 작품을 찾을 수 없습니다")
+                    return
+                self._send_json(HTTPStatus.OK, {"source": source})
+                return
+            if self.command == "DELETE":
+                with db.connect() as conn:
+                    deleted = external_graph_repo.delete_external_source(conn, project_id=project_id, source_id=source_id)
+                if not deleted:
+                    self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "가져온 작품을 찾을 수 없습니다")
+                    return
+                self._send_json(HTTPStatus.OK, {"deleted": True})
+                return
+
+        if tail == ["external-links"]:
+            if self.command != "POST":
+                self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+                return
+            payload = self._read_json()
+            link = self._create_external_graph_link(project_id, payload)
+            self._send_json(HTTPStatus.CREATED, {"link": link})
+            return
+
+        if len(tail) == 2 and tail[0] == "external-links":
+            link_id = tail[1]
+            if self.command == "PATCH":
+                payload = self._read_json()
+                relation_type = payload.get("relation_type")
+                if relation_type is not None and relation_type not in _GRAPH_RELATION_LABELS:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "지원하지 않는 관계 종류입니다")
+                label = payload.get("label") if isinstance(payload.get("label"), str) else None
+                note = payload.get("note") if isinstance(payload.get("note"), str) else None
+                status = payload.get("status")
+                if status is not None and status not in {"ACTIVE", "DISABLED"}:
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "status는 ACTIVE 또는 DISABLED여야 합니다")
+                confidence_raw = payload.get("confidence")
+                confidence = None
+                if confidence_raw is not None:
+                    try:
+                        confidence = max(0.0, min(1.0, float(confidence_raw)))
+                    except (TypeError, ValueError) as exc:
+                        raise AppError(ErrorCode.VALIDATION_ERROR, "confidence는 숫자여야 합니다") from exc
+                with db.connect() as conn:
+                    link = external_graph_repo.update_external_link(
+                        conn,
+                        project_id=project_id,
+                        link_id=link_id,
+                        relation_type=relation_type,
+                        label=label,
+                        note=note,
+                        confidence=confidence,
+                        status=status,
+                    )
+                if link is None:
+                    self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "연결을 찾을 수 없습니다")
+                    return
+                self._send_json(HTTPStatus.OK, {"link": link})
+                return
+            if self.command == "DELETE":
+                with db.connect() as conn:
+                    deleted = external_graph_repo.delete_external_link(conn, project_id=project_id, link_id=link_id)
+                if not deleted:
+                    self._send_app_error(HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "연결을 찾을 수 없습니다")
+                    return
+                self._send_json(HTTPStatus.OK, {"deleted": True})
+                return
+
+        self._send_app_error(HTTPStatus.METHOD_NOT_ALLOWED, ErrorCode.VALIDATION_ERROR, "허용되지 않는 메서드")
+
+    def _build_story_package_for_project(self, project_id: str) -> tuple[dict[str, Any], str]:
+        project = self.server.project_service.get_project(project_id)
+        if project is None:
+            raise AppError(ErrorCode.NOT_FOUND, "프로젝트를 찾을 수 없습니다")
+        with db.connect() as conn:
+            kg = kg_repo.load_latest_project_kg(conn, project_id)
+            if kg is None:
+                materialize_project_kg(conn, project_id)
+                kg = kg_repo.load_latest_project_kg(conn, project_id)
+            bundle = bundle_from_project_kg(
+                source_id=f"project-{project_id}",
+                source_label=project.name,
+                linked_project_id=project_id,
+                kg=kg,
+            )
+        package = make_story_package(
+            display_name=project.name,
+            content_kind="knowledge_graph",
+            payload={"bundle": bundle},
+            payload_encoding="json-v1",
+        )
+        safe_name = re.sub(r"[^0-9A-Za-z가-힣._-]+", "_", project.name).strip("._") or "story"
+        return package, f"{safe_name}.nfstory"
+
+    def _create_external_graph_link(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        src_node_ref = payload.get("src_node_ref")
+        dst_node_ref = payload.get("dst_node_ref")
+        relation_type = payload.get("relation_type")
+        if not isinstance(src_node_ref, str) or not src_node_ref.strip():
+            raise AppError(ErrorCode.VALIDATION_ERROR, "src_node_ref가 필요합니다")
+        if not isinstance(dst_node_ref, str) or not dst_node_ref.strip():
+            raise AppError(ErrorCode.VALIDATION_ERROR, "dst_node_ref가 필요합니다")
+        if src_node_ref == dst_node_ref:
+            raise AppError(ErrorCode.VALIDATION_ERROR, "서로 다른 노드를 연결해야 합니다")
+        if not isinstance(relation_type, str) or relation_type not in _GRAPH_RELATION_LABELS:
+            raise AppError(ErrorCode.VALIDATION_ERROR, "지원하지 않는 관계 종류입니다")
+        src_source_id = external_graph_repo.source_id_from_node_ref(src_node_ref)
+        dst_source_id = external_graph_repo.source_id_from_node_ref(dst_node_ref)
+        if bool(src_source_id) == bool(dst_source_id):
+            raise AppError(ErrorCode.VALIDATION_ERROR, "현재 작품 요소와 가져온 작품 요소를 하나씩 연결해야 합니다")
+        source_id = src_source_id or dst_source_id
+        if not source_id:
+            raise AppError(ErrorCode.VALIDATION_ERROR, "가져온 작품 요소가 필요합니다")
+        label = payload.get("label")
+        if not isinstance(label, str) or not label.strip():
+            label = _GRAPH_RELATION_LABELS[relation_type]
+        note = payload.get("note") if isinstance(payload.get("note"), str) else None
+        try:
+            confidence = max(0.0, min(1.0, float(payload.get("confidence", 0.75))))
+        except (TypeError, ValueError) as exc:
+            raise AppError(ErrorCode.VALIDATION_ERROR, "confidence는 숫자여야 합니다") from exc
+        with db.connect() as conn:
+            source = external_graph_repo.get_external_source(conn, project_id=project_id, source_id=source_id)
+            external_ref = src_node_ref if src_source_id else dst_node_ref
+            external_node = external_graph_repo.get_external_node(conn, project_id=project_id, node_ref=external_ref)
+            if source is None or external_node is None:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "가져온 작품 요소를 찾을 수 없습니다")
+            return external_graph_repo.create_external_link(
+                conn,
+                project_id=project_id,
+                source_id=source_id,
+                src_node_ref=src_node_ref,
+                dst_node_ref=dst_node_ref,
+                relation_type=relation_type,
+                label=label.strip(),
+                note=note.strip() if isinstance(note, str) and note.strip() else None,
+                confidence=confidence,
+            )
 
     def _handle_schema(self, project_id: str, tail: list[str]) -> None:
         if not tail:
